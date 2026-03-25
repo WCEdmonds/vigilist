@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
+from app.routers.productions import get_accessible_production_ids
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -22,12 +23,14 @@ async def export_documents_csv(
     production_id: int | None = None,
     tag_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Export documents as CSV with metadata, tags, and note counts."""
+    accessible = await get_accessible_production_ids(db, user)
     query = (
         select(Document)
         .options(selectinload(Document.tags).selectinload(DocumentTag.tag))
+        .where(Document.production_id.in_(accessible))
         .order_by(Document.bates_begin)
     )
     if production_id:
@@ -85,14 +88,16 @@ async def export_search_csv(
     q: str,
     production_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Export search results as CSV."""
     from app.services.search import search_documents
 
+    accessible = await get_accessible_production_ids(db, user)
     results, total = await search_documents(
         db, q, page=1, per_page=10000,
         production_id=production_id,
+        accessible_production_ids=accessible,
     )
 
     output = io.StringIO()

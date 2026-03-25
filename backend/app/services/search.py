@@ -65,6 +65,7 @@ async def search_documents(
     page: int = 1,
     per_page: int = 50,
     sort: str = "relevance",
+    accessible_production_ids: list[int] | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     tsquery_str = build_tsquery(query)
@@ -75,6 +76,8 @@ async def search_documents(
 
     # Base filter
     where = [Document.text_search_vector.op("@@")(tsquery)]
+    if accessible_production_ids is not None:
+        where.append(Document.production_id.in_(accessible_production_ids))
     if production_id:
         where.append(Document.production_id == production_id)
 
