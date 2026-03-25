@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import Document, DocumentTag, Note
+from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -22,7 +22,7 @@ async def export_documents_csv(
     production_id: int | None = None,
     tag_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     """Export documents as CSV with metadata, tags, and note counts."""
     query = (
@@ -85,7 +85,7 @@ async def export_search_csv(
     q: str,
     production_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     """Export search results as CSV."""
     from app.services.search import search_documents

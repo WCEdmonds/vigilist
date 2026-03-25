@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models import User
 from app.routers.auth import get_current_user
 from app.schemas import SearchResponse, SearchResult
 from app.services.search import search_documents
@@ -17,7 +18,7 @@ async def search(
     per_page: int = Query(50, ge=1, le=200),
     sort: str = Query("relevance", pattern="^(relevance|bates)$"),
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     results, total = await search_documents(
         db, q, production_id=production_id, page=page, per_page=per_page, sort=sort

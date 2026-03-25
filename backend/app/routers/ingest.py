@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models import User
 from app.routers.auth import get_current_user
 from app.schemas import IngestRequest, IngestResponse
 from app.services.ingest import ingest_production
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api", tags=["ingest"])
 async def ingest(
     body: IngestRequest,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     result = await ingest_production(
         db,

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import Document, DocumentTag, Tag
+from app.models import Document, DocumentTag, Tag, User
 from app.routers.auth import get_current_user
 from app.schemas import (
     ApplyTagsRequest,
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api", tags=["tags"])
 async def list_tags(
     category: str | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     query = select(Tag).order_by(Tag.category, Tag.name)
     if category:
@@ -36,7 +36,7 @@ async def list_tags(
 async def create_tag(
     body: TagCreate,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     tag = Tag(**body.model_dump())
     db.add(tag)
@@ -49,7 +49,7 @@ async def create_tag(
 async def get_document_tags(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     query = (
         select(DocumentTag)
@@ -66,7 +66,7 @@ async def apply_tags(
     doc_id: UUID,
     body: ApplyTagsRequest,
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     doc = await db.get(Document, doc_id)
     if not doc:
@@ -81,7 +81,7 @@ async def apply_tags(
         )
         if existing.scalar_one_or_none():
             continue
-        dt = DocumentTag(document_id=doc_id, tag_id=tag_id, applied_by=user)
+        dt = DocumentTag(document_id=doc_id, tag_id=tag_id, applied_by=user.id)
         db.add(dt)
 
     await db.commit()
@@ -101,7 +101,7 @@ async def remove_tag(
     doc_id: UUID,
     tag_id: int,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     result = await db.execute(
         select(DocumentTag).where(
@@ -121,7 +121,7 @@ async def remove_tag(
 async def bulk_tag(
     body: BulkTagRequest,
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     count = 0
     for doc_id in body.doc_ids:
@@ -134,7 +134,7 @@ async def bulk_tag(
             )
             if existing.scalar_one_or_none():
                 continue
-            db.add(DocumentTag(document_id=doc_id, tag_id=tag_id, applied_by=user))
+            db.add(DocumentTag(document_id=doc_id, tag_id=tag_id, applied_by=user.id))
             count += 1
 
     await db.commit()
