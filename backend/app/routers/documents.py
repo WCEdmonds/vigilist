@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
+from app.routers.productions import get_accessible_production_ids
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -23,12 +24,13 @@ async def list_documents(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     query = select(Document).options(
         selectinload(Document.tags).selectinload(DocumentTag.tag)
-    )
-    count_query = select(func.count(Document.id))
+    ).where(Document.production_id.in_(accessible))
+    count_query = select(func.count(Document.id)).where(Document.production_id.in_(accessible))
 
     if production_id:
         query = query.where(Document.production_id == production_id)
@@ -84,8 +86,9 @@ async def get_by_bates(
     bates: str,
     production_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     query = (
         select(Document)
         .where(Document.bates_begin == bates)
@@ -97,6 +100,8 @@ async def get_by_bates(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     return await _doc_detail(doc, db)
 
 
@@ -104,8 +109,9 @@ async def get_by_bates(
 async def get_document(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     result = await db.execute(
         select(Document)
         .where(Document.id == doc_id)
@@ -114,6 +120,8 @@ async def get_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     return await _doc_detail(doc, db)
 
 
@@ -122,11 +130,14 @@ async def get_image(
     doc_id: UUID,
     page_num: int,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     if page_num < 1 or page_num > len(doc.image_paths):
         raise HTTPException(status_code=404, detail="Page not found")
     raw_path = doc.image_paths[page_num - 1]
@@ -143,11 +154,14 @@ async def get_image(
 async def get_native(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     if not doc.native_path:
         raise HTTPException(status_code=404, detail="No native file for this document")
     path = Path(doc.native_path.replace("\\", "/")).resolve()
@@ -189,11 +203,14 @@ async def stream_native(
     doc_id: UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     if not doc.native_path:
         raise HTTPException(status_code=404, detail="No native file for this document")
     path = Path(doc.native_path.replace("\\", "/")).resolve()
@@ -260,11 +277,14 @@ async def stream_native(
 async def get_text(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"text": doc.text_content or ""}
 
 
@@ -273,11 +293,14 @@ async def get_nav(
     doc_id: UUID,
     production_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     prod_filter = Document.production_id == (production_id or doc.production_id)
 

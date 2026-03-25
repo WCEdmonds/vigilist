@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Tag, User
 from app.routers.auth import get_current_user
+from app.routers.productions import get_accessible_production_ids
 from app.schemas import (
     ApplyTagsRequest,
     BulkTagRequest,
@@ -49,8 +50,14 @@ async def create_tag(
 async def get_document_tags(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     query = (
         select(DocumentTag)
         .where(DocumentTag.document_id == doc_id)
@@ -68,9 +75,12 @@ async def apply_tags(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     for tag_id in body.tag_ids:
         existing = await db.execute(
@@ -101,8 +111,14 @@ async def remove_tag(
     doc_id: UUID,
     tag_id: int,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
     result = await db.execute(
         select(DocumentTag).where(
             DocumentTag.document_id == doc_id,
@@ -123,6 +139,14 @@ async def bulk_tag(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    accessible = await get_accessible_production_ids(db, user)
+    # Verify all documents are accessible
+    for doc_id in body.doc_ids:
+        doc = await db.get(Document, doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+        if doc.production_id not in accessible:
+            raise HTTPException(status_code=403, detail="Access denied")
     count = 0
     for doc_id in body.doc_ids:
         for tag_id in body.tag_ids:
