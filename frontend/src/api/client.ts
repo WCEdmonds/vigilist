@@ -176,8 +176,9 @@ export const getProductionAccess = (productionId: number) =>
 export const getProductionInvites = (productionId: number) =>
   request<PendingInviteEntry[]>(`/api/productions/${productionId}/invites`);
 
-export const inviteUser = (productionId: number, email: string) =>
-  request<{ status: string; email: string }>(`/api/productions/${productionId}/access`, json({ email }));
+export async function inviteUser(productionId: number, email: string, role = 'reviewer') {
+  return request<{ status: string; email: string }>(`/api/productions/${productionId}/access`, json({ email, role }));
+}
 
 export const revokeAccess = (productionId: number, userId: string) =>
   request(`/api/productions/${productionId}/access/${userId}`, { method: 'DELETE' });

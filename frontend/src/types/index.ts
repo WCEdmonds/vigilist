@@ -99,6 +99,7 @@ export interface ProductionAccessEntry {
   user_id: string;
   user_email: string;
   user_display_name: string | null;
+  role: string;
   granted_by: string;
   granted_at: string;
 }
