@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
+from app.services.audit import log_action
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -122,6 +123,8 @@ async def get_document(
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
+    await log_action(db, user, "document_viewed", "document", str(doc_id), production_id=doc.production_id)
+    await db.commit()
     return await _doc_detail(doc, db)
 
 
