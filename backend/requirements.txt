@@ -8,3 +8,4 @@ pillow>=11
 python-multipart>=0.0.20
 itsdangerous>=2.2
 anthropic>=0.52
+firebase-admin>=6.6
