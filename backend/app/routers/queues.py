@@ -134,6 +134,46 @@ async def delete_queue(
     return {"ok": True}
 
 
+@router.get("/{queue_id}/batches", response_model=list[ReviewBatchOut])
+async def list_queue_batches(
+    production_id: int,
+    queue_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List all batches for a queue (manager/admin view)."""
+    role = await get_user_role_for_production(db, user, production_id)
+
+    queue = await db.get(ReviewQueue, queue_id)
+    if not queue or queue.production_id != production_id:
+        raise HTTPException(status_code=404, detail="Queue not found")
+
+    result = await db.execute(
+        select(ReviewBatch, User.email)
+        .outerjoin(User, ReviewBatch.reviewer_id == User.id)
+        .where(ReviewBatch.queue_id == queue_id)
+        .order_by(ReviewBatch.created_at)
+    )
+    rows = result.all()
+
+    return [
+        ReviewBatchOut(
+            id=batch.id,
+            queue_id=batch.queue_id,
+            queue_name=queue.name,
+            reviewer_id=batch.reviewer_id,
+            reviewer_email=email,
+            status=batch.status,
+            size=batch.size,
+            reviewed_count=batch.reviewed_count,
+            assigned_at=batch.assigned_at,
+            completed_at=batch.completed_at,
+            created_at=batch.created_at,
+        )
+        for batch, email in rows
+    ]
+
+
 @router.post("/{queue_id}/batches", response_model=list[ReviewBatchOut])
 async def create_queue_batches(
     production_id: int,

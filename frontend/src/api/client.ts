@@ -232,6 +232,10 @@ export async function createBatches(productionId: number, queueId: number, batch
   return request<ReviewBatch[]>(`/api/productions/${productionId}/queues/${queueId}/batches`, json({ batch_size: batchSize, reviewer_id: reviewerId }));
 }
 
+export async function listQueueBatches(productionId: number, queueId: number): Promise<ReviewBatch[]> {
+  return request<ReviewBatch[]>(`/api/productions/${productionId}/queues/${queueId}/batches`);
+}
+
 // ── Batches ──
 
 export async function getMyBatches(productionId?: number): Promise<ReviewBatch[]> {
