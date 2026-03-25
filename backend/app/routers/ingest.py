@@ -14,22 +14,20 @@ from app.schemas import IngestJobOut
 router = APIRouter(prefix="/api", tags=["ingest"])
 
 
-@router.post("/ingest", response_model=IngestJobOut)
-async def start_ingest(
+@router.post("/ingest/create")
+async def create_production_for_ingest(
     body: dict,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Create a production and start async ingest processing.
+    """Phase 1: Create the production record and sync Firebase claims.
 
-    Frontend has already uploaded files to Firebase Storage under
-    productions/{production_id}/raw/. This endpoint creates the
-    production record and kicks off background processing.
+    The frontend calls this FIRST to get the production_id, then uploads
+    files to Firebase Storage under productions/{production_id}/raw/,
+    then calls /ingest/process to start backend processing.
     """
     production_name = body.get("production_name", "").strip()
     description = body.get("description", "").strip()
-    total_files = body.get("total_files", 0)
 
     if not production_name:
         raise HTTPException(status_code=400, detail="production_name is required")
@@ -42,7 +40,35 @@ async def start_ingest(
 
     production = Production(name=production_name, description=description, owner_id=user.id)
     db.add(production)
-    await db.flush()
+    await db.commit()
+    await db.refresh(production)
+
+    # Sync Firebase claims so user can upload to this production's storage path
+    from app.services.claims import sync_user_claims
+    await sync_user_claims(db, user)
+
+    return {"production_id": production.id, "production_name": production.name}
+
+
+@router.post("/ingest/process", response_model=IngestJobOut)
+async def start_processing(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Phase 2: Start async backend processing after frontend upload is complete."""
+    production_id = body.get("production_id")
+    total_files = body.get("total_files", 0)
+
+    if not production_id:
+        raise HTTPException(status_code=400, detail="production_id is required")
+
+    production = await db.get(Production, production_id)
+    if not production:
+        raise HTTPException(status_code=404, detail="Production not found")
+    if production.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     job = IngestJob(
         production_id=production.id,
@@ -53,19 +79,18 @@ async def start_ingest(
     db.add(job)
     await db.commit()
     await db.refresh(job)
-    await db.refresh(production)
 
     background_tasks.add_task(
         run_ingest_job,
         job_id=str(job.id),
         production_id=production.id,
-        production_name=production_name,
+        production_name=production.name,
     )
 
     return IngestJobOut(
         id=job.id,
         production_id=production.id,
-        production_name=production_name,
+        production_name=production.name,
         status=job.status,
         total_files=job.total_files,
         processed_files=0,

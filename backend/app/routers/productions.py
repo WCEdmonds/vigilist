@@ -9,6 +9,7 @@ from app.dependencies import get_accessible_production_ids, get_user_role_for_pr
 from app.models import PendingInvite, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.services.audit import log_action
+from app.services.claims import sync_user_claims
 from app.schemas import (
     InviteRequest,
     PendingInviteOut,
@@ -146,6 +147,10 @@ async def invite_user(
         await log_action(db, user, "user_invited", "production", str(production_id),
                          production_id=production_id, details={"email": body.email, "role": body.role})
         await db.commit()
+
+        # Sync the invited user's Firebase claims
+        await sync_user_claims(db, target_user)
+
         return {"status": "granted", "email": email}
     else:
         # Create pending invite
@@ -200,4 +205,10 @@ async def revoke_access(
     await log_action(db, user, "access_revoked", "production", str(production_id),
                      production_id=production_id, details={"revoked_user_id": user_id})
     await db.commit()
+
+    # Sync the revoked user's Firebase claims
+    revoked_user = await db.get(User, user_id)
+    if revoked_user:
+        await sync_user_claims(db, revoked_user)
+
     return {"ok": True}
