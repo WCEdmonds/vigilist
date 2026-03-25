@@ -79,7 +79,7 @@ async def export_documents_csv(
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=descubre_export.csv"},
+        headers={"Content-Disposition": "attachment; filename=vigilist_export.csv"},
     )
 
 
@@ -122,5 +122,5 @@ async def export_search_csv(
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=descubre_search_export.csv"},
+        headers={"Content-Disposition": "attachment; filename=vigilist_search_export.csv"},
     )

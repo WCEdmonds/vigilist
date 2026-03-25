@@ -127,7 +127,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       {/* Header */}
       <div className="app-header">
         <span className="logo" onClick={clearSearch}>
-          Descubre
+          Vigilist
         </span>
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-primary-300)', opacity: 0.7 }}>/</span>
         <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-primary-200)', cursor: 'pointer' }} onClick={onSwitchProduction}>

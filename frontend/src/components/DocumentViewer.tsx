@@ -133,7 +133,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       {/* Header */}
       <div className="app-header">
         <button className="btn-header" onClick={onBack}>← Back</button>
-        <span className="logo">Descubre</span>
+        <span className="logo">Vigilist</span>
       </div>
 
       {/* Nav bar */}

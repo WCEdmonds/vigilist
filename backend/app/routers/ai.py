@@ -39,7 +39,7 @@ async def summarize_document(
 
     from app.config import settings
     if not settings.anthropic_api_key:
-        raise HTTPException(status_code=503, detail="AI service unavailable — DESCUBRE_ANTHROPIC_API_KEY not set. Restart backend with this env var.")
+        raise HTTPException(status_code=503, detail="AI service unavailable — VIGILIST_ANTHROPIC_API_KEY not set. Restart backend with this env var.")
 
     summary = await generate_summary(doc.text_content)
     if not summary:
