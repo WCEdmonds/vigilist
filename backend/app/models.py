@@ -43,9 +43,12 @@ class Production(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False, unique=True)
     description = Column(Text, nullable=True)
+    owner_id = Column(String(128), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     documents = relationship("Document", back_populates="production")
+    owner = relationship("User", foreign_keys=[owner_id])
+    access_list = relationship("ProductionAccess", back_populates="production", cascade="all, delete-orphan")
 
 
 class Document(Base):
@@ -126,3 +129,36 @@ class SavedSearch(Base):
     filters = Column(JSONB, nullable=False, default=dict)
     created_by = Column(String(100), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class ProductionAccess(Base):
+    __tablename__ = "production_access"
+    __table_args__ = (
+        UniqueConstraint("production_id", "user_id", name="uq_prod_user"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String(128), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    granted_by = Column(String(128), ForeignKey("users.id"), nullable=False)
+    granted_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    production = relationship("Production", back_populates="access_list")
+    user = relationship("User", foreign_keys=[user_id])
+    granter = relationship("User", foreign_keys=[granted_by])
+
+
+class PendingInvite(Base):
+    __tablename__ = "pending_invites"
+    __table_args__ = (
+        UniqueConstraint("production_id", "email", name="uq_prod_email_invite"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    email = Column(String(255), nullable=False)
+    invited_by = Column(String(128), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    production = relationship("Production")
+    inviter = relationship("User", foreign_keys=[invited_by])
