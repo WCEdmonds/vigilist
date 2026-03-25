@@ -215,3 +215,17 @@ class PendingInviteOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class IngestJobOut(BaseModel):
+    id: UUID
+    production_id: int
+    production_name: str = ""
+    status: str
+    total_files: int
+    processed_files: int
+    errors: list[str]
+    created_at: datetime
+    completed_at: datetime | None
+
+    model_config = {"from_attributes": True}
