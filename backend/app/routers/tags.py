@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Tag, User
 from app.routers.auth import get_current_user
-from app.routers.productions import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids
 from app.schemas import (
     ApplyTagsRequest,
     BulkTagRequest,
