@@ -199,3 +199,78 @@ class AuditLog(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     user = relationship("User", foreign_keys=[user_id])
+
+
+class ReviewQueue(Base):
+    __tablename__ = "review_queues"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    query = Column(String(1000), nullable=False, default="")
+    filters = Column(JSONB, nullable=False, default=dict)
+    status = Column(String(20), nullable=False, default="active")
+    created_by = Column(String(128), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    production = relationship("Production")
+    creator = relationship("User", foreign_keys=[created_by])
+    batches = relationship("ReviewBatch", back_populates="queue", cascade="all, delete-orphan")
+
+
+class ReviewBatch(Base):
+    __tablename__ = "review_batches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    queue_id = Column(Integer, ForeignKey("review_queues.id", ondelete="CASCADE"), nullable=False)
+    reviewer_id = Column(String(128), ForeignKey("users.id"), nullable=True)
+    status = Column(String(20), nullable=False, default="pending")
+    size = Column(Integer, nullable=False, default=0)
+    reviewed_count = Column(Integer, nullable=False, default=0)
+    assigned_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    queue = relationship("ReviewQueue", back_populates="batches")
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+    documents = relationship("BatchDocument", back_populates="batch", cascade="all, delete-orphan")
+
+
+class BatchDocument(Base):
+    __tablename__ = "batch_documents"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "document_id", name="uq_batch_doc"),
+        Index("ix_batch_documents_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(Integer, ForeignKey("review_batches.id", ondelete="CASCADE"), nullable=False)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    position = Column(Integer, nullable=False)
+    reviewed = Column(String(20), nullable=False, default="pending")
+    reviewed_at = Column(DateTime, nullable=True)
+
+    batch = relationship("ReviewBatch", back_populates="documents")
+    document = relationship("Document")
+
+
+class QCDecision(Base):
+    __tablename__ = "qc_decisions"
+    __table_args__ = (
+        UniqueConstraint("batch_document_id", "qc_reviewer_id", name="uq_qc_decision"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_document_id = Column(Integer, ForeignKey("batch_documents.id", ondelete="CASCADE"), nullable=False)
+    original_reviewer_id = Column(String(128), ForeignKey("users.id"), nullable=False)
+    qc_reviewer_id = Column(String(128), ForeignKey("users.id"), nullable=False)
+    decision = Column(String(20), nullable=False)
+    reason = Column(Text, nullable=True)
+    original_tags = Column(JSONB, nullable=False, default=list)
+    new_tags = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    batch_document = relationship("BatchDocument")
+    original_reviewer = relationship("User", foreign_keys=[original_reviewer_id])
+    qc_reviewer = relationship("User", foreign_keys=[qc_reviewer_id])
