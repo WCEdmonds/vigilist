@@ -14,12 +14,13 @@ router = APIRouter(prefix="/api", tags=["ingest"])
 async def ingest(
     body: IngestRequest,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     result = await ingest_production(
         db,
         production_name=body.production_name,
         production_root=body.production_root,
         description=body.description,
+        owner_id=user.id,
     )
     return result
