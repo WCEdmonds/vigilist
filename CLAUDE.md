@@ -72,6 +72,10 @@ Key parsing details:
 ## Build Phases
 
 1. **Phase 1 (done):** Ingest pipeline + document viewer + full-text search + shared auth
-2. **Phase 2:** Advanced metadata search + tagging/coding workflow + saved searches
-3. **Phase 3:** AI features (embeddings, NL search, summarization, find-similar)
-4. **Phase 4:** Export, media streaming, polish
+2. **Phase 2:** Search + core review workflow (metadata filters, tagging, notes, shortcuts, media streaming)
+3. **Phase 3:** User management + audit (individual accounts, RBAC, audit trail, SSO)
+4. **Phase 4:** Review management + QC (multi-matter, queues, batching, dashboards, QC sampling)
+5. **Phase 5:** Coding layouts + annotations + redactions
+6. **Phase 6:** Document intelligence (families, email threading, near-duplicates, propagation coding)
+7. **Phase 7:** AI-powered review (embeddings, NL search, summarization, clustering, TAR, communication analysis)
+8. **Phase 8:** Export + production (load files, redaction burn-in, privilege log, reports)

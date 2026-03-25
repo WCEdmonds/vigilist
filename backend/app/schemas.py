@@ -178,3 +178,40 @@ class IngestResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+# ── Production Access ──
+
+class ProductionWithAccess(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    owner_id: str | None
+    is_owner: bool = False
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProductionAccessOut(BaseModel):
+    id: int
+    user_id: str
+    user_email: str
+    user_display_name: str | None
+    granted_by: str
+    granted_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InviteRequest(BaseModel):
+    email: str
+
+
+class PendingInviteOut(BaseModel):
+    id: int
+    email: str
+    invited_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
