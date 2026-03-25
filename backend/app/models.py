@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -72,10 +73,13 @@ class Document(Base):
     text_search_vector = Column(TSVector, nullable=True)
     native_path = Column(String(500), nullable=True)
     image_paths = Column(JSONB, nullable=False, default=list)
+    raw_image_paths = Column(JSONB, nullable=False, default=list)
+    processing_status = Column(String(20), nullable=False, default="pending")
 
     production = relationship("Production", back_populates="documents")
     tags = relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
     notes = relationship("Note", back_populates="document", cascade="all, delete-orphan", order_by="Note.created_at.desc()")
+    annotations = relationship("Annotation", back_populates="document", cascade="all, delete-orphan", order_by="Annotation.page_num, Annotation.created_at")
 
 
 class Tag(Base):
@@ -274,3 +278,24 @@ class QCDecision(Base):
     batch_document = relationship("BatchDocument")
     original_reviewer = relationship("User", foreign_keys=[original_reviewer_id])
     qc_reviewer = relationship("User", foreign_keys=[qc_reviewer_id])
+
+
+class Annotation(Base):
+    __tablename__ = "annotations"
+    __table_args__ = (
+        Index("ix_annotations_document_id", "document_id"),
+        Index("ix_annotations_created_by", "created_by"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    page_num = Column(Integer, nullable=False)
+    x_pct = Column(Float, nullable=False)
+    y_pct = Column(Float, nullable=False)
+    color = Column(String(20), nullable=False, default="blue")
+    content = Column(Text, nullable=False, default="")
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    document = relationship("Document", back_populates="annotations")

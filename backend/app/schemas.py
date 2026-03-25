@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -109,6 +110,7 @@ class DocumentSummary(BaseModel):
     page_count: int
     has_native: bool
     title: str | None = None
+    processing_status: str = "complete"
     tags: list[TagOut] = []
     note_count: int = 0
 
@@ -123,6 +125,7 @@ class DocumentDetail(BaseModel):
     page_count: int
     title: str | None = None
     summary: str | None = None
+    processing_status: str = "complete"
     metadata: dict
     text_content: str | None
     native_path: str | None
@@ -371,3 +374,35 @@ class QCStats(BaseModel):
     overturn_count: int
     overturn_rate: float
     by_reviewer: list[dict]
+
+
+# ── Annotations ──
+
+class AnnotationCreate(BaseModel):
+    page_num: int
+    x_pct: float
+    y_pct: float
+    color: Literal["red", "yellow", "green", "blue"] = "blue"
+    content: str = ""
+
+
+class AnnotationUpdate(BaseModel):
+    content: str | None = None
+    color: Literal["red", "yellow", "green", "blue"] | None = None
+
+
+class AnnotationOut(BaseModel):
+    id: int
+    document_id: UUID
+    page_num: int
+    x_pct: float
+    y_pct: float
+    color: str
+    content: str
+    created_by: str
+    created_by_email: str = ""
+    created_by_display_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
