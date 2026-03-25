@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Document, User
 from app.routers.auth import get_current_user
+from app.routers.productions import get_accessible_production_ids
 from app.services.ai import extract_similar_terms, generate_summary, nl_to_search_query
 from app.services.search import search_documents
 
@@ -19,12 +20,15 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 async def summarize_document(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Generate or retrieve an AI summary for a document."""
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Return cached summary if available
     if doc.summary:
@@ -52,9 +56,10 @@ async def summarize_document(
 async def natural_language_search(
     body: dict,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Convert a natural language query to structured search and execute it."""
+    accessible = await get_accessible_production_ids(db, user)
     nl_query = body.get("query", "").strip()
     if not nl_query:
         raise HTTPException(status_code=400, detail="Query is required")
@@ -63,7 +68,7 @@ async def natural_language_search(
     if not structured_query:
         raise HTTPException(status_code=503, detail="AI service unavailable")
 
-    results, total = await search_documents(db, structured_query)
+    results, total = await search_documents(db, structured_query, accessible_production_ids=accessible)
 
     return {
         "original_query": nl_query,
@@ -77,12 +82,15 @@ async def natural_language_search(
 async def find_similar(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """Find documents similar to the given document."""
+    accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     if not doc.text_content:
         raise HTTPException(status_code=400, detail="Document has no text content")
@@ -91,7 +99,7 @@ async def find_similar(
     if not search_terms:
         raise HTTPException(status_code=503, detail="AI service unavailable")
 
-    results, total = await search_documents(db, search_terms, per_page=20)
+    results, total = await search_documents(db, search_terms, per_page=20, accessible_production_ids=accessible)
 
     # Filter out the source document
     results = [r for r in results if str(r["id"]) != str(doc_id)]
