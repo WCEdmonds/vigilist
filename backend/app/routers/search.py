@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User
 from app.routers.auth import get_current_user
-from app.routers.productions import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids
 from app.schemas import SearchResponse, SearchResult
 from app.services.search import search_documents
 

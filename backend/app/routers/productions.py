@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies import get_accessible_production_ids
 from app.models import PendingInvite, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.schemas import (
@@ -15,14 +16,6 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/productions", tags=["productions"])
-
-
-async def get_accessible_production_ids(db: AsyncSession, user: User) -> list[int]:
-    """Return list of production IDs the user can access (owner or granted)."""
-    owned = select(Production.id).where(Production.owner_id == user.id)
-    granted = select(ProductionAccess.production_id).where(ProductionAccess.user_id == user.id)
-    result = await db.execute(owned.union(granted))
-    return [row[0] for row in result.all()]
 
 
 @router.get("", response_model=list[ProductionWithAccess])
