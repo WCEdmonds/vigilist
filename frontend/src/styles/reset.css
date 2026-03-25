@@ -1,0 +1,109 @@
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-neutral-800);
+  background: linear-gradient(175deg, var(--color-parchment-light) 0%, var(--color-parchment-mid) 50%, var(--color-parchment-warm) 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* Ruled-line texture */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 23px,
+    rgba(139, 115, 85, 0.035) 23px,
+    rgba(139, 115, 85, 0.035) 24px
+  );
+}
+
+/* Red margin line */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 72px;
+  width: 1px;
+  background: var(--color-margin);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Ensure all content sits above the texture */
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+img, svg {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: var(--color-ink);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--color-ink-light);
+  text-decoration: underline;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(44, 62, 107, 0.5);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(44, 62, 107, 0.12);
+  color: var(--color-ink);
+}
+
+/* Webkit scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(44, 62, 107, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(44, 62, 107, 0.25);
+}
+
+/* Progress bar accent */
+progress {
+  accent-color: var(--color-ink);
+}

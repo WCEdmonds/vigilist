@@ -1,0 +1,29 @@
+# Python
+backend/venv/
+**/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Firebase
+backend/firebase-service-account.json
+
+# Storage
+backend/storage/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
