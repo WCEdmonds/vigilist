@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://descubre:descubre_dev@localhost:5432/descubre"
     # Firebase
     firebase_project_id: str = ""
+    firebase_storage_bucket: str = ""
     # Local file storage root for converted images (will be replaced by Firebase Storage in a later plan)
     storage_root: str = "./storage"
     # CORS origins
