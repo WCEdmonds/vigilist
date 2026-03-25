@@ -121,3 +121,22 @@ export interface IngestJob {
   created_at: string;
   completed_at: string | null;
 }
+
+export interface AuditLogEntry {
+  id: number;
+  user_id: string;
+  user_email: string;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  production_id: number | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PaginatedAuditLogs {
+  logs: AuditLogEntry[];
+  total: number;
+  page: number;
+  per_page: number;
+}
