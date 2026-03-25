@@ -3,6 +3,7 @@ import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getTags, imageUrl, listD
 import DocumentViewer from './components/DocumentViewer';
 import AuthPage from './components/AuthPage';
 import IngestWizard from './components/IngestWizard';
+import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
@@ -43,6 +44,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [hideNativeOnly, setHideNativeOnly] = useState(true);
   const [showManageAccess, setShowManageAccess] = useState(false);
+  const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
 
   const perPage = 50;
@@ -135,6 +137,9 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         </span>
         {production.is_owner && (
           <button className="btn-header" onClick={() => setShowManageAccess(true)}>Share</button>
+        )}
+        {production.is_owner && (
+          <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
         )}
         <div className="user-menu">
           <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
@@ -350,6 +355,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         <ManageAccess
           productionId={production.id}
           onClose={() => setShowManageAccess(false)}
+        />
+      )}
+
+      {/* Audit log modal */}
+      {showAuditLog && (
+        <AuditLog
+          productionId={production.id}
+          onClose={() => setShowAuditLog(false)}
         />
       )}
 
