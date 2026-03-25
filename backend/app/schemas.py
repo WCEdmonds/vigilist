@@ -4,6 +4,15 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class UserOut(BaseModel):
+    id: str
+    email: str
+    display_name: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ProductionOut(BaseModel):
     id: int
     name: str

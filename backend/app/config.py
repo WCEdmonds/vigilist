@@ -3,15 +3,13 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://descubre:descubre_dev@localhost:5432/descubre"
-    # Shared auth credentials
-    auth_username: str = "admin"
-    auth_password: str = "descubre2026"
-    secret_key: str = "change-me-in-production"
-    # Local file storage root for converted images
+    # Firebase
+    firebase_project_id: str = ""
+    # Local file storage root for converted images (will be replaced by Firebase Storage in a later plan)
     storage_root: str = "./storage"
     # CORS origins
     cors_origins: list[str] = ["http://localhost:5173"]
-    # Anthropic API key for AI features (title generation, etc.)
+    # Anthropic API key for AI features
     anthropic_api_key: str = ""
 
     model_config = {"env_prefix": "DESCUBRE_"}
