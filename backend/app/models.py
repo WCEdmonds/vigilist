@@ -1,0 +1,119 @@
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.types import UserDefinedType
+
+
+class TSVector(UserDefinedType):
+    cache_ok = True
+
+    def get_col_spec(self):
+        return "TSVECTOR"
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Production(Base):
+    __tablename__ = "productions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    documents = relationship("Document", back_populates="production")
+
+
+class Document(Base):
+    __tablename__ = "documents"
+    __table_args__ = (
+        UniqueConstraint("production_id", "bates_begin", name="uq_prod_bates"),
+        Index("ix_documents_bates_begin", "bates_begin"),
+        Index("ix_documents_bates_end", "bates_end"),
+        Index("ix_documents_text_search", "text_search_vector", postgresql_using="gin"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    production_id = Column(Integer, ForeignKey("productions.id"), nullable=False)
+    bates_begin = Column(String(50), nullable=False)
+    bates_end = Column(String(50), nullable=False)
+    page_count = Column(Integer, nullable=False, default=1)
+    metadata_ = Column("metadata", JSONB, nullable=False, default=dict)
+    title = Column(String(200), nullable=True)
+    summary = Column(Text, nullable=True)
+    text_content = Column(Text, nullable=True)
+    text_search_vector = Column(TSVector, nullable=True)
+    native_path = Column(String(500), nullable=True)
+    image_paths = Column(JSONB, nullable=False, default=list)
+
+    production = relationship("Production", back_populates="documents")
+    tags = relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
+    notes = relationship("Note", back_populates="document", cascade="all, delete-orphan", order_by="Note.created_at.desc()")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    category = Column(String(50), nullable=False)
+    color = Column(String(20), nullable=False, default="gray")
+    keyboard_shortcut = Column(String(5), nullable=True)
+    production_id = Column(Integer, ForeignKey("productions.id"), nullable=True)
+
+    document_tags = relationship("DocumentTag", back_populates="tag")
+
+
+class DocumentTag(Base):
+    __tablename__ = "document_tags"
+    __table_args__ = (
+        UniqueConstraint("document_id", "tag_id", name="uq_doc_tag"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), nullable=False)
+    applied_by = Column(String(100), nullable=False)
+    applied_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    document = relationship("Document", back_populates="tags")
+    tag = relationship("Tag", back_populates="document_tags")
+
+
+class Note(Base):
+    __tablename__ = "notes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    created_by = Column(String(100), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    document = relationship("Document", back_populates="notes")
+
+
+class SavedSearch(Base):
+    __tablename__ = "saved_searches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    query = Column(String(1000), nullable=False, default="")
+    filters = Column(JSONB, nullable=False, default=dict)
+    created_by = Column(String(100), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)

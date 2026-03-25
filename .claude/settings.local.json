@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash(python -m venv venv)",
+      "Bash(source venv/Scripts/activate)",
+      "Bash(pip install:*)",
+      "Bash(pip --version)",
+      "Bash(alembic init:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker --version)",
+      "Bash(docker info:*)",
+      "Bash(alembic revision:*)",
+      "Bash(alembic upgrade:*)",
+      "Bash(timeout 5 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000)",
+      "Bash(python ingest_cli.py \"SCHLEGEL_PROD001\" \"C:/Users/WillEdmonds/Downloads/Extracted/SCHLEGEL PROD001\")",
+      "Bash(timeout 5 python -m uvicorn app.main:app --host 0.0.0.0 --port 8001)"
+    ]
+  }
+}
