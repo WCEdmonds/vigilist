@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
-from app.routers.productions import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])

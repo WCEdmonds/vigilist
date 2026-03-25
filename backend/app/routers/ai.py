@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Document, User
 from app.routers.auth import get_current_user
-from app.routers.productions import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids
 from app.services.ai import extract_similar_terms, generate_summary, nl_to_search_query
 from app.services.search import search_documents
 
