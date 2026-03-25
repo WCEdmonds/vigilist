@@ -198,6 +198,7 @@ class ProductionAccessOut(BaseModel):
     user_id: str
     user_email: str
     user_display_name: str | None
+    role: str
     granted_by: str
     granted_at: datetime
 
@@ -206,6 +207,7 @@ class ProductionAccessOut(BaseModel):
 
 class InviteRequest(BaseModel):
     email: str
+    role: str = "reviewer"
 
 
 class PendingInviteOut(BaseModel):

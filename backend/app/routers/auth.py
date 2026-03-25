@@ -83,6 +83,7 @@ async def sync_user(user: User = Depends(get_current_user), db: AsyncSession = D
                 production_id=invite.production_id,
                 user_id=user.id,
                 granted_by=invite.invited_by,
+                role=invite.role,
             ))
         await db.delete(invite)
 
