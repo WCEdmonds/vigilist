@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { findSimilar, getDocument, getDocumentNav, nativeUrl, summarizeDocument } from '../api/client';
-import type { DocumentDetail, DocumentTagEntry } from '../types';
+import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentNav, listAnnotations, nativeUrl, summarizeDocument, updateAnnotation } from '../api/client';
+import type { Annotation, DocumentDetail, DocumentTagEntry } from '../types';
 import DocumentNav from './DocumentNav';
 import ImagePanel from './ImagePanel';
 import MediaPlayer from './MediaPlayer';
@@ -8,6 +8,8 @@ import MetadataPanel from './MetadataPanel';
 import NotesPanel from './NotesPanel';
 import TagBar from './TagBar';
 import TextPanel from './TextPanel';
+import AnnotationPopover from './AnnotationPopover';
+import AnnotationSidebar from './AnnotationSidebar';
 
 const STREAMABLE_EXTENSIONS = new Set(['.mp4', '.mov', '.wav']);
 
@@ -38,16 +40,30 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [summary, setSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [similarLoading, setSimilarLoading] = useState(false);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [imageRotation, setImageRotation] = useState(0);
+  type LeftTab = 'tags' | 'notes' | 'pins';
+  const [leftTab, setLeftTab] = useState<LeftTab>('tags');
+  const [popover, setPopover] = useState<{
+    mode: 'color-picker' | 'create' | 'view';
+    position: { top: number; left: number };
+    annotation?: Annotation;
+    pendingPin?: { pageNum: number; xPct: number; yPct: number };
+    selectedColor?: string;
+  } | null>(null);
 
   useEffect(() => {
     setError('');
     setSummary(null);
     setCenterTab('images');
+    setAnnotations([]);
+    setPopover(null);
     getDocument(docId).then(d => {
       setDoc(d);
       if (d.summary) setSummary(d.summary);
     }).catch(e => setError(e.message));
     getDocumentNav(docId).then(nav => setNextId(nav.next_id));
+    listAnnotations(docId).then(setAnnotations).catch(() => {});
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {
@@ -85,6 +101,73 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     }
   };
 
+  const handlePageClick = (pageNum: number, xPct: number, yPct: number, rect: DOMRect) => {
+    setPopover({
+      mode: 'color-picker',
+      position: { top: rect.top + (yPct / 100) * rect.height, left: rect.left + (xPct / 100) * rect.width + 16 },
+      pendingPin: { pageNum, xPct, yPct },
+    });
+  };
+
+  const handleColorSelect = async (color: string) => {
+    if (!popover?.pendingPin || !doc) return;
+    const { pageNum, xPct, yPct } = popover.pendingPin;
+    try {
+      const ann = await createAnnotation(doc.id, pageNum, xPct, yPct, color);
+      setAnnotations(prev => [...prev, ann]);
+      setPopover({
+        mode: 'create',
+        position: popover.position,
+        annotation: ann,
+        selectedColor: color,
+      });
+    } catch {
+      setPopover(null);
+    }
+  };
+
+  const handleAnnotationSave = async (content: string) => {
+    if (!popover?.annotation) { setPopover(null); return; }
+    if (content) {
+      try {
+        const updated = await updateAnnotation(popover.annotation.id, { content });
+        setAnnotations(prev => prev.map(a => a.id === updated.id ? updated : a));
+      } catch { /* pin stays without content */ }
+    }
+    setPopover(null);
+  };
+
+  const handlePinClick = (ann: Annotation, rect: DOMRect) => {
+    setPopover({
+      mode: 'view',
+      position: { top: rect.top, left: rect.right + 8 },
+      annotation: ann,
+    });
+  };
+
+  const handleAnnotationUpdate = async (data: { content?: string; color?: string }) => {
+    if (!popover?.annotation) return;
+    try {
+      const updated = await updateAnnotation(popover.annotation.id, data);
+      setAnnotations(prev => prev.map(a => a.id === updated.id ? updated : a));
+      setPopover(null);
+    } catch { /* ignore */ }
+  };
+
+  const handleAnnotationDelete = async () => {
+    if (!popover?.annotation) return;
+    try {
+      await deleteAnnotation(popover.annotation.id);
+      setAnnotations(prev => prev.filter(a => a.id !== popover.annotation!.id));
+      setPopover(null);
+    } catch { /* ignore */ }
+  };
+
+  const handleSidebarSelect = (ann: Annotation) => {
+    const el = document.getElementById(`page-${ann.page_num}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   if (error) return <div style={{ padding: 32, color: 'var(--color-danger-600)' }}>Error: {error}</div>;
   if (!doc) return <div className="loading-center"><span className="spinner spinner-md" /> Loading document...</div>;
 
@@ -93,15 +176,32 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const streamInfo = getStreamableInfo(doc.native_path);
   const showCenterTabs = streamInfo && hasImages;
 
+  const isProcessing = doc.processing_status !== 'complete';
+
   const renderCenterPanel = () => {
     // Streamable native with tab set to native, or streamable-only (no images)
     if (streamInfo && (centerTab === 'native' || !hasImages)) {
       return <MediaPlayer docId={doc.id} mediaType={streamInfo.mediaType} />;
     }
 
+    // Images still being converted (Phase B pending)
+    if (isProcessing && doc.image_paths.length === 0) {
+      return (
+        <div className="viewer-main">
+          <div className="empty-state" style={{ flex: 1, gap: 'var(--space-2)' }}>
+            <span className="spinner spinner-md" />
+            <div style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-serif)' }}>Images Processing</div>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-400)' }}>
+              Document text and metadata are available. Page images are being converted and will appear automatically.
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // Has images (default)
     if (hasImages) {
-      return <ImagePanel docId={doc.id} pageCount={doc.page_count} />;
+      return <ImagePanel docId={doc.id} pageCount={doc.page_count} annotations={annotations} onPinClick={handlePinClick} onPageClick={handlePageClick} onRotationChange={setImageRotation} />;
     }
 
     // Non-streamable native only
@@ -143,24 +243,46 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       <div className="viewer-layout">
         {/* LEFT SIDEBAR — Actions */}
         <div className="viewer-left-sidebar">
-          {/* Tags section */}
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">Tags</div>
-            <TagBar
-              docId={doc.id}
-              tags={doc.tags}
-              onTagsChanged={handleTagsChanged}
-              onAutoAdvance={handleAutoAdvance}
+          {/* Tab bar */}
+          <div style={{ display: 'flex', borderBottom: '1px solid var(--color-neutral-200)' }}>
+            {(['tags', 'notes', 'pins'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setLeftTab(tab)}
+                style={{
+                  flex: 1, padding: 'var(--space-2)', textAlign: 'center', fontSize: 'var(--text-xs)',
+                  fontWeight: leftTab === tab ? 700 : 400, cursor: 'pointer',
+                  borderBottom: leftTab === tab ? '2px solid var(--color-primary-800)' : '2px solid transparent',
+                  color: leftTab === tab ? 'var(--color-primary-800)' : 'var(--color-neutral-500)',
+                  background: 'none', border: 'none', borderBottomStyle: 'solid',
+                }}
+              >
+                {tab === 'tags' ? 'Tags' : tab === 'notes' ? 'Notes' : `Pins${annotations.length ? ` (${annotations.length})` : ''}`}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          {leftTab === 'tags' && (
+            <div className="sidebar-section">
+              <TagBar docId={doc.id} tags={doc.tags} onTagsChanged={handleTagsChanged} onAutoAdvance={handleAutoAdvance} />
+            </div>
+          )}
+          {leftTab === 'notes' && (
+            <div className="sidebar-section sidebar-section-grow">
+              <NotesPanel docId={doc.id} />
+            </div>
+          )}
+          {leftTab === 'pins' && (
+            <AnnotationSidebar
+              annotations={annotations}
+              rotation={imageRotation}
+              pageCount={doc.page_count}
+              onSelect={handleSidebarSelect}
             />
-          </div>
+          )}
 
-          {/* Notes section */}
-          <div className="sidebar-section sidebar-section-grow">
-            <div className="sidebar-section-title">Notes</div>
-            <NotesPanel docId={doc.id} />
-          </div>
-
-          {/* AI Actions */}
+          {/* AI Actions — always visible at bottom */}
           <div className="sidebar-section">
             <div className="sidebar-section-title">AI Tools</div>
             <div style={{ padding: 'var(--space-2)', display: 'flex', flexDirection: 'column', gap: 'var(--space-1-5)' }}>
@@ -235,6 +357,21 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
           </div>
         </div>
       </div>
+
+      {popover && (
+        <AnnotationPopover
+          mode={popover.mode}
+          position={popover.position}
+          annotation={popover.annotation}
+          selectedColor={popover.selectedColor}
+          canDelete={true}
+          onColorSelect={handleColorSelect}
+          onSave={handleAnnotationSave}
+          onUpdate={handleAnnotationUpdate}
+          onDelete={handleAnnotationDelete}
+          onCancel={() => setPopover(null)}
+        />
+      )}
     </div>
   );
 }
