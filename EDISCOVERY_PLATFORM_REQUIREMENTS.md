@@ -266,30 +266,194 @@ Powered by an LLM (Claude API via Anthropic). Three capabilities:
 - Single-key shortcuts for common tags (e.g., `R` = Responsive, `P` = Privileged, `H` = Hot Document).
 - After tagging, auto-advance to next document in the current result set.
 
+### 7.4 Coding Layouts
+
+- Configurable coding panels per review stage (e.g., First-Pass Responsiveness, Privilege Review, QC Review).
+- Each layout defines which tag categories, fields, and validation rules are visible.
+- Layouts are assigned to review stages — reviewers see only the coding panel relevant to their current task.
+- Validation rules can enforce required fields before advancing (e.g., responsiveness decision is mandatory before moving to the next document).
+- Administrators can create, edit, and reorder layouts.
+
+### 7.5 Bulk Coding with Propagation
+
+- Select multiple documents from search results and apply tags in batch (extends 7.1 bulk tagging).
+- **Family propagation:** When tagging a parent document, optionally propagate the tag to all family members (attachments, embedded files).
+- **Thread propagation:** When tagging an inclusive email, optionally propagate to all earlier messages in the thread.
+- **Near-duplicate propagation:** When tagging a document, optionally propagate to all near-duplicates.
+- Propagation is opt-in per action, with a confirmation dialog showing affected document count.
+
+### 7.6 Markup & Annotations
+
+- Highlight text passages in the text panel with color-coded highlights.
+- Add margin annotations / sticky notes anchored to specific page locations on document images.
+- Annotations are visible to all reviewers with attribution (who, when).
+- Filter documents by "has annotations" in search.
+- Annotations are preserved across sessions and included in audit trail.
+
+### 7.7 Redactions
+
+- Draw rectangular redaction boxes on document page images.
+- Each redaction requires a reason/label (e.g., "Attorney-Client Privilege", "Work Product", "Privacy/PII").
+- Redactions are stored as overlay metadata — original images are never modified.
+- Toggle redaction visibility on/off in the viewer.
+- Redactions are burned into images at export time (see Section 8).
+- Redaction log export: list of all redactions with document, page, reason, and who applied them.
+
 ---
 
-## 8. Export
+## 8. User Management & Access Control
 
-### 8.1 Tagged Set Export
+### 8.1 Individual User Accounts
+
+- Individual username/password accounts replace the shared login from Phase 1.
+- Support for email-based login with password reset flow.
+- Optional SSO integration via Google OAuth or SAML for firms with existing identity providers.
+
+### 8.2 Roles & Permissions
+
+- **Administrator:** Full access — manage users, matters, productions, coding layouts, system settings.
+- **Project Manager:** Manage review queues, assign batches, view dashboards, run QC, export. Cannot manage users or system settings.
+- **Reviewer:** Review assigned documents, apply tags/notes/annotations within assigned batches. Cannot access unassigned documents or admin functions.
+- **Read-Only:** View documents and search, but cannot modify tags, notes, or annotations. Useful for attorneys supervising without actively coding.
+- Permissions are scoped per matter (workspace) — a user can be a Reviewer on one matter and a Project Manager on another.
+
+### 8.3 Audit Trail
+
+- Log every significant user action with timestamp, user ID, document ID, and action details:
+  - Login/logout
+  - Document viewed
+  - Tag applied/removed/changed
+  - Note created/edited/deleted
+  - Annotation created/edited/deleted
+  - Redaction applied/removed
+  - Search executed
+  - Export performed
+  - Batch assigned/completed
+  - QC decision (agree/overturn)
+- Audit logs are immutable (append-only) and exportable as CSV.
+- Audit trail viewer in the admin UI with filtering by user, date range, action type, and document.
+
+---
+
+## 9. Review Workflow & Project Management
+
+### 9.1 Matters (Workspaces)
+
+- Each matter (case) is a separate workspace with its own productions, documents, tags, and review state.
+- Users are assigned to matters with a specific role (see Section 8.2).
+- Data is fully isolated between matters — no cross-matter document access.
+- Dashboard showing all matters the current user has access to.
+
+### 9.2 Review Queues & Batching
+
+- Create named review queues scoped to a document set (e.g., "First-Pass Review", "Privilege Review of Responsive Docs").
+- Queues are defined by a saved search or filter — documents matching the criteria populate the queue.
+- **Batch assignment:** Divide a queue into batches of configurable size (e.g., 50 or 100 documents) and assign batches to individual reviewers.
+- **Auto-assignment:** Optionally auto-assign the next available batch when a reviewer completes their current batch.
+- **Checkout model:** While a batch is assigned to a reviewer, those documents are locked from other reviewers' queues to prevent duplicate work.
+- Reviewers see only their assigned batch in the document viewer, with progress tracking (e.g., "Document 23 of 50").
+
+### 9.3 Review Progress Dashboard
+
+- **Project-level metrics:**
+  - Total documents, documents reviewed, documents remaining, percent complete.
+  - Breakdown by tag category (e.g., responsive vs. not responsive vs. needs further review).
+  - Estimated time to completion based on current throughput.
+- **Reviewer-level metrics:**
+  - Documents reviewed per hour/day.
+  - Current batch progress.
+  - Tag distribution per reviewer (to spot potential outliers).
+- **Visual charts:** Progress over time, reviewer comparison, tag distribution histograms.
+- Real-time or near-real-time updates.
+
+### 9.4 Quality Control (QC)
+
+- **QC sampling:** Automatically or manually select a configurable percentage of reviewed documents for QC review (e.g., 10% random sample, or all documents tagged a certain way).
+- **QC workflow:** QC reviewer sees the original reviewer's coding decisions and can agree or overturn with a reason.
+- **Overturn tracking:** Dashboard showing overturn rate by reviewer, by tag category, and over time.
+- **Escalation:** Documents flagged during QC can be escalated to a senior reviewer or project manager.
+- **Reviewer agreement reports:** Compare coding decisions between two reviewers on overlapping document sets to measure inter-reviewer consistency (Cohen's kappa or simple agreement rate).
+
+---
+
+## 10. Document Intelligence
+
+### 10.1 Document Family Grouping
+
+- Parse family relationships from production metadata (if available in DAT fields like `Parent ID`, `Attachment Range`, or `Group Identifier`).
+- Group parent documents with their attachments/embedded files as a family unit.
+- Family navigation in the viewer: see all family members, jump between parent and attachments.
+- Family-aware search: option to return all family members when any member matches.
+- Family-aware tagging: option to propagate tags to all family members (see Section 7.5).
+
+### 10.2 Email Threading
+
+- Identify email threads using metadata fields (e.g., `Conversation Index`, `Message-ID`, `In-Reply-To`) or text-based analysis of email headers in extracted text.
+- Build thread trees showing the conversation flow.
+- **Inclusive email detection:** Identify the most inclusive message in each thread (the one that contains all prior content), allowing reviewers to prioritize reviewing inclusives only.
+- Thread visualization in the viewer: display the thread tree with the current document highlighted.
+- Thread-aware navigation: step through a thread chronologically.
+
+### 10.3 Near-Duplicate Detection
+
+- Compute document similarity using text fingerprinting (e.g., MinHash/LSH or simhash) during ingest or as a batch process.
+- Group documents exceeding a configurable similarity threshold (e.g., 90%) as near-duplicates.
+- Near-duplicate indicator in the viewer showing the duplicate group and similarity scores.
+- Option to review near-duplicate groups together, coding one and propagating to the group.
+- Filter search results to suppress or group near-duplicates.
+
+### 10.4 Clustering & Conceptual Grouping
+
+- Cluster the document corpus into topical groups using unsupervised methods (e.g., k-means or hierarchical clustering over document embeddings).
+- Display clusters with auto-generated labels (top terms or LLM-generated topic names).
+- Interactive cluster visualization (e.g., scatter plot or treemap) for corpus exploration.
+- Assign clusters to review queues to route subject-matter experts to relevant topics.
+- Re-cluster on demand as new productions are ingested.
+
+### 10.5 Communication Analysis
+
+- Build a communication network graph from email metadata (From, To, CC, BCC fields).
+- Visualize sender-recipient relationships with edge weights representing message volume.
+- Identify key custodians and communication patterns.
+- Filter the graph by date range, tag status, or search terms.
+- Click on a relationship edge to see the underlying documents.
+
+---
+
+## 11. Export
+
+### 11.1 Tagged Set Export
 
 - Export a filtered/tagged subset of documents as a production package:
   - Load file (.dat or .csv) containing metadata for the exported documents.
-  - Corresponding image files (TIFFs) and/or native files.
+  - Corresponding image files (TIFFs or JPEGs) and/or native files.
   - Text files.
   - OPT file for the exported subset.
 - Filter export by any combination of tags, search queries, or Bates ranges.
+- **Redaction burn-in:** When exporting documents with redactions, burn redaction boxes into the exported images as black rectangles. Original un-redacted images are never included in redacted exports.
 
-### 8.2 Report Export
+### 11.2 Report Export
 
 - Export search results as CSV.
 - Export tag summary report (counts by tag category).
 - Export document list with metadata and applied tags as CSV or Excel.
+- Export redaction log (document, page, coordinates, reason, applied by, timestamp).
+- Export reviewer progress and QC reports.
+- Export audit trail (filtered by date range, user, action type).
+
+### 11.3 Privilege Log Export
+
+- Generate a privilege log from documents tagged as Privileged.
+- Columns: Bates range, date, from, to, cc, document type, subject/description, privilege basis.
+- Auto-populate fields from document metadata where available.
+- Allow manual editing of privilege log entries before export.
+- Export as CSV or Excel.
 
 ---
 
-## 9. Architecture
+## 12. Architecture
 
-### 9.1 Deployment
+### 12.1 Deployment
 
 - Cloud-deployed, accessible via browser from multiple machines.
 - Recommended stack:
@@ -303,51 +467,51 @@ Powered by an LLM (Claude API via Anthropic). Three capabilities:
   - **Container registry:** Artifact Registry for Docker images.
   - **Secrets:** Google Secret Manager for API keys (Claude API key, database credentials).
 
-### 9.2 Authentication
+### 12.2 Authentication
 
-- Shared login (single username/password) for the small team is acceptable for v1.
-- Protect with HTTPS and a strong shared credential.
-- Optionally use Identity-Aware Proxy (IAP) on Cloud Run for Google account-based access control — this would be simpler and more secure than a custom login, since the team likely already has Google accounts.
-- Future: upgrade to individual accounts with role-based access if needed.
+- Phase 1: Shared login (single username/password) for initial development.
+- Phase 2+: Individual user accounts with role-based access control (see Section 8).
+- Protect with HTTPS.
+- Optional SSO via Google OAuth, SAML, or Identity-Aware Proxy (IAP) on Cloud Run.
 
-### 9.3 Performance Targets
+### 12.3 Performance Targets
 
 - Full-text search should return results in under 2 seconds for the current corpus size.
 - Document viewer should load the first page image in under 1 second.
 - Ingest pipeline should process the initial 26GB production in under 2 hours.
-- Support concurrent access by up to 5 users without degradation.
+- Support concurrent access by up to 50 reviewers without degradation.
 
 ---
 
-## 10. Non-Functional Requirements
+## 13. Non-Functional Requirements
 
-### 10.1 Security
+### 13.1 Security
 
 - All data in transit encrypted via TLS (Cloud Run provides this by default).
 - All data at rest encrypted (GCS encrypts at rest by default; Cloud SQL encrypts at rest by default).
 - No public access to document storage — all file access via signed, expiring GCS URLs generated by the backend.
 - Consider enabling VPC Service Controls if the firm has compliance requirements around data residency.
 - This is attorney work product and potentially privileged material. Access controls are critical.
+- Per-matter data isolation — users can only access matters they are assigned to.
 
-### 10.2 Reliability
+### 13.2 Reliability
 
 - Automated database backups (Cloud SQL provides automated daily backups with point-in-time recovery).
 - File storage on GCS Standard class provides 99.999999999% annual durability.
 - Application should handle ingest failures gracefully with retry logic and error reporting.
 
-### 10.3 Cost Sensitivity
+### 13.3 Cost Sensitivity
 
-- This is a small-firm tool, not enterprise. Optimize for low monthly cost.
-- Estimated budget: under $100/month for hosting and storage at current production volume.
-- AI features (Claude API) should be usage-based with cost visibility. Estimate: ~$20–50/month depending on summarization volume.
+- Optimize for low-to-moderate monthly cost. Pricing should scale with usage (per-matter or per-GB).
+- AI features (Claude API) should be usage-based with cost visibility.
 
 ---
 
-## 11. Build Priorities
+## 14. Build Priorities
 
 Build in this order. Each phase should be functional and testable before moving to the next.
 
-### Phase 1: Ingest + View + Basic Search
+### Phase 1: Ingest + View + Basic Search (done)
 
 - DAT/OPT parser with auto-format detection
 - Database schema and document model
@@ -357,35 +521,84 @@ Build in this order. Each phase should be functional and testable before moving 
 - Basic navigation (prev/next, jump to Bates)
 - Shared auth
 
-### Phase 2: Advanced Search + Review Workflow
+### Phase 2: Search + Core Review Workflow
 
-- Frontend polish, make this look like a real production-ready webapp
+- Frontend polish — production-ready UI
 - Metadata field filters
 - Combined text + metadata search
 - Saved searches
-- Tag/code documents
+- Tag/code documents with configurable tag categories
 - Notes/comments
-- Keyboard shortcuts and auto-advance
+- Coding keyboard shortcuts and auto-advance
 - Bulk tagging
+- MP4/MOV/WAV media streaming
 
-### Phase 3: AI Features
+### Phase 3: User Management + Audit
+
+- Individual user accounts (replace shared login)
+- Role-based access control (Admin, Project Manager, Reviewer, Read-Only)
+- Comprehensive audit trail (all user actions logged)
+- Audit log viewer and export
+- Password reset flow
+- Optional SSO / Google OAuth integration
+
+### Phase 4: Review Management + QC
+
+- Multi-matter workspaces with data isolation
+- Review queues and saved-search-driven document sets
+- Batch creation and assignment to reviewers
+- Batch checkout model (prevent duplicate work)
+- Auto-assignment of next batch on completion
+- Review progress dashboard (project-level and reviewer-level metrics)
+- QC sampling workflows (random or targeted)
+- QC agree/overturn with reasons
+- Overturn rate tracking and reviewer agreement reports
+
+### Phase 5: Coding Layouts + Annotations + Redactions
+
+- Configurable coding layouts per review stage (first-pass, privilege, QC)
+- Validation rules on coding panels (required fields before advance)
+- Text highlighting and margin annotations on document images
+- Annotation attribution and filtering
+- Redaction tools (draw boxes on page images with reason labels)
+- Redaction overlay storage (original images never modified)
+- Redaction visibility toggle in viewer
+
+### Phase 6: Document Intelligence
+
+- Document family grouping (parse parent/attachment relationships from metadata)
+- Family-aware navigation, search, and tagging propagation
+- Email threading (via metadata or text-based header analysis)
+- Inclusive email detection
+- Thread visualization and thread-aware navigation
+- Near-duplicate detection (MinHash/LSH or simhash)
+- Near-duplicate grouping, indicators, and propagation coding
+- Bulk coding with family/thread/near-duplicate propagation
+
+### Phase 7: AI-Powered Review
 
 - Vector embedding pipeline (chunk + embed all extracted text)
 - Natural language search
-- Document summarization
+- Document summarization (cached)
 - Find Similar Documents
+- Clustering and conceptual grouping with auto-generated labels
+- Cluster visualization (scatter plot or treemap)
+- Active learning / TAR (predictive coding for prioritized review)
+- Communication analysis (network graph from email metadata)
 
-### Phase 4: Export + Polish
+### Phase 8: Export + Production
 
-- Tagged set export with load file
-- Report exports (CSV, Excel)
-- MP4 streaming
-- Performance optimization
+- Tagged set export with load file (.dat, .opt)
+- Redaction burn-in on exported images
+- Report exports (CSV, Excel) — search results, tag summaries, reviewer progress, QC reports
+- Privilege log generation and export
+- Audit trail export
 - Rolling production ingest support
+- Performance optimization and scalability tuning
 
 ---
 
-## 12. Open Questions
+## 15. Open Questions
 
 1. ~~**DAT format:**~~ **RESOLVED.** Concordance DAT with þ/DC4 delimiters, UTF-8 with BOM. 5 fields: Begin Bates, End Bates, Page Count, Text Link, Native Link.
 2. ~~**Bates numbering scheme:**~~ **PARTIALLY RESOLVED.** Format is `SCHLEGEL NNNNNN` (space-separated prefix + 6-digit zero-padded number). **CRITICAL: Bates numbers are NOT unique across productions.** The Wallace-specific production reuses the same Bates numbers as the Master production (this was flagged by Dorsey in the Schlegel document production email chain as a Relativity loading issue). Therefore, Bates number alone cannot serve as a unique document identifier. The data model must use a composite key of `(production_id, bates_begin)` or an internal UUID. The UI should always display which production set a document belongs to. This issue may or may not be resolved by Schlegel's team re-issuing with unique Bates numbers — design for the worst case.
