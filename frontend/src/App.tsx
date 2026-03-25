@@ -7,6 +7,7 @@ import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
 import QueueManager from './components/QueueManager';
 import BatchReview from './components/BatchReview';
+import Dashboard from './components/Dashboard';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
 import { ToastContainer } from './components/Toast';
@@ -49,6 +50,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
   const [showQueueManager, setShowQueueManager] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
 
@@ -162,6 +164,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
           <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
         )}
         <button className="btn btn-secondary" onClick={() => setShowQueueManager(true)}>Review Queues</button>
+        <button className="btn-header" onClick={() => setShowDashboard(true)}>Dashboard</button>
         <div className="user-menu">
           <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
           <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} size={26} />
@@ -423,6 +426,11 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       {/* Queue manager modal */}
       {showQueueManager && (
         <QueueManager productionId={production.id} onClose={() => setShowQueueManager(false)} />
+      )}
+
+      {/* Dashboard modal */}
+      {showDashboard && (
+        <Dashboard productionId={production.id} onClose={() => setShowDashboard(false)} />
       )}
 
       {/* Floating bulk action bar */}
