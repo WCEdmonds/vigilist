@@ -6,6 +6,10 @@ import IngestWizard from './components/IngestWizard';
 import ManageAccess from './components/ManageAccess';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
+import { ToastContainer } from './components/Toast';
+import WelcomePage from './components/WelcomePage';
+import ProductionPicker from './components/ProductionPicker';
+import UserAvatar from './components/UserAvatar';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import type { DocumentSummary, ProductionInfo, SearchResult, Tag } from './types';
 
@@ -16,7 +20,13 @@ const COLOR_MAP: Record<string, string> = {
 
 type ViewMode = 'list' | 'grid';
 
-function Home() {
+interface HomeProps {
+  production: ProductionInfo;
+  onSwitchProduction: () => void;
+  onIngestComplete: () => void;
+}
+
+function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const { user, logout } = useAuth();
   const [viewDocId, setViewDocId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -32,7 +42,6 @@ function Home() {
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [hideNativeOnly, setHideNativeOnly] = useState(true);
-  const [activeProduction, setActiveProduction] = useState<ProductionInfo | null>(null);
   const [showManageAccess, setShowManageAccess] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
 
@@ -41,15 +50,12 @@ function Home() {
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(() => {});
-    listProductions().then(prods => {
-      if (prods.length === 1) setActiveProduction(prods[0]);
-    }).catch(() => {});
-  }, []);
+  }, [production.id]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, activeProduction?.id);
+      const res = await listDocuments(page, perPage, production.id);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -64,7 +70,7 @@ function Home() {
     setHasSearched(true);
     setSelectedIds(new Set());
     try {
-      const res = await searchDocuments(query, 1, 50, 'relevance', activeProduction?.id);
+      const res = await searchDocuments(query, 1, 50, 'relevance', production.id);
       setSearchResults(res.results);
       setSearchTotal(res.total);
     } finally {
@@ -77,13 +83,6 @@ function Home() {
     setSearchQuery('');
     setSearchResults([]);
     setSelectedIds(new Set());
-    loadDocuments();
-  };
-
-  const handleIngestComplete = () => {
-    listProductions().then(prods => {
-      if (prods.length >= 1) setActiveProduction(prods[0]);
-    }).catch(() => {});
     loadDocuments();
   };
 
@@ -130,17 +129,16 @@ function Home() {
         <span className="logo" onClick={clearSearch}>
           Descubre
         </span>
-        {activeProduction && (
-          <>
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-primary-300)', opacity: 0.7 }}>/</span>
-            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-primary-200)' }}>{activeProduction.name}</span>
-            {activeProduction.is_owner && (
-              <button className="btn-header" onClick={() => setShowManageAccess(true)}>Share</button>
-            )}
-          </>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-primary-300)', opacity: 0.7 }}>/</span>
+        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-primary-200)', cursor: 'pointer' }} onClick={onSwitchProduction}>
+          {production.name}
+        </span>
+        {production.is_owner && (
+          <button className="btn-header" onClick={() => setShowManageAccess(true)}>Share</button>
         )}
         <div className="user-menu">
           <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
+          <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} size={26} />
           <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
           <button className="btn-header" onClick={logout}>Sign out</button>
         </div>
@@ -348,9 +346,9 @@ function Home() {
       </div>
 
       {/* Manage access modal */}
-      {showManageAccess && activeProduction && (
+      {showManageAccess && (
         <ManageAccess
-          productionId={activeProduction.id}
+          productionId={production.id}
           onClose={() => setShowManageAccess(false)}
         />
       )}
@@ -359,7 +357,7 @@ function Home() {
       {showIngestWizard && (
         <IngestWizard
           onClose={() => setShowIngestWizard(false)}
-          onComplete={handleIngestComplete}
+          onComplete={() => { setShowIngestWizard(false); onIngestComplete(); }}
         />
       )}
 
@@ -402,6 +400,74 @@ function Home() {
   );
 }
 
+function AppRouter() {
+  const [productions, setProductions] = useState<ProductionInfo[]>([]);
+  const [activeProduction, setActiveProduction] = useState<ProductionInfo | null>(null);
+  const [prodLoading, setProdLoading] = useState(true);
+  const [showIngestWizard, setShowIngestWizard] = useState(false);
+
+  const loadProductions = async () => {
+    setProdLoading(true);
+    try {
+      const prods = await listProductions();
+      setProductions(prods);
+      if (prods.length === 1) setActiveProduction(prods[0]);
+      else if (prods.length === 0) setActiveProduction(null);
+    } catch {}
+    setProdLoading(false);
+  };
+
+  useEffect(() => { loadProductions(); }, []);
+
+  const handleIngestComplete = () => {
+    setActiveProduction(null);
+    loadProductions();
+  };
+
+  if (prodLoading) {
+    return <div className="loading-center"><span className="spinner spinner-md" /> Loading...</div>;
+  }
+
+  if (productions.length === 0) {
+    return (
+      <>
+        <WelcomePage onIngest={() => setShowIngestWizard(true)} />
+        {showIngestWizard && (
+          <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
+        )}
+        <ToastContainer />
+      </>
+    );
+  }
+
+  if (!activeProduction) {
+    return (
+      <>
+        <ProductionPicker
+          productions={productions}
+          onSelect={setActiveProduction}
+          onIngest={() => setShowIngestWizard(true)}
+        />
+        {showIngestWizard && (
+          <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
+        )}
+        <ToastContainer />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Home
+        production={activeProduction}
+        onSwitchProduction={() => setActiveProduction(null)}
+        onIngestComplete={handleIngestComplete}
+      />
+      <ToastContainer />
+    </>
+  );
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -414,5 +480,5 @@ function AppContent() {
   const { user, loading } = useAuth();
   if (loading) return <div className="loading-center"><span className="spinner spinner-md" /> Loading...</div>;
   if (!user) return <AuthPage />;
-  return <Home />;
+  return <AppRouter />;
 }
