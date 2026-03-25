@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models import User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
+from app.services.audit import log_action
 from app.schemas import SearchResponse, SearchResult
 from app.services.search import search_documents
 
@@ -26,6 +27,9 @@ async def search(
         db, q, production_id=production_id, page=page, per_page=per_page, sort=sort,
         accessible_production_ids=accessible,
     )
+    await log_action(db, user, "search_executed", "search", None,
+                     details={"query": q, "result_count": total})
+    await db.commit()
     return SearchResponse(
         results=[SearchResult(**r) for r in results],
         total=total,

@@ -8,6 +8,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import PendingInvite, ProductionAccess, User
 from app.schemas import UserOut
+from app.services.audit import log_action
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -87,6 +88,7 @@ async def sync_user(user: User = Depends(get_current_user), db: AsyncSession = D
             ))
         await db.delete(invite)
 
+    await log_action(db, user, "user_login", "user", user.id)
     await db.commit()
     return user
 

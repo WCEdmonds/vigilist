@@ -8,7 +8,8 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Tag, User
 from app.routers.auth import get_current_user
-from app.dependencies import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids, get_user_role_for_production
+from app.services.audit import log_action
 from app.schemas import (
     ApplyTagsRequest,
     BulkTagRequest,
@@ -81,6 +82,9 @@ async def apply_tags(
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
+    role = await get_user_role_for_production(db, user, doc.production_id)
+    if role == "readonly":
+        raise HTTPException(status_code=403, detail="Read-only access")
 
     for tag_id in body.tag_ids:
         existing = await db.execute(
@@ -94,6 +98,9 @@ async def apply_tags(
         dt = DocumentTag(document_id=doc_id, tag_id=tag_id, applied_by=user.id)
         db.add(dt)
 
+    for tag_id in body.tag_ids:
+        await log_action(db, user, "tag_applied", "document", str(doc_id),
+                         production_id=doc.production_id, details={"tag_id": tag_id})
     await db.commit()
 
     # Return updated tag list
@@ -119,6 +126,9 @@ async def remove_tag(
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
+    role = await get_user_role_for_production(db, user, doc.production_id)
+    if role == "readonly":
+        raise HTTPException(status_code=403, detail="Read-only access")
     result = await db.execute(
         select(DocumentTag).where(
             DocumentTag.document_id == doc_id,
@@ -129,6 +139,8 @@ async def remove_tag(
     if not dt:
         raise HTTPException(status_code=404, detail="Tag not applied")
     await db.delete(dt)
+    await log_action(db, user, "tag_removed", "document", str(doc_id),
+                     production_id=doc.production_id, details={"tag_id": tag_id})
     await db.commit()
     return {"ok": True}
 
@@ -141,12 +153,18 @@ async def bulk_tag(
 ):
     accessible = await get_accessible_production_ids(db, user)
     # Verify all documents are accessible
+    docs = []
     for doc_id in body.doc_ids:
         doc = await db.get(Document, doc_id)
         if not doc:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
         if doc.production_id not in accessible:
             raise HTTPException(status_code=403, detail="Access denied")
+        docs.append(doc)
+    if docs:
+        role = await get_user_role_for_production(db, user, docs[0].production_id)
+        if role == "readonly":
+            raise HTTPException(status_code=403, detail="Read-only access")
     count = 0
     for doc_id in body.doc_ids:
         for tag_id in body.tag_ids:
@@ -161,5 +179,7 @@ async def bulk_tag(
             db.add(DocumentTag(document_id=doc_id, tag_id=tag_id, applied_by=user.id))
             count += 1
 
+    await log_action(db, user, "bulk_tag_applied", "document", None,
+                     details={"doc_ids": [str(d) for d in body.doc_ids], "tag_ids": body.tag_ids})
     await db.commit()
     return {"tagged": count}
