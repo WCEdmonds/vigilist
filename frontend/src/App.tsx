@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getTags, imageUrl, listDocuments, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
-import Login from './components/Login';
+import AuthPage from './components/AuthPage';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
 import { AuthProvider, useAuth } from './hooks/useAuth';
@@ -116,7 +116,7 @@ function Home() {
           Descubre
         </span>
         <div className="user-menu">
-          <span style={{ opacity: 0.7 }}>{user}</span>
+          <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
           <button className="btn-header" onClick={logout}>Sign out</button>
         </div>
       </div>
@@ -369,6 +369,6 @@ export default function App() {
 function AppContent() {
   const { user, loading } = useAuth();
   if (loading) return <div className="loading-center"><span className="spinner spinner-md" /> Loading...</div>;
-  if (!user) return <Login />;
+  if (!user) return <AuthPage />;
   return <Home />;
 }
