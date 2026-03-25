@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  BatchDocument, DashboardStats, DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry,
+  Annotation, BatchDocument, DashboardStats, DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry,
   PaginatedAuditLogs, PaginatedDocuments, PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
   QCContext, QCStats, ReviewBatch, ReviewQueue, SavedSearch, SearchResponse, Tag,
 } from '../types';
@@ -38,6 +38,12 @@ const json = (body: unknown) => ({
 });
 
 // ── Documents ──
+
+export function getMetadataKeys(productionId?: number): Promise<string[]> {
+  const params = new URLSearchParams();
+  if (productionId) params.set('production_id', String(productionId));
+  return request<string[]>(`/api/documents/metadata-keys?${params}`);
+}
 
 export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
@@ -211,6 +217,9 @@ export const createProductionForIngest = (productionName: string, description: s
 export const startProcessing = (productionId: number, totalFiles: number) =>
   request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles }));
 
+export const reprocessProduction = (productionId: number) =>
+  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: 0 }));
+
 export const getIngestStatus = (jobId: string) =>
   request<IngestJob>(`/api/ingest/${jobId}/status`);
 
@@ -282,4 +291,22 @@ export async function getQCContext(bdId: number): Promise<QCContext> {
 
 export async function recordQCDecision(bdId: number, decision: string, reason?: string, newTagIds?: number[]): Promise<unknown> {
   return request(`/api/qc/batch-document/${bdId}/decide`, json({ decision, reason, new_tag_ids: newTagIds }));
+}
+
+// ── Annotations ──
+
+export function listAnnotations(docId: string): Promise<Annotation[]> {
+  return request<Annotation[]>(`/api/documents/${docId}/annotations`);
+}
+
+export function createAnnotation(docId: string, pageNum: number, xPct: number, yPct: number, color: string, content = ''): Promise<Annotation> {
+  return request<Annotation>(`/api/documents/${docId}/annotations`, json({ page_num: pageNum, x_pct: xPct, y_pct: yPct, color, content }));
+}
+
+export function updateAnnotation(annId: number, data: { content?: string; color?: string }): Promise<Annotation> {
+  return request<Annotation>(`/api/annotations/${annId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+}
+
+export function deleteAnnotation(annId: number): Promise<void> {
+  return request(`/api/annotations/${annId}`, { method: 'DELETE' });
 }
