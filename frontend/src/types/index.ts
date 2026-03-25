@@ -182,6 +182,7 @@ export interface BatchDocument {
   reviewed_at: string | null;
   bates_begin: string;
   title: string | null;
+  next_batch_id?: number | null;
 }
 
 export interface DashboardStats {
