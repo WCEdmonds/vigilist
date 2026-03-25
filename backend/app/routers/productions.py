@@ -79,6 +79,7 @@ async def list_access(
             user_id=pa.user_id,
             user_email=u.email,
             user_display_name=u.display_name,
+            role=pa.role,
             granted_by=pa.granted_by,
             granted_at=pa.granted_at,
         )
@@ -142,6 +143,7 @@ async def invite_user(
             production_id=production_id,
             user_id=target_user.id,
             granted_by=user.id,
+            role=body.role,
         )
         db.add(pa)
         await db.commit()
@@ -161,6 +163,7 @@ async def invite_user(
             production_id=production_id,
             email=email,
             invited_by=user.id,
+            role=body.role,
         )
         db.add(invite)
         await db.commit()

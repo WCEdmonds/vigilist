@@ -131,6 +131,8 @@ class SavedSearch(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+# Role values: "admin", "manager", "reviewer", "readonly"
+# The production owner (Production.owner_id) implicitly has full admin access.
 class ProductionAccess(Base):
     __tablename__ = "production_access"
     __table_args__ = (
@@ -140,6 +142,7 @@ class ProductionAccess(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(String(128), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(20), nullable=False, server_default="reviewer")
     granted_by = Column(String(128), ForeignKey("users.id"), nullable=False)
     granted_at = Column(DateTime, server_default=func.now(), nullable=False)
 
@@ -158,6 +161,7 @@ class PendingInvite(Base):
     production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
     email = Column(String(255), nullable=False)
     invited_by = Column(String(128), ForeignKey("users.id"), nullable=False)
+    role = Column(String(20), nullable=False, server_default="reviewer")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     production = relationship("Production")
