@@ -141,3 +141,74 @@ export interface PaginatedAuditLogs {
   page: number;
   per_page: number;
 }
+
+// ── Review Queues & Batches ──
+
+export interface ReviewQueue {
+  id: number;
+  production_id: number;
+  name: string;
+  description: string | null;
+  query: string;
+  filters: Record<string, unknown>;
+  status: string;
+  created_by: string;
+  created_at: string;
+  batch_count: number;
+  total_documents: number;
+  reviewed_documents: number;
+}
+
+export interface ReviewBatch {
+  id: number;
+  queue_id: number;
+  queue_name: string;
+  reviewer_id: string | null;
+  reviewer_email: string | null;
+  status: string;
+  size: number;
+  reviewed_count: number;
+  assigned_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface BatchDocument {
+  id: number;
+  batch_id: number;
+  document_id: string;
+  position: number;
+  reviewed: string;
+  reviewed_at: string | null;
+  bates_begin: string;
+  title: string | null;
+}
+
+export interface DashboardStats {
+  total_documents: number;
+  reviewed_documents: number;
+  pending_documents: number;
+  percent_complete: number;
+  tag_breakdown: Record<string, Record<string, number>>;
+  reviewer_stats: { user_id: string; email: string; reviewed_count: number }[];
+  queue_stats: { queue_id: number; name: string; total: number; reviewed: number; batch_count: number }[];
+}
+
+export interface QCStats {
+  total_decisions: number;
+  agree_count: number;
+  overturn_count: number;
+  overturn_rate: number;
+  by_reviewer: { reviewer_id: string; email: string; total: number; overturns: number; overturn_rate: number }[];
+}
+
+export interface QCContext {
+  batch_document_id: number;
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
+  original_reviewer_id: string;
+  original_reviewer_email: string | null;
+  current_tags: { id: number; name: string; category: string }[];
+  existing_decision: { id: number; decision: string; reason: string | null; created_at: string } | null;
+}
