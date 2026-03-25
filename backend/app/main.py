@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import ai, auth, documents, export, ingest, notes, productions, saved_searches, search, tags
+from app.routers import ai, audit, auth, documents, export, ingest, notes, productions, saved_searches, search, tags
 
 app = FastAPI(title="Vigilist", version="0.1.0")
 
@@ -23,6 +23,7 @@ app.include_router(notes.router)
 app.include_router(saved_searches.router)
 app.include_router(ai.router)
 app.include_router(export.router)
+app.include_router(audit.router)
 app.include_router(productions.router)
 
 
