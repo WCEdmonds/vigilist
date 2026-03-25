@@ -3,7 +3,7 @@ import { createSavedSearch, deleteSavedSearch, getSavedSearches, nlSearch } from
 import type { SavedSearch } from '../types';
 
 interface Props {
-  onSearch: (query: string) => void;
+  onSearch: (query: string, metadata?: Record<string, string>) => void;
   onNlResults?: (results: { original_query: string; structured_query: string; results: unknown[]; total: number }) => void;
   initialQuery?: string;
 }
@@ -17,6 +17,10 @@ export default function SearchBar({ onSearch, onNlResults, initialQuery = '' }: 
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveName, setSaveName] = useState('');
   const savedRef = useRef<HTMLDivElement>(null);
+  const [showFilters, setShowFilters] = useState(false);
+  const [metadataFilters, setMetadataFilters] = useState<Record<string, string>>({});
+  const [filterKey, setFilterKey] = useState('');
+  const [filterValue, setFilterValue] = useState('');
 
   useEffect(() => { setQuery(initialQuery); }, [initialQuery]);
 
@@ -52,7 +56,8 @@ export default function SearchBar({ onSearch, onNlResults, initialQuery = '' }: 
         setNlLoading(false);
       }
     } else {
-      onSearch(query.trim());
+      const filters = Object.keys(metadataFilters).length > 0 ? metadataFilters : undefined;
+      onSearch(query.trim(), filters);
     }
   };
 
@@ -117,7 +122,37 @@ export default function SearchBar({ onSearch, onNlResults, initialQuery = '' }: 
             )}
           </div>
         )}
+
+        <button type="button" className="btn btn-secondary" onClick={() => setShowFilters(!showFilters)}>
+          Filters {Object.keys(metadataFilters).length > 0 && `(${Object.keys(metadataFilters).length})`}
+        </button>
       </form>
+
+      {showFilters && (
+        <div style={{ padding: '0.5rem 0', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+          {Object.entries(metadataFilters).map(([k, v]) => (
+            <span key={k} style={{ background: '#e2e8f0', padding: '0.25rem 0.5rem', borderRadius: '4px', fontSize: '0.85em', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+              {k}: {v}
+              <button type="button" onClick={() => {
+                const next = { ...metadataFilters };
+                delete next[k];
+                setMetadataFilters(next);
+              }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '1em' }}>&times;</button>
+            </span>
+          ))}
+          <input placeholder="Field name" value={filterKey} onChange={e => setFilterKey(e.target.value)}
+                 style={{ width: '120px', padding: '0.25rem 0.5rem', fontSize: '0.85em' }} />
+          <input placeholder="Value" value={filterValue} onChange={e => setFilterValue(e.target.value)}
+                 style={{ width: '120px', padding: '0.25rem 0.5rem', fontSize: '0.85em' }} />
+          <button type="button" className="btn btn-secondary" onClick={() => {
+            if (filterKey.trim() && filterValue.trim()) {
+              setMetadataFilters({ ...metadataFilters, [filterKey.trim()]: filterValue.trim() });
+              setFilterKey('');
+              setFilterValue('');
+            }
+          }} style={{ fontSize: '0.85em', padding: '0.25rem 0.5rem' }}>Add</button>
+        </div>
+      )}
 
       {/* Save modal (inline) */}
       {showSaveModal && (

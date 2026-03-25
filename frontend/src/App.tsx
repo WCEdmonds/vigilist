@@ -64,13 +64,13 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     }
   };
 
-  const handleSearch = async (query: string) => {
+  const handleSearch = async (query: string, metadata?: Record<string, string>) => {
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
     try {
-      const res = await searchDocuments(query, 1, 50, 'relevance', production.id);
+      const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, metadata);
       setSearchResults(res.results);
       setSearchTotal(res.total);
     } finally {

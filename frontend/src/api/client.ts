@@ -71,10 +71,21 @@ export const streamUrl = (docId: string) =>
 
 // ── Search ──
 
-export function searchDocuments(q: string, page = 1, perPage = 50, sort = 'relevance', productionId?: number, tagIds?: number[]) {
+export async function searchDocuments(
+  q: string,
+  page = 1,
+  perPage = 50,
+  sort = 'relevance',
+  productionId?: number,
+  tagIds?: number[],
+  metadata?: Record<string, string>,
+): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagIds?.length) params.set('tag_ids', tagIds.join(','));
+  if (metadata && Object.keys(metadata).length > 0) {
+    params.set('metadata', JSON.stringify(metadata));
+  }
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
