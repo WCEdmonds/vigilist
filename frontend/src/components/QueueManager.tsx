@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
   listQueues, createQueue, deleteQueue, createBatches, assignBatch, getProductionAccess,
+  createQCSample,
 } from '../api/client';
 import type { ReviewQueue, ReviewBatch, ProductionAccessEntry } from '../types';
+import QCReview from './QCReview';
 
 interface Props {
   productionId: number;
@@ -42,6 +44,14 @@ export default function QueueManager({ productionId, onClose }: Props) {
 
   // Delete confirmation
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+
+  // QC state
+  const [qcQueueId, setQcQueueId] = useState<number | null>(null);
+  const [qcSamplePercent, setQcSamplePercent] = useState(10);
+  const [showQcConfig, setShowQcConfig] = useState(false);
+  const [qcSampleIds, setQcSampleIds] = useState<number[] | null>(null);
+  const [qcLoading, setQcLoading] = useState(false);
+  const [qcError, setQcError] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -150,6 +160,33 @@ export default function QueueManager({ productionId, onClose }: Props) {
     }
   };
 
+  const handleOpenQcConfig = (queueId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setQcQueueId(queueId);
+    setQcSamplePercent(10);
+    setQcError('');
+    setShowQcConfig(true);
+  };
+
+  const handleGenerateSample = async () => {
+    if (!qcQueueId || qcLoading) return;
+    setQcLoading(true);
+    setQcError('');
+    try {
+      const ids = await createQCSample(qcQueueId, qcSamplePercent);
+      if (ids.length === 0) {
+        setQcError('No reviewed documents available for QC');
+        return;
+      }
+      setShowQcConfig(false);
+      setQcSampleIds(ids);
+    } catch (e: unknown) {
+      setQcError(e instanceof Error ? e.message : 'Failed to generate QC sample');
+    } finally {
+      setQcLoading(false);
+    }
+  };
+
   const statusBadgeClass = (status: string) => {
     switch (status) {
       case 'complete': return 'badge badge-green';
@@ -160,6 +197,7 @@ export default function QueueManager({ productionId, onClose }: Props) {
   };
 
   return (
+    <>
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-content"
@@ -307,6 +345,12 @@ export default function QueueManager({ productionId, onClose }: Props) {
                     >
                       Create Batches
                     </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={e => handleOpenQcConfig(queue.id, e)}
+                    >
+                      Start QC
+                    </button>
                     {confirmDelete === queue.id ? (
                       <>
                         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger-700)' }}>Sure?</span>
@@ -431,6 +475,63 @@ export default function QueueManager({ productionId, onClose }: Props) {
           })}
         </div>
       </div>
+
+      {/* QC config dialog */}
+      {showQcConfig && (
+        <div className="modal-overlay" onClick={() => { setShowQcConfig(false); setQcError(''); }}>
+          <div
+            className="modal-content"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: 360, width: '90vw' }}
+          >
+            <div className="modal-header">
+              <h3 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-base)' }}>Configure QC Sample</h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setShowQcConfig(false); setQcError(''); }}>Cancel</button>
+            </div>
+            <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+              <div>
+                <label style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-600)', display: 'block', marginBottom: 4 }}>
+                  Sample Percentage
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={qcSamplePercent}
+                    onChange={e => setQcSamplePercent(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 10)))}
+                    style={{ width: 80 }}
+                  />
+                  <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)' }}>% of reviewed documents</span>
+                </div>
+              </div>
+              {qcError && (
+                <div style={{ color: 'var(--color-danger-700)', fontSize: 'var(--text-xs)', background: 'var(--color-danger-50)', padding: 'var(--space-2)', borderRadius: 'var(--radius-md)' }}>
+                  {qcError}
+                </div>
+              )}
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={qcLoading}
+                onClick={handleGenerateSample}
+              >
+                {qcLoading ? 'Generating...' : 'Generate Sample'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+
+    {/* QC Review overlay */}
+    {qcSampleIds && qcQueueId !== null && (
+      <QCReview
+        sampleIds={qcSampleIds}
+        productionId={productionId}
+        onClose={() => { setQcSampleIds(null); setQcQueueId(null); }}
+      />
+    )}
+  </>
   );
 }
