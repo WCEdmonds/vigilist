@@ -205,8 +205,11 @@ export async function getAuditLogs(
 
 // ── Ingest ──
 
-export const startIngest = (productionName: string, description: string, totalFiles: number) =>
-  request<IngestJob>('/api/ingest', json({ production_name: productionName, description, total_files: totalFiles }));
+export const createProductionForIngest = (productionName: string, description: string) =>
+  request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description }));
+
+export const startProcessing = (productionId: number, totalFiles: number) =>
+  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles }));
 
 export const getIngestStatus = (jobId: string) =>
   request<IngestJob>(`/api/ingest/${jobId}/status`);

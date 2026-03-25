@@ -90,6 +90,11 @@ async def sync_user(user: User = Depends(get_current_user), db: AsyncSession = D
 
     await log_action(db, user, "user_login", "user", user.id)
     await db.commit()
+
+    # Sync Firebase custom claims with current production access
+    from app.services.claims import sync_user_claims
+    await sync_user_claims(db, user)
+
     return user
 
 

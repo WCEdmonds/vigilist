@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ref, uploadBytes } from 'firebase/storage';
-import { firebaseStorage } from '../firebase';
-import { startIngest, getIngestStatus } from '../api/client';
+import { firebaseStorage, auth } from '../firebase';
+import { createProductionForIngest, startProcessing, getIngestStatus } from '../api/client';
 import type { IngestJob } from '../types';
 
 interface Props {
@@ -56,11 +56,17 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     setUploadProgress({ uploaded: 0, total: files.length });
 
     try {
-      // Use a temporary production ID based on name for the storage path
-      // The real production ID will be assigned by the backend
-      const tempId = name.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      // Phase 1: Create production in backend to get real production_id
+      // This also syncs Firebase custom claims so we can write to Storage
+      const { production_id } = await createProductionForIngest(name.trim(), description.trim());
 
-      // Upload files in batches of 10
+      // Refresh the Firebase token to pick up the new custom claims
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        await currentUser.getIdToken(true); // force refresh
+      }
+
+      // Phase 2: Upload files to Firebase Storage under the real production path
       const batchSize = 10;
       let uploaded = 0;
 
@@ -68,11 +74,9 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         const batch = files.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (file) => {
-            // Get the relative path within the selected folder
             const parts = file.webkitRelativePath.split('/');
-            // Remove the root folder name, keep the rest
             const relativePath = parts.slice(1).join('/');
-            const storagePath = `productions/${tempId}/raw/${relativePath}`;
+            const storagePath = `productions/${production_id}/raw/${relativePath}`;
             const storageRef = ref(firebaseStorage, storagePath);
             await uploadBytes(storageRef, file);
           })
@@ -81,9 +85,9 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         setUploadProgress({ uploaded, total: files.length });
       }
 
-      // Start backend processing
+      // Phase 3: Start backend processing
       setStage('processing');
-      const ingestJob = await startIngest(name.trim(), description.trim(), files.length);
+      const ingestJob = await startProcessing(production_id, files.length);
       setJob(ingestJob);
 
       // Poll for status
