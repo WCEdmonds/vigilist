@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  listQueues, createQueue, deleteQueue, createBatches, assignBatch, getProductionAccess,
+  listQueues, createQueue, deleteQueue, createBatches, listQueueBatches, assignBatch, getProductionAccess,
   createQCSample,
 } from '../api/client';
 import type { ReviewQueue, ReviewBatch, ProductionAccessEntry } from '../types';
@@ -117,21 +117,23 @@ export default function QueueManager({ productionId, onClose }: Props) {
   };
 
   const toggleExpand = async (queueId: number) => {
-    const next = new Set(expandedQueues);
-    if (next.has(queueId)) {
-      next.delete(queueId);
-      setExpandedQueues(next);
-    } else {
-      next.add(queueId);
-      setExpandedQueues(next);
-      // Load batches if not already loaded — we use the queue's batch_count as a hint
-      if (!batchesByQueue[queueId]) {
-        try {
-          // batches are already embedded in the queue via createBatches; reload them via createBatches with size 0
-          // Actually we need to fetch them — use getMyBatches filtered, but that's per-user.
-          // The simplest path: createBatches returns batches; we store them on creation.
-          // If none were created yet, leave empty — user will create batches first.
-        } catch {}
+    setExpandedQueues(prev => {
+      const next = new Set(prev);
+      if (next.has(queueId)) {
+        next.delete(queueId);
+      } else {
+        next.add(queueId);
+      }
+      return next;
+    });
+
+    // Fetch batches if expanding and not already loaded
+    if (!expandedQueues.has(queueId)) {
+      try {
+        const batches = await listQueueBatches(productionId, queueId);
+        setBatchesByQueue(prev => ({ ...prev, [queueId]: batches }));
+      } catch {
+        // non-critical — batch list will remain empty
       }
     }
   };
