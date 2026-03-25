@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getTags, imageUrl, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getMyBatches, getTags, imageUrl, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthPage from './components/AuthPage';
 import IngestWizard from './components/IngestWizard';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
 import QueueManager from './components/QueueManager';
+import BatchReview from './components/BatchReview';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
 import { ToastContainer } from './components/Toast';
@@ -13,7 +14,7 @@ import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import UserAvatar from './components/UserAvatar';
 import { AuthProvider, useAuth } from './hooks/useAuth';
-import type { DocumentSummary, ProductionInfo, SearchResult, Tag } from './types';
+import type { DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -48,12 +49,15 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
   const [showQueueManager, setShowQueueManager] = useState(false);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
 
   const perPage = 50;
 
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(() => {});
+    getMyBatches(production.id).then(setMyBatches).catch(() => {});
   }, [production.id]);
 
   const loadDocuments = async (page = 1) => {
@@ -108,6 +112,20 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     else loadDocuments(docPage);
   };
 
+  // Batch review full-screen mode
+  if (activeBatchId) {
+    return (
+      <BatchReview
+        batchId={activeBatchId}
+        onClose={() => setActiveBatchId(null)}
+        onComplete={() => {
+          setActiveBatchId(null);
+          getMyBatches(production.id).then(setMyBatches).catch(() => {});
+        }}
+      />
+    );
+  }
+
   // Document viewer mode
   if (viewDocId) {
     return (
@@ -155,6 +173,31 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       {/* Content */}
       <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
         <SearchBar onSearch={handleSearch} initialQuery={searchQuery} />
+
+        {/* My Review Batches */}
+        {myBatches.length > 0 && (
+          <div style={{ marginBottom: 'var(--space-4)' }}>
+            <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-2)', color: 'var(--color-neutral-600)' }}>
+              My Review Batches
+            </h3>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+              {myBatches.map(b => (
+                <div
+                  key={b.id}
+                  className="card"
+                  style={{ padding: 'var(--space-3)', cursor: 'pointer', minWidth: 200 }}
+                  onClick={() => setActiveBatchId(b.id)}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{b.queue_name}</div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginTop: 'var(--space-1)' }}>
+                    {b.reviewed_count}/{b.size} reviewed
+                  </div>
+                  <progress value={b.reviewed_count} max={b.size} style={{ width: '100%', marginTop: 'var(--space-1)' }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {loading && (
           <div className="loading-center">
