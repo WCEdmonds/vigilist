@@ -28,7 +28,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
         if (firstPending) setViewDocId(firstPending.document_id);
         else if (d.length > 0) setViewDocId(d[0].document_id);
       })
-      .catch(() => {})
+      .catch(() => setNotification('Failed to load batch — please close and try again.'))
       .finally(() => setLoading(false));
   }, [batchId]);
 
@@ -57,15 +57,13 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
     if (!viewDocId || actionLoading) return;
     setActionLoading(true);
     try {
-      const result = await updateBatchDocument(batchId, viewDocId, status) as BatchDocument & { next_batch_id?: number | null };
+      const result = await updateBatchDocument(batchId, viewDocId, status);
       const updatedDocs = docs.map(d =>
         d.document_id === viewDocId ? { ...d, reviewed: status } : d
       );
       setDocs(updatedDocs);
 
       if (result.next_batch_id) {
-        setNotification('Next batch assigned!');
-        setTimeout(() => setNotification(null), 3000);
         onComplete();
         return;
       }
@@ -78,7 +76,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
 
       advanceToNext(viewDocId, updatedDocs);
     } catch {
-      // ignore
+      setNotification('Failed to save — please try again.');
     } finally {
       setActionLoading(false);
     }
