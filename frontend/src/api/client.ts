@@ -1,8 +1,8 @@
 import { auth } from '../firebase';
 import type {
-  DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments,
-  PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
-  SavedSearch, SearchResponse, Tag,
+  BatchDocument, DashboardStats, DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry,
+  PaginatedAuditLogs, PaginatedDocuments, PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
+  QCContext, QCStats, ReviewBatch, ReviewQueue, SavedSearch, SearchResponse, Tag,
 } from '../types';
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -210,3 +210,69 @@ export const startIngest = (productionName: string, description: string, totalFi
 
 export const getIngestStatus = (jobId: string) =>
   request<IngestJob>(`/api/ingest/${jobId}/status`);
+
+// ── Review Queues ──
+
+export async function listQueues(productionId: number): Promise<ReviewQueue[]> {
+  return request<ReviewQueue[]>(`/api/productions/${productionId}/queues`);
+}
+
+export async function createQueue(productionId: number, name: string, description = '', query = '', filters: Record<string, unknown> = {}): Promise<ReviewQueue> {
+  return request<ReviewQueue>(`/api/productions/${productionId}/queues`, json({ name, description, query, filters }));
+}
+
+export async function deleteQueue(productionId: number, queueId: number): Promise<void> {
+  await request(`/api/productions/${productionId}/queues/${queueId}`, { method: 'DELETE' });
+}
+
+export async function createBatches(productionId: number, queueId: number, batchSize = 50, reviewerId?: string): Promise<ReviewBatch[]> {
+  return request<ReviewBatch[]>(`/api/productions/${productionId}/queues/${queueId}/batches`, json({ batch_size: batchSize, reviewer_id: reviewerId }));
+}
+
+// ── Batches ──
+
+export async function getMyBatches(productionId?: number): Promise<ReviewBatch[]> {
+  const params = new URLSearchParams();
+  if (productionId) params.set('production_id', String(productionId));
+  return request<ReviewBatch[]>(`/api/batches/my?${params}`);
+}
+
+export async function getBatch(batchId: number): Promise<ReviewBatch> {
+  return request<ReviewBatch>(`/api/batches/${batchId}`);
+}
+
+export async function assignBatch(batchId: number, reviewerId: string): Promise<ReviewBatch> {
+  return request<ReviewBatch>(`/api/batches/${batchId}/assign`, json({ reviewer_id: reviewerId }));
+}
+
+export async function listBatchDocuments(batchId: number): Promise<BatchDocument[]> {
+  return request<BatchDocument[]>(`/api/batches/${batchId}/documents`);
+}
+
+export async function updateBatchDocument(batchId: number, docId: string, reviewed: string): Promise<BatchDocument & { next_batch_id: number | null }> {
+  return request(`/api/batches/${batchId}/documents/${docId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewed }) });
+}
+
+// ── Dashboard ──
+
+export async function getDashboard(productionId: number): Promise<DashboardStats> {
+  return request<DashboardStats>(`/api/productions/${productionId}/dashboard`);
+}
+
+export async function getQCStats(productionId: number): Promise<QCStats> {
+  return request<QCStats>(`/api/productions/${productionId}/dashboard/qc`);
+}
+
+// ── QC ──
+
+export async function createQCSample(queueId: number, samplePercent = 10, reviewerId?: string): Promise<number[]> {
+  return request<number[]>('/api/qc/sample', json({ queue_id: queueId, sample_percent: samplePercent, reviewer_id: reviewerId }));
+}
+
+export async function getQCContext(bdId: number): Promise<QCContext> {
+  return request<QCContext>(`/api/qc/batch-document/${bdId}`);
+}
+
+export async function recordQCDecision(bdId: number, decision: string, reason?: string, newTagIds?: number[]): Promise<unknown> {
+  return request(`/api/qc/batch-document/${bdId}/decide`, json({ decision, reason, new_tag_ids: newTagIds }));
+}
