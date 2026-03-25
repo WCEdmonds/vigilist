@@ -183,3 +183,19 @@ class IngestJob(Base):
 
     production = relationship("Production")
     user = relationship("User")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(128), ForeignKey("users.id"), nullable=False)
+    user_email = Column(String(255), nullable=False)
+    action = Column(String(50), nullable=False)
+    resource_type = Column(String(50), nullable=False)
+    resource_id = Column(String(255), nullable=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=True)
+    details = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    user = relationship("User", foreign_keys=[user_id])
