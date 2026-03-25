@@ -637,6 +637,47 @@
   opacity: 1;
 }
 
+/* ── Auth page extras ── */
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+  color: var(--color-neutral-400);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-neutral-200);
+}
+
+.auth-toggle {
+  margin-top: var(--space-5);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--color-neutral-500);
+}
+
+.auth-toggle-link {
+  background: none;
+  border: none;
+  color: var(--color-brand-600);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+}
+.auth-toggle-link:hover {
+  color: var(--color-brand-700);
+  text-decoration: underline;
+}
+
 /* ── View toggle ── */
 
 .view-toggle {
