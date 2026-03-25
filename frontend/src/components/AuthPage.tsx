@@ -57,7 +57,7 @@ export default function AuthPage() {
   return (
     <div className="login-page">
       <form onSubmit={handleSubmit} className="login-card">
-        <h1>Descubre</h1>
+        <h1>Vigilist</h1>
         <p className="subtitle">Document Review Platform</p>
 
         {error && <div className="error">{error}</div>}

@@ -10,7 +10,7 @@ export default function WelcomePage({ onIngest }: Props) {
   return (
     <div className="welcome-page">
       <div className="welcome-header">
-        <span className="welcome-logo">Descubre</span>
+        <span className="welcome-logo">Vigilist</span>
         <div className="welcome-user">
           <span>{user?.displayName || user?.email}</span>
           <button className="btn btn-ghost btn-sm" style={{ color: 'var(--color-primary-200)' }} onClick={logout}>Sign out</button>
@@ -18,7 +18,7 @@ export default function WelcomePage({ onIngest }: Props) {
       </div>
 
       <div className="welcome-content">
-        <h1 className="welcome-title">Welcome to Descubre</h1>
+        <h1 className="welcome-title">Welcome to Vigilist</h1>
         <p className="welcome-subtitle">
           Your document review platform for e-discovery productions.
         </p>
