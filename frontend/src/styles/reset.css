@@ -18,7 +18,44 @@ body {
   font-size: var(--text-base);
   line-height: var(--leading-normal);
   color: var(--color-neutral-800);
-  background: var(--color-neutral-50);
+  background: linear-gradient(175deg, var(--color-parchment-light) 0%, var(--color-parchment-mid) 50%, var(--color-parchment-warm) 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* Ruled-line texture */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 23px,
+    rgba(139, 115, 85, 0.035) 23px,
+    rgba(139, 115, 85, 0.035) 24px
+  );
+}
+
+/* Red margin line */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 72px;
+  width: 1px;
+  background: var(--color-margin);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Ensure all content sits above the texture */
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 img, svg {
@@ -27,11 +64,12 @@ img, svg {
 }
 
 a {
-  color: var(--color-brand-600);
+  color: var(--color-ink);
   text-decoration: none;
 }
 a:hover {
-  color: var(--color-brand-700);
+  color: var(--color-ink-light);
+  text-decoration: underline;
 }
 
 table {
@@ -40,11 +78,32 @@ table {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-brand-500);
+  outline: 2px solid rgba(44, 62, 107, 0.5);
   outline-offset: 2px;
 }
 
 ::selection {
-  background: var(--color-brand-100);
-  color: var(--color-primary-900);
+  background: rgba(44, 62, 107, 0.12);
+  color: var(--color-ink);
+}
+
+/* Webkit scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(44, 62, 107, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(44, 62, 107, 0.25);
+}
+
+/* Progress bar accent */
+progress {
+  accent-color: var(--color-ink);
 }
