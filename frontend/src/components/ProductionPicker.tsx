@@ -13,7 +13,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest }: Pr
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
       <div className="app-header">
-        <span className="logo">Descubre</span>
+        <span className="logo">Vigilist</span>
         <div className="user-menu">
           <button className="btn-header" onClick={onIngest}>+ Ingest</button>
           <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>

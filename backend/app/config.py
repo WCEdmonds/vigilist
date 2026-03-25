@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://descubre:descubre_dev@localhost:5432/descubre"
+    database_url: str = "postgresql+asyncpg://vigilist:vigilist_dev@localhost:5432/vigilist"
     # Firebase
     firebase_project_id: str = ""
     firebase_storage_bucket: str = ""
@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Anthropic API key for AI features
     anthropic_api_key: str = ""
 
-    model_config = {"env_prefix": "DESCUBRE_"}
+    model_config = {"env_prefix": "VIGILIST_"}
 
 
 settings = Settings()

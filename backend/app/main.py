@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import ai, auth, documents, export, ingest, notes, productions, saved_searches, search, tags
 
-app = FastAPI(title="Descubre", version="0.1.0")
+app = FastAPI(title="Vigilist", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,

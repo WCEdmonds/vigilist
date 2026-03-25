@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Descubre** is a lightweight e-discovery document review platform for a small legal team (2-5 users). It replaces a full Relativity license for reviewing litigation document productions in active Maryland litigation. The full requirements specification is in `EDISCOVERY_PLATFORM_REQUIREMENTS.md`.
+**Vigilist** is a lightweight e-discovery document review platform for a small legal team (2-5 users). It replaces a full Relativity license for reviewing litigation document productions in active Maryland litigation. The full requirements specification is in `EDISCOVERY_PLATFORM_REQUIREMENTS.md`.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ python ingest_cli.py "SCHLEGEL_PROD001" "C:\path\to\production\root"
 cd frontend && npx tsc --noEmit
 ```
 
-Default dev credentials: `admin` / `descubre2026` (set via `DESCUBRE_AUTH_USERNAME` / `DESCUBRE_AUTH_PASSWORD` env vars).
+Default dev credentials: `admin` / `vigilist2026` (set via `VIGILIST_AUTH_USERNAME` / `VIGILIST_AUTH_PASSWORD` env vars).
 
 ## Production Data Format
 
@@ -67,13 +67,13 @@ Key parsing details:
 - DAT metadata fields are minimal now (5 columns) but overlay files may add fields later — JSONB column handles this
 - TIFFs are pre-converted to JPEG on ingest (Pillow) and stored in `storage/converted/`
 - The `TSVector` custom type in `models.py` must also be defined in migration files (Alembic doesn't auto-resolve it)
-- All backend config uses `DESCUBRE_` env prefix via pydantic-settings
+- All backend config uses `VIGILIST_` env prefix via pydantic-settings
 
 ## Build Phases
 
 1. **Phase 1 (done):** Ingest pipeline + document viewer + full-text search + shared auth
-2. **Phase 2:** Search + core review workflow (metadata filters, tagging, notes, shortcuts, media streaming)
-3. **Phase 3:** User management + audit (individual accounts, RBAC, audit trail, SSO)
+2. **Phase 2 (done):** Search + core review workflow (tagging, notes, shortcuts, bulk tagging, media streaming). Remaining: metadata field filters in search
+3. **Phase 3 (partial):** User management + audit. Done: Firebase Auth (email/password + Google OAuth). Remaining: RBAC, audit trail, audit viewer/export
 4. **Phase 4:** Review management + QC (multi-matter, queues, batching, dashboards, QC sampling)
 5. **Phase 5:** Coding layouts + annotations + redactions
 6. **Phase 6:** Document intelligence (families, email threading, near-duplicates, propagation coding)
