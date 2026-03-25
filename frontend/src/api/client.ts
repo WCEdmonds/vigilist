@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry, PaginatedDocuments,
+  DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments,
   PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
   SavedSearch, SearchResponse, Tag,
 } from '../types';
@@ -181,6 +181,26 @@ export const inviteUser = (productionId: number, email: string) =>
 
 export const revokeAccess = (productionId: number, userId: string) =>
   request(`/api/productions/${productionId}/access/${userId}`, { method: 'DELETE' });
+
+// ── Audit Log ──
+
+export async function getAuditLogs(
+  page = 1,
+  perPage = 50,
+  productionId?: number,
+  userId?: string,
+  action?: string,
+  dateFrom?: string,
+  dateTo?: string,
+): Promise<PaginatedAuditLogs> {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (productionId) params.set('production_id', String(productionId));
+  if (userId) params.set('user_id', userId);
+  if (action) params.set('action', action);
+  if (dateFrom) params.set('date_from', dateFrom);
+  if (dateTo) params.set('date_to', dateTo);
+  return request<PaginatedAuditLogs>(`/api/audit?${params}`);
+}
 
 // ── Ingest ──
 
