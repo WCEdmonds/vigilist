@@ -113,6 +113,7 @@ class DocumentSummary(BaseModel):
     processing_status: str = "complete"
     tags: list[TagOut] = []
     note_count: int = 0
+    annotation_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -132,6 +133,7 @@ class DocumentDetail(BaseModel):
     image_paths: list[str]
     tags: list[DocumentTagOut] = []
     note_count: int = 0
+    annotation_count: int = 0
 
     model_config = {"from_attributes": True}
 
