@@ -84,3 +84,28 @@ export interface PaginatedDocuments {
   page: number;
   per_page: number;
 }
+
+export interface ProductionInfo {
+  id: number;
+  name: string;
+  description: string | null;
+  owner_id: string | null;
+  is_owner: boolean;
+  created_at: string;
+}
+
+export interface ProductionAccessEntry {
+  id: number;
+  user_id: string;
+  user_email: string;
+  user_display_name: string | null;
+  granted_by: string;
+  granted_at: string;
+}
+
+export interface PendingInviteEntry {
+  id: number;
+  email: string;
+  invited_by: string;
+  created_at: string;
+}
