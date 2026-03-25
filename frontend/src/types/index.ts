@@ -109,3 +109,15 @@ export interface PendingInviteEntry {
   invited_by: string;
   created_at: string;
 }
+
+export interface IngestJob {
+  id: string;
+  production_id: number;
+  production_name: string;
+  status: 'pending' | 'processing' | 'complete' | 'failed';
+  total_files: number;
+  processed_files: number;
+  errors: string[];
+  created_at: string;
+  completed_at: string | null;
+}
