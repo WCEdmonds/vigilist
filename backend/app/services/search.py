@@ -66,37 +66,52 @@ async def search_documents(
     per_page: int = 50,
     sort: str = "relevance",
     accessible_production_ids: list[int] | None = None,
+    metadata_filters: dict[str, str] | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
-    tsquery_str = build_tsquery(query)
-    if not tsquery_str:
+    tsquery_str = build_tsquery(query) if query else ""
+    has_text_query = bool(tsquery_str)
+
+    if not has_text_query and not metadata_filters:
         return [], 0
 
-    tsquery = func.to_tsquery("english", literal_column(f"'{tsquery_str}'"))
-
-    # Base filter
-    where = [Document.text_search_vector.op("@@")(tsquery)]
+    conditions = []
     if accessible_production_ids is not None:
-        where.append(Document.production_id.in_(accessible_production_ids))
-    if production_id:
-        where.append(Document.production_id == production_id)
+        conditions.append(Document.production_id.in_(accessible_production_ids))
+    if production_id is not None:
+        conditions.append(Document.production_id == production_id)
+    if has_text_query:
+        tsquery = func.to_tsquery("english", literal_column(f"'{tsquery_str}'"))
+        conditions.append(Document.text_search_vector.op("@@")(tsquery))
+    if metadata_filters:
+        for key, value in metadata_filters.items():
+            if not re.match(r'^[a-zA-Z0-9_ ]+$', key):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail=f"Invalid metadata key: {key}")
+            conditions.append(Document.metadata_[key].astext.ilike(f"%{value}%"))
+
+    if has_text_query:
+        rank = func.ts_rank(Document.text_search_vector, tsquery).label("rank")
+        headline = func.ts_headline(
+            "english",
+            func.coalesce(Document.text_content, literal_column("''")),
+            tsquery,
+            literal_column("'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20'"),
+        ).label("snippet")
+    else:
+        rank = literal_column("0").label("rank")
+        headline = func.substr(
+            func.coalesce(Document.text_content, literal_column("''")), 1, 200
+        ).label("snippet")
 
     # Count
-    count_q = select(func.count(Document.id)).where(*where)
+    count_q = select(func.count(Document.id)).where(*conditions)
     total = (await db.execute(count_q)).scalar() or 0
 
     # Results with snippets and rank
-    rank = func.ts_rank(Document.text_search_vector, tsquery).label("rank")
-    headline = func.ts_headline(
-        "english",
-        func.coalesce(Document.text_content, ""),
-        tsquery,
-        "StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=20",
-    ).label("snippet")
-
     q = (
         select(Document, rank, headline)
-        .where(*where)
+        .where(*conditions)
     )
 
     if sort == "bates":
