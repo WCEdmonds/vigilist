@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import ai, audit, auth, batches, documents, export, ingest, notes, productions, queues, saved_searches, search, tags
+from app.routers import ai, audit, auth, batches, dashboard, documents, export, ingest, notes, productions, queues, saved_searches, search, tags
 
 app = FastAPI(title="Vigilist", version="0.1.0")
 
@@ -27,6 +27,7 @@ app.include_router(audit.router)
 app.include_router(productions.router)
 app.include_router(queues.router)
 app.include_router(batches.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/api/health")
