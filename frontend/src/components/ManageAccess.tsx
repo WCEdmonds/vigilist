@@ -11,6 +11,7 @@ export default function ManageAccess({ productionId, onClose }: Props) {
   const [access, setAccess] = useState<ProductionAccessEntry[]>([]);
   const [invites, setInvites] = useState<PendingInviteEntry[]>([]);
   const [email, setEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('reviewer');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,7 +33,7 @@ export default function ManageAccess({ productionId, onClose }: Props) {
     setMessage('');
     setLoading(true);
     try {
-      const res = await inviteUser(productionId, email.trim());
+      const res = await inviteUser(productionId, email.trim(), inviteRole);
       setMessage(res.status === 'granted' ? `Access granted to ${res.email}` : `Invitation sent to ${res.email}`);
       setEmail('');
       await load();
@@ -72,6 +73,16 @@ export default function ManageAccess({ productionId, onClose }: Props) {
               onKeyDown={e => e.key === 'Enter' && handleInvite()}
               style={{ flex: 1 }}
             />
+            <select
+              className="input input-sm"
+              value={inviteRole}
+              onChange={e => setInviteRole(e.target.value)}
+            >
+              <option value="reviewer">Reviewer</option>
+              <option value="readonly">Read Only</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
             <button className="btn btn-primary btn-sm" onClick={handleInvite} disabled={loading}>
               {loading ? 'Sending...' : 'Invite'}
             </button>
@@ -93,6 +104,7 @@ export default function ManageAccess({ productionId, onClose }: Props) {
                 <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)' }}>{a.user_display_name || a.user_email}</div>
                 {a.user_display_name && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)' }}>{a.user_email}</div>}
               </div>
+              <span className="badge badge-blue" style={{ textTransform: 'capitalize' }}>{a.role}</span>
               <button className="btn btn-ghost btn-xs" style={{ color: 'var(--color-danger-600)' }} onClick={() => handleRevoke(a.user_id)}>
                 Remove
               </button>
