@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import PasswordReset from './PasswordReset';
 
 type Mode = 'signin' | 'register';
 
 export default function AuthPage() {
   const { login, register, loginWithGoogle } = useAuth();
   const [mode, setMode] = useState<Mode>('signin');
+  const [showReset, setShowReset] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -54,6 +56,10 @@ export default function AuthPage() {
     }
   };
 
+  if (showReset) {
+    return <PasswordReset onBack={() => setShowReset(false)} />;
+  }
+
   return (
     <div className="login-page">
       <form onSubmit={handleSubmit} className="login-card">
@@ -98,6 +104,14 @@ export default function AuthPage() {
             onChange={e => setPassword(e.target.value)}
           />
         </div>
+
+        {mode === 'signin' && (
+          <div style={{ textAlign: 'right', marginTop: '-4px', marginBottom: '8px' }}>
+            <button type="button" onClick={() => setShowReset(true)} className="link-btn">
+              Forgot password?
+            </button>
+          </div>
+        )}
 
         <button
           type="submit"
