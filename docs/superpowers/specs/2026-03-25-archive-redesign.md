@@ -203,14 +203,66 @@ Keep existing `dropdown-in` animation, adjust timing to 180ms.
 
 Keep existing, adjust colors to Archive palette.
 
+## Token Migration Strategy
+
+**The existing token names (`--color-neutral-*`, `--color-primary-*`, `--color-brand-*`) are redefined in-place, not renamed.** This is critical because ~200+ inline style references across 29 component files use these tokens. Introducing new names would force a massive component-by-component migration that violates the CSS-only scope.
+
+The approach:
+- `--color-neutral-*` values shift from cool grays to warm parchment-tinted grays
+- `--color-primary-*` values shift from navy-slate to the ink-blue scale
+- `--color-brand-*` values shift from gold/amber to ink-blue (the brand IS the ink)
+- New semantic aliases (`--color-ink`, `--color-parchment-light`, etc.) are added as convenient shorthand but are not required — existing token references just work
+
+### Shadow Scale
+
+All shadows shift from near-black (`rgba(13,17,23,...)`) to ink-blue tinted (`rgba(44,62,107,...)`):
+
+- `--shadow-xs`: `0 1px 2px rgba(44,62,107,0.04)`
+- `--shadow-sm`: `0 1px 3px rgba(44,62,107,0.06), 0 1px 2px rgba(44,62,107,0.03)`
+- `--shadow-md`: `0 4px 8px -1px rgba(44,62,107,0.07), 0 2px 4px -2px rgba(44,62,107,0.04)`
+- `--shadow-lg`: `0 12px 24px -4px rgba(44,62,107,0.1), 0 4px 8px -4px rgba(44,62,107,0.05)`
+- `--shadow-xl`: `0 24px 48px -8px rgba(44,62,107,0.14), 0 8px 16px -6px rgba(44,62,107,0.06)`
+- `--shadow-ring`: `0 0 0 3px rgba(44,62,107,0.12)` (was gold)
+
+### Focus & Selection
+
+- `:focus-visible` outline: `2px solid rgba(44,62,107,0.5)` (was gold)
+- `::selection`: `background:rgba(44,62,107,0.12); color:#2c3e6b` (ink-tinted)
+
+### Small Components Not Previously Listed
+
+- **Spinner**: `border-top-color` changes from gold to `var(--color-primary-600)` (ink-blue) — automatic via token remap
+- **`mark` (search highlight)**: `background:rgba(44,62,107,0.1); color:#2c3e6b` — ink-tinted highlight
+- **`.ai-indicator`**: Keeps a distinct accent to differentiate AI content. Use `--color-warning-ink` (`#e65100`) background at 8% opacity with orange-tinted text — stands out from the dominant ink-blue
+- **`.kbd`**: Automatic via neutral token remap — no explicit change needed
+- **`progress` elements**: Accent color should follow ink-blue
+
+## Heavy-Inline-Style Components
+
+These components have 15+ inline style references to CSS tokens. Because the old tokens are redefined in-place, they theme passively — no file edits required unless specific overrides look wrong after the remap:
+
+| Component | Inline styles | Notes |
+|---|---|---|
+| `Dashboard.tsx` | ~56 | Stat cards, progress bars, bar charts — all use `--color-primary-*` and `--color-neutral-*` tokens |
+| `QCReview.tsx` | ~48 | Full-screen overlay with its own header |
+| `QueueManager.tsx` | ~47 | Tables, status badges, progress indicators |
+| `IngestWizard.tsx` | ~35 | Step indicators, progress bars |
+| `BatchReview.tsx` | ~30 | Dark header bar, side panel, progress dots |
+| `AnnotationPopover.tsx` | ~26 | Uses non-standard tokens with hardcoded fallbacks — works independently |
+| `ManageAccess.tsx` | ~16 | User management cards |
+
+### Full-Screen Overlay Headers (BatchReview, QCReview)
+
+These components use `var(--color-primary-900)` for a dark contrasting header bar. After the remap, `--color-primary-900` will be a deep ink-blue (`#102a43` → keeping it dark). **These headers intentionally stay dark** — they represent a focused review mode distinct from the main list view. The ink-blue just replaces the navy.
+
 ## Files Changed
 
 1. **`index.html`** — Replace Google Fonts link (Cormorant Garamond, Libre Franklin, Fira Code)
-2. **`src/styles/variables.css`** — New color tokens, font stacks, shadow values
-3. **`src/styles/reset.css`** — Body background, selection color
-4. **`src/styles/layout.css`** — Header, login page, welcome page, viewer layout, table, grid, tabs, etc.
-5. **`src/styles/components.css`** — Buttons, badges, inputs, cards, modals, toasts, floating bar, etc.
-6. **Inline style fixes in components** — Where inline styles hardcode colors/fonts that conflict with the new theme (e.g., `background: 'var(--color-neutral-50)'` references in App.tsx, DocumentViewer.tsx, etc.)
+2. **`src/styles/variables.css`** — Redefine all color tokens in-place to Archive palette, add semantic aliases, update font stacks and shadow values
+3. **`src/styles/reset.css`** — Body background gradient, `::selection`, `:focus-visible`
+4. **`src/styles/layout.css`** — Header, login page, welcome page, viewer layout, table hover interactions, grid, tabs, background texture pseudo-elements
+5. **`src/styles/components.css`** — Buttons, badges, inputs, cards, modals, toasts, floating bar, spinner, mark, ai-indicator, etc.
+6. **Inline style fixes** — Only where hardcoded hex values or removed tokens cause visual breakage. Expected to be minimal given in-place token redefinition.
 
 ## Out of Scope
 
