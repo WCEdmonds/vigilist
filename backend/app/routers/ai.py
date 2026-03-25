@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Document
+from app.models import Document, User
 from app.routers.auth import get_current_user
 from app.services.ai import extract_similar_terms, generate_summary, nl_to_search_query
 from app.services.search import search_documents
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 async def summarize_document(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     """Generate or retrieve an AI summary for a document."""
     doc = await db.get(Document, doc_id)
@@ -52,7 +52,7 @@ async def summarize_document(
 async def natural_language_search(
     body: dict,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     """Convert a natural language query to structured search and execute it."""
     nl_query = body.get("query", "").strip()
@@ -77,7 +77,7 @@ async def natural_language_search(
 async def find_similar(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     """Find documents similar to the given document."""
     doc = await db.get(Document, doc_id)

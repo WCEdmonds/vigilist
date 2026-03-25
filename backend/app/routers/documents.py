@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import Document, DocumentTag, Note
+from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut
 
@@ -23,7 +23,7 @@ async def list_documents(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     query = select(Document).options(
         selectinload(Document.tags).selectinload(DocumentTag.tag)
@@ -84,7 +84,7 @@ async def get_by_bates(
     bates: str,
     production_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     query = (
         select(Document)
@@ -104,7 +104,7 @@ async def get_by_bates(
 async def get_document(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     result = await db.execute(
         select(Document)
@@ -122,7 +122,7 @@ async def get_image(
     doc_id: UUID,
     page_num: int,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     doc = await db.get(Document, doc_id)
     if not doc:
@@ -143,7 +143,7 @@ async def get_image(
 async def get_native(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     doc = await db.get(Document, doc_id)
     if not doc:
@@ -189,7 +189,7 @@ async def stream_native(
     doc_id: UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     doc = await db.get(Document, doc_id)
     if not doc:
@@ -260,7 +260,7 @@ async def stream_native(
 async def get_text(
     doc_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     doc = await db.get(Document, doc_id)
     if not doc:
@@ -273,7 +273,7 @@ async def get_nav(
     doc_id: UUID,
     production_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     doc = await db.get(Document, doc_id)
     if not doc:

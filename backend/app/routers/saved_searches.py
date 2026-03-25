@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import SavedSearch
+from app.models import SavedSearch, User
 from app.routers.auth import get_current_user
 from app.schemas import SavedSearchCreate, SavedSearchOut
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/saved-searches", tags=["saved_searches"])
 @router.get("", response_model=list[SavedSearchOut])
 async def list_saved_searches(
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     query = select(SavedSearch).order_by(SavedSearch.created_at.desc())
     result = await db.execute(query)
@@ -24,9 +24,9 @@ async def list_saved_searches(
 async def create_saved_search(
     body: SavedSearchCreate,
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    ss = SavedSearch(name=body.name, query=body.query, filters=body.filters, created_by=user)
+    ss = SavedSearch(name=body.name, query=body.query, filters=body.filters, created_by=user.id)
     db.add(ss)
     await db.commit()
     await db.refresh(ss)
@@ -37,7 +37,7 @@ async def create_saved_search(
 async def delete_saved_search(
     search_id: int,
     db: AsyncSession = Depends(get_db),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     ss = await db.get(SavedSearch, search_id)
     if not ss:
