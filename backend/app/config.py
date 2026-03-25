@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     firebase_storage_bucket: str = ""
     # Local file storage root for converted images (will be replaced by Firebase Storage in a later plan)
     storage_root: str = "./storage"
-    # CORS origins
-    cors_origins: list[str] = ["http://localhost:5173"]
+    # CORS origins (Firebase Hosting domain added for prod)
+    cors_origins: list[str] = ["http://localhost:5173", "https://ediscover.web.app", "https://ediscover.firebaseapp.com"]
     # Anthropic API key for AI features
     anthropic_api_key: str = ""
 
