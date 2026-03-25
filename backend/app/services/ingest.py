@@ -30,6 +30,7 @@ async def ingest_production(
     production_name: str,
     production_root: str,
     description: str = "",
+    owner_id: str | None = None,
 ) -> dict:
     """Ingest a full production from disk into the database.
 
@@ -58,7 +59,7 @@ async def ingest_production(
     logger.info(f"Parsed {len(dat_records)} documents from DAT, {len(opt_pages)} documents from OPT")
 
     # Create or get production
-    production = Production(name=production_name, description=description)
+    production = Production(name=production_name, description=description, owner_id=owner_id)
     db.add(production)
     await db.flush()
 
