@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -143,11 +143,19 @@ async def get_image(
     raw_path = doc.image_paths[page_num - 1]
     if not raw_path:
         raise HTTPException(status_code=404, detail="Image file not found")
-    # Normalize path: stored paths may have backslashes or be relative
-    path = Path(raw_path.replace("\\", "/")).resolve()
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Image file not found")
-    return FileResponse(str(path), media_type="image/jpeg")
+
+    if raw_path.startswith("productions/"):
+        from app.services.storage import get_download_bytes
+        try:
+            data = get_download_bytes(raw_path)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Image file not found in storage")
+        return Response(content=data, media_type="image/jpeg")
+    else:
+        path = Path(raw_path.replace("\\", "/")).resolve()
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Image file not found")
+        return FileResponse(str(path), media_type="image/jpeg")
 
 
 @router.get("/{doc_id}/native")
@@ -164,29 +172,51 @@ async def get_native(
         raise HTTPException(status_code=403, detail="Access denied")
     if not doc.native_path:
         raise HTTPException(status_code=404, detail="No native file for this document")
-    path = Path(doc.native_path.replace("\\", "/")).resolve()
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Native file not found on disk")
-    suffix = path.suffix.lower()
-    media_types = {
-        ".pdf": "application/pdf",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".xls": "application/vnd.ms-excel",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".doc": "application/msword",
-        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ".msg": "application/vnd.ms-outlook",
-        ".eml": "message/rfc822",
-        ".txt": "text/plain",
-        ".csv": "text/csv",
-        ".html": "text/html",
-        ".htm": "text/html",
-        ".mp4": "video/mp4",
-        ".mov": "video/quicktime",
-        ".wav": "audio/wav",
-    }
-    media_type = media_types.get(suffix, "application/octet-stream")
-    return FileResponse(str(path), media_type=media_type, filename=path.name)
+
+    if doc.native_path.startswith("productions/"):
+        from app.services.storage import get_download_bytes
+        suffix = doc.native_path.rsplit(".", 1)[-1].lower() if "." in doc.native_path else ""
+        media_types = {
+            "pdf": "application/pdf", "mp4": "video/mp4", "mov": "video/quicktime",
+            "wav": "audio/wav", "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "txt": "text/plain",
+        }
+        media_type = media_types.get(suffix, "application/octet-stream")
+        filename = doc.native_path.rsplit("/", 1)[-1]
+        try:
+            data = get_download_bytes(doc.native_path)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Native file not found in storage")
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:
+        path = Path(doc.native_path.replace("\\", "/")).resolve()
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Native file not found on disk")
+        suffix = path.suffix.lower()
+        media_types = {
+            ".pdf": "application/pdf",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xls": "application/vnd.ms-excel",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".doc": "application/msword",
+            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ".msg": "application/vnd.ms-outlook",
+            ".eml": "message/rfc822",
+            ".txt": "text/plain",
+            ".csv": "text/csv",
+            ".html": "text/html",
+            ".htm": "text/html",
+            ".mp4": "video/mp4",
+            ".mov": "video/quicktime",
+            ".wav": "audio/wav",
+        }
+        media_type = media_types.get(suffix, "application/octet-stream")
+        return FileResponse(str(path), media_type=media_type, filename=path.name)
 
 
 STREAM_MEDIA_TYPES = {
@@ -213,6 +243,17 @@ async def stream_native(
         raise HTTPException(status_code=403, detail="Access denied")
     if not doc.native_path:
         raise HTTPException(status_code=404, detail="No native file for this document")
+
+    if doc.native_path.startswith("productions/"):
+        from app.services.storage import get_signed_url
+        from fastapi.responses import RedirectResponse
+        suffix = doc.native_path.rsplit(".", 1)[-1].lower() if "." in doc.native_path else ""
+        media_type = STREAM_MEDIA_TYPES.get(f".{suffix}")
+        if not media_type:
+            raise HTTPException(status_code=400, detail="File is not a streamable media type")
+        url = get_signed_url(doc.native_path, expiration_minutes=60)
+        return RedirectResponse(url=url)
+
     path = Path(doc.native_path.replace("\\", "/")).resolve()
     if not path.exists():
         raise HTTPException(status_code=404, detail="Native file not found on disk")
