@@ -153,3 +153,166 @@ async def ingest_production(
         "errors": errors,
         "error_count": len(errors),
     }
+
+
+async def ingest_from_storage(
+    db: AsyncSession,
+    job_id: str,
+    production_id: int,
+    production_name: str,
+) -> None:
+    """Process uploaded production files from Firebase Storage."""
+    import shutil
+    import tempfile
+    from datetime import datetime, timezone
+
+    from PIL import Image
+
+    from app.models import IngestJob
+    from app.services.storage import (
+        download_file,
+        download_to_temp,
+        get_download_bytes,
+        list_files,
+        upload_file,
+    )
+
+    job = await db.get(IngestJob, job_id)
+    if not job:
+        return
+
+    prefix = f"productions/{production_id}/raw/"
+    errors: list[str] = []
+    tmp_dir = tempfile.mkdtemp(prefix=f"ingest_{production_id}_")
+
+    try:
+        # Download DAT and OPT files
+        data_files = list_files(f"{prefix}DATA/")
+        dat_remote = next((f for f in data_files if f.lower().endswith(".dat")), None)
+        opt_remote = next((f for f in data_files if f.lower().endswith(".opt")), None)
+
+        if not dat_remote:
+            raise FileNotFoundError("No .dat file found in uploaded DATA/ folder")
+        if not opt_remote:
+            raise FileNotFoundError("No .opt file found in uploaded DATA/ folder")
+
+        dat_local = os.path.join(tmp_dir, "data.dat")
+        opt_local = os.path.join(tmp_dir, "data.opt")
+        download_file(dat_remote, dat_local)
+        download_file(opt_remote, opt_local)
+
+        dat_records = parse_dat(dat_local)
+        opt_pages = parse_opt(opt_local)
+
+        job.total_files = len(dat_records)
+        await db.commit()
+
+        converted_tmp = os.path.join(tmp_dir, "converted")
+        os.makedirs(converted_tmp, exist_ok=True)
+
+        documents = []
+        for i, record in enumerate(dat_records):
+            bates_begin = record.get("Begin Bates", "").strip()
+            bates_end = record.get("End Bates", "").strip()
+            page_count_str = record.get("Page Count", "1").strip()
+            text_link = record.get("Text Link", "").strip()
+            native_link = record.get("Native Link", "").strip()
+
+            if not bates_begin:
+                errors.append(f"Row {i+1}: missing Begin Bates")
+                continue
+
+            page_count = int(page_count_str) if page_count_str.isdigit() else 1
+
+            # Read text from Firebase Storage
+            text_content = None
+            if text_link:
+                text_remote = f"{prefix}{text_link.replace(chr(92), '/')}"
+                try:
+                    text_bytes = get_download_bytes(text_remote)
+                    text_content = text_bytes.decode("utf-8-sig", errors="replace")
+                    text_content = text_content.replace("\x00", "")
+                except Exception:
+                    errors.append(f"{bates_begin}: text file not found: {text_link}")
+
+            # Convert images
+            raw_image_paths = opt_pages.get(bates_begin, [])
+            jpeg_storage_paths = []
+            for rel_path in raw_image_paths:
+                remote_tiff = f"{prefix}{rel_path.replace(chr(92), '/')}"
+                try:
+                    tiff_local = download_to_temp(remote_tiff, suffix=".tif")
+                    stem = Path(rel_path).stem
+                    jpeg_local = os.path.join(converted_tmp, f"{stem}.jpg")
+                    with Image.open(tiff_local) as img:
+                        if img.mode not in ("RGB", "L"):
+                            img = img.convert("RGB")
+                        img.save(jpeg_local, "JPEG", quality=85)
+                    os.unlink(tiff_local)
+
+                    jpeg_remote = f"productions/{production_id}/converted/{stem}.jpg"
+                    upload_file(jpeg_local, jpeg_remote, content_type="image/jpeg")
+                    jpeg_storage_paths.append(jpeg_remote)
+                except Exception as e:
+                    errors.append(f"{bates_begin}: image conversion failed: {rel_path}: {e}")
+                    jpeg_storage_paths.append("")
+
+            native_storage_path = None
+            if native_link:
+                native_storage_path = f"{prefix}{native_link.replace(chr(92), '/')}"
+
+            metadata = {}
+            for key, value in record.items():
+                if key not in FIELD_MAP and value:
+                    metadata[key] = value
+
+            doc = Document(
+                production_id=production_id,
+                bates_begin=bates_begin,
+                bates_end=bates_end,
+                page_count=page_count,
+                metadata_=metadata,
+                text_content=text_content,
+                native_path=native_storage_path,
+                image_paths=jpeg_storage_paths,
+            )
+            documents.append(doc)
+
+            job.processed_files = i + 1
+            job.errors = errors.copy()
+            if (i + 1) % 50 == 0:
+                await db.commit()
+
+        db.add_all(documents)
+        await db.flush()
+
+        await db.execute(
+            text(
+                "UPDATE documents SET text_search_vector = to_tsvector('english', COALESCE(text_content, '')) "
+                "WHERE production_id = :pid"
+            ),
+            {"pid": production_id},
+        )
+
+        if settings.anthropic_api_key:
+            texts = [(str(doc.id), doc.text_content) for doc in documents]
+            titles = await generate_titles_batch(texts)
+            for doc in documents:
+                title = titles.get(str(doc.id))
+                if title:
+                    doc.title = title
+            await db.flush()
+
+        job.status = "complete"
+        job.processed_files = len(documents)
+        job.errors = errors
+        job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    except Exception as e:
+        job.status = "failed"
+        job.errors = errors + [str(e)]
+        await db.commit()
+        raise
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
