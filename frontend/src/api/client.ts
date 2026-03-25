@@ -1,12 +1,26 @@
+import { auth } from '../firebase';
 import type {
   DocumentDetail, DocumentTagEntry, NoteEntry, PaginatedDocuments,
   SavedSearch, SearchResponse, Tag,
 } from '../types';
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: 'include', ...options });
+  const headers: Record<string, string> = {};
+
+  // Add Firebase Bearer token if user is logged in
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  // Merge with any provided headers
+  if (options?.headers) {
+    Object.assign(headers, options.headers);
+  }
+
+  const res = await fetch(url, { ...options, headers });
   if (res.status === 401) {
-    window.location.href = '/login';
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
@@ -21,17 +35,6 @@ const json = (body: unknown) => ({
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
-
-// ── Auth ──
-
-export const login = (username: string, password: string) =>
-  request<{ username: string }>('/api/auth/login', json({ username, password }));
-
-export const logout = () =>
-  request('/api/auth/logout', { method: 'POST' });
-
-export const getMe = () =>
-  request<{ username: string }>('/api/auth/me');
 
 // ── Documents ──
 
