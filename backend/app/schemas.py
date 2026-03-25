@@ -219,6 +219,27 @@ class PendingInviteOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AuditLogOut(BaseModel):
+    id: int
+    user_id: str
+    user_email: str
+    action: str
+    resource_type: str
+    resource_id: str | None
+    production_id: int | None
+    details: dict
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PaginatedAuditLogs(BaseModel):
+    logs: list[AuditLogOut]
+    total: int
+    page: int
+    per_page: int
+
+
 class IngestJobOut(BaseModel):
     id: UUID
     production_id: int
