@@ -39,6 +39,7 @@ export interface DocumentSummary {
   page_count: number;
   has_native: boolean;
   title: string | null;
+  processing_status: string;
   tags: Tag[];
   note_count: number;
 }
@@ -51,6 +52,7 @@ export interface DocumentDetail {
   page_count: number;
   title: string | null;
   summary: string | null;
+  processing_status: string;
   metadata: Record<string, string>;
   text_content: string | null;
   native_path: string | null;
@@ -212,4 +214,21 @@ export interface QCContext {
   original_reviewer_email: string | null;
   current_tags: { id: number; name: string; category: string }[];
   existing_decision: { id: number; decision: string; reason: string | null; created_at: string } | null;
+}
+
+// ── Annotations ──
+
+export interface Annotation {
+  id: number;
+  document_id: string;
+  page_num: number;
+  x_pct: number;
+  y_pct: number;
+  color: string;
+  content: string;
+  created_by: string;
+  created_by_email: string;
+  created_by_display_name: string | null;
+  created_at: string;
+  updated_at: string;
 }
