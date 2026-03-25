@@ -28,6 +28,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String(128), primary_key=True)  # Firebase UID
+    email = Column(String(255), nullable=False, unique=True)
+    display_name = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 class Production(Base):
     __tablename__ = "productions"
 
