@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getTags, imageUrl, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthPage from './components/AuthPage';
+import IngestWizard from './components/IngestWizard';
 import ManageAccess from './components/ManageAccess';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
@@ -33,6 +34,7 @@ function Home() {
   const [hideNativeOnly, setHideNativeOnly] = useState(true);
   const [activeProduction, setActiveProduction] = useState<ProductionInfo | null>(null);
   const [showManageAccess, setShowManageAccess] = useState(false);
+  const [showIngestWizard, setShowIngestWizard] = useState(false);
 
   const perPage = 50;
 
@@ -75,6 +77,13 @@ function Home() {
     setSearchQuery('');
     setSearchResults([]);
     setSelectedIds(new Set());
+    loadDocuments();
+  };
+
+  const handleIngestComplete = () => {
+    listProductions().then(prods => {
+      if (prods.length >= 1) setActiveProduction(prods[0]);
+    }).catch(() => {});
     loadDocuments();
   };
 
@@ -131,6 +140,7 @@ function Home() {
           </>
         )}
         <div className="user-menu">
+          <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
           <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
           <button className="btn-header" onClick={logout}>Sign out</button>
         </div>
@@ -330,6 +340,9 @@ function Home() {
           <div className="empty-state">
             <div style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-serif)', color: 'var(--color-neutral-500)' }}>No documents yet</div>
             <div>Ingest a production to get started</div>
+            <button className="btn btn-primary" onClick={() => setShowIngestWizard(true)}>
+              Ingest a Production
+            </button>
           </div>
         )}
       </div>
@@ -339,6 +352,14 @@ function Home() {
         <ManageAccess
           productionId={activeProduction.id}
           onClose={() => setShowManageAccess(false)}
+        />
+      )}
+
+      {/* Ingest wizard modal */}
+      {showIngestWizard && (
+        <IngestWizard
+          onClose={() => setShowIngestWizard(false)}
+          onComplete={handleIngestComplete}
         />
       )}
 
