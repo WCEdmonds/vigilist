@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  DocumentDetail, DocumentTagEntry, NoteEntry, PaginatedDocuments,
+  DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry, PaginatedDocuments,
   PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
   SavedSearch, SearchResponse, Tag,
 } from '../types';
@@ -170,3 +170,11 @@ export const inviteUser = (productionId: number, email: string) =>
 
 export const revokeAccess = (productionId: number, userId: string) =>
   request(`/api/productions/${productionId}/access/${userId}`, { method: 'DELETE' });
+
+// ── Ingest ──
+
+export const startIngest = (productionName: string, description: string, totalFiles: number) =>
+  request<IngestJob>('/api/ingest', json({ production_name: productionName, description, total_files: totalFiles }));
+
+export const getIngestStatus = (jobId: string) =>
+  request<IngestJob>(`/api/ingest/${jobId}/status`);
