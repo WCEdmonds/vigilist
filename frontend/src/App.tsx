@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getTags, imageUrl, listDocuments, searchDocuments } from './api/client';
+import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getTags, imageUrl, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthPage from './components/AuthPage';
+import ManageAccess from './components/ManageAccess';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
 import { AuthProvider, useAuth } from './hooks/useAuth';
-import type { DocumentSummary, SearchResult, Tag } from './types';
+import type { DocumentSummary, ProductionInfo, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -30,18 +31,23 @@ function Home() {
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [hideNativeOnly, setHideNativeOnly] = useState(true);
+  const [activeProduction, setActiveProduction] = useState<ProductionInfo | null>(null);
+  const [showManageAccess, setShowManageAccess] = useState(false);
 
   const perPage = 50;
 
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(() => {});
+    listProductions().then(prods => {
+      if (prods.length === 1) setActiveProduction(prods[0]);
+    }).catch(() => {});
   }, []);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage);
+      const res = await listDocuments(page, perPage, activeProduction?.id);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -56,7 +62,7 @@ function Home() {
     setHasSearched(true);
     setSelectedIds(new Set());
     try {
-      const res = await searchDocuments(query);
+      const res = await searchDocuments(query, 1, 50, 'relevance', activeProduction?.id);
       setSearchResults(res.results);
       setSearchTotal(res.total);
     } finally {
@@ -115,6 +121,15 @@ function Home() {
         <span className="logo" onClick={clearSearch}>
           Descubre
         </span>
+        {activeProduction && (
+          <>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-primary-300)', opacity: 0.7 }}>/</span>
+            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-primary-200)' }}>{activeProduction.name}</span>
+            {activeProduction.is_owner && (
+              <button className="btn-header" onClick={() => setShowManageAccess(true)}>Share</button>
+            )}
+          </>
+        )}
         <div className="user-menu">
           <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
           <button className="btn-header" onClick={logout}>Sign out</button>
@@ -318,6 +333,14 @@ function Home() {
           </div>
         )}
       </div>
+
+      {/* Manage access modal */}
+      {showManageAccess && activeProduction && (
+        <ManageAccess
+          productionId={activeProduction.id}
+          onClose={() => setShowManageAccess(false)}
+        />
+      )}
 
       {/* Floating bulk action bar */}
       {selectedIds.size > 0 && (
