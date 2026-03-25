@@ -252,3 +252,122 @@ class IngestJobOut(BaseModel):
     completed_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+# ── Review Queues & Batches ──
+
+class ReviewQueueCreate(BaseModel):
+    name: str
+    description: str = ""
+    query: str = ""
+    filters: dict = {}
+
+
+class ReviewQueueOut(BaseModel):
+    id: int
+    production_id: int
+    name: str
+    description: str | None
+    query: str
+    filters: dict
+    status: str
+    created_by: str
+    created_at: datetime
+    batch_count: int = 0
+    total_documents: int = 0
+    reviewed_documents: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class ReviewBatchOut(BaseModel):
+    id: int
+    queue_id: int
+    queue_name: str = ""
+    reviewer_id: str | None
+    reviewer_email: str | None = None
+    status: str
+    size: int
+    reviewed_count: int
+    assigned_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class BatchDocumentOut(BaseModel):
+    id: int
+    batch_id: int
+    document_id: UUID
+    position: int
+    reviewed: str
+    reviewed_at: datetime | None
+    bates_begin: str = ""
+    title: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class BatchCreateRequest(BaseModel):
+    batch_size: int = 50
+    reviewer_id: str | None = None
+
+
+class BatchAssignRequest(BaseModel):
+    reviewer_id: str
+
+
+class BatchDocumentUpdate(BaseModel):
+    reviewed: str
+
+
+# ── QC ──
+
+class QCSampleRequest(BaseModel):
+    queue_id: int
+    sample_percent: float = 10.0
+    reviewer_id: str | None = None
+
+
+class QCDecisionCreate(BaseModel):
+    decision: str
+    reason: str | None = None
+    new_tag_ids: list[int] | None = None
+
+
+class QCDecisionOut(BaseModel):
+    id: int
+    batch_document_id: int
+    original_reviewer_id: str
+    original_reviewer_email: str = ""
+    qc_reviewer_id: str
+    qc_reviewer_email: str = ""
+    decision: str
+    reason: str | None
+    original_tags: list
+    new_tags: list | None
+    created_at: datetime
+    bates_begin: str = ""
+
+    model_config = {"from_attributes": True}
+
+
+# ── Dashboard ──
+
+class DashboardStats(BaseModel):
+    total_documents: int
+    reviewed_documents: int
+    pending_documents: int
+    percent_complete: float
+    tag_breakdown: dict
+    reviewer_stats: list[dict]
+    queue_stats: list[dict]
+
+
+class QCStats(BaseModel):
+    total_decisions: int
+    agree_count: int
+    overturn_count: int
+    overturn_rate: float
+    by_reviewer: list[dict]
