@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   listQueues, createQueue, deleteQueue, createBatches, assignBatch, getProductionAccess,
   createQCSample,
@@ -53,7 +53,7 @@ export default function QueueManager({ productionId, onClose }: Props) {
   const [qcLoading, setQcLoading] = useState(false);
   const [qcError, setQcError] = useState('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -68,9 +68,9 @@ export default function QueueManager({ productionId, onClose }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [productionId]);
 
-  useEffect(() => { load(); }, [productionId]);
+  useEffect(() => { load(); }, [load]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
