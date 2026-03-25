@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import Document, DocumentTag, Note, User
+from app.models import Annotation, Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.audit import log_action
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 async def list_documents(
     production_id: int | None = None,
     tag_id: int | None = None,
+    has_annotations: bool | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -43,6 +44,13 @@ async def list_documents(
             select(DocumentTag.document_id).where(DocumentTag.tag_id == tag_id)
         ))
 
+    if has_annotations is True:
+        query = query.where(Document.id.in_(select(Annotation.document_id).distinct()))
+        count_query = count_query.where(Document.id.in_(select(Annotation.document_id).distinct()))
+    elif has_annotations is False:
+        query = query.where(Document.id.notin_(select(Annotation.document_id).distinct()))
+        count_query = count_query.where(Document.id.notin_(select(Annotation.document_id).distinct()))
+
     query = query.order_by(Document.bates_begin)
     total = (await db.execute(count_query)).scalar() or 0
 
@@ -61,6 +69,15 @@ async def list_documents(
         )
         note_counts = dict(nc_result.all())
 
+    ann_counts: dict = {}
+    if doc_ids:
+        ac_result = await db.execute(
+            select(Annotation.document_id, func.count(Annotation.id))
+            .where(Annotation.document_id.in_(doc_ids))
+            .group_by(Annotation.document_id)
+        )
+        ann_counts = dict(ac_result.all())
+
     return PaginatedDocuments(
         documents=[
             DocumentSummary(
@@ -71,8 +88,10 @@ async def list_documents(
                 page_count=d.page_count,
                 has_native=d.native_path is not None,
                 title=d.title,
+                processing_status=d.processing_status,
                 tags=[TagOut.model_validate(dt.tag) for dt in d.tags],
                 note_count=note_counts.get(d.id, 0),
+                annotation_count=ann_counts.get(d.id, 0),
             )
             for d in docs
         ],
@@ -80,6 +99,24 @@ async def list_documents(
         page=page,
         per_page=per_page,
     )
+
+
+@router.get("/metadata-keys")
+async def get_metadata_keys(
+    production_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return distinct metadata field keys for documents in a production."""
+    accessible = await get_accessible_production_ids(db, user)
+    base = select(func.jsonb_object_keys(Document.metadata_)).where(
+        Document.production_id.in_(accessible)
+    )
+    if production_id:
+        base = base.where(Document.production_id == production_id)
+    result = await db.execute(base.distinct())
+    keys = sorted(row[0] for row in result.all())
+    return keys
 
 
 @router.get("/by-bates")
@@ -375,6 +412,10 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         select(func.count(Note.id)).where(Note.document_id == doc.id)
     )).scalar() or 0
 
+    annotation_count = (await db.execute(
+        select(func.count(Annotation.id)).where(Annotation.document_id == doc.id)
+    )).scalar() or 0
+
     return DocumentDetail(
         id=doc.id,
         production_id=doc.production_id,
@@ -383,10 +424,12 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         page_count=doc.page_count,
         title=doc.title,
         summary=doc.summary,
+        processing_status=doc.processing_status,
         metadata=doc.metadata_ or {},
         text_content=doc.text_content,
         native_path=doc.native_path,
         image_paths=doc.image_paths or [],
         tags=[DocumentTagOut(id=dt.id, tag=TagOut.model_validate(dt.tag), applied_by=dt.applied_by, applied_at=dt.applied_at) for dt in doc.tags],
         note_count=note_count,
+        annotation_count=annotation_count,
     )
