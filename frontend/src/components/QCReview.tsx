@@ -9,7 +9,7 @@ interface Props {
   onClose: () => void;
 }
 
-export default function QCReview({ sampleIds, onClose }: Props) {
+export default function QCReview({ sampleIds, productionId: _productionId, onClose }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [context, setContext] = useState<QCContext | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
@@ -128,7 +128,7 @@ export default function QCReview({ sampleIds, onClose }: Props) {
   };
 
   const progressPercent = sampleIds.length > 0
-    ? Math.round(((currentIndex) / sampleIds.length) * 100)
+    ? Math.round(((currentIndex + 1) / sampleIds.length) * 100)
     : 0;
 
   if (done) {
