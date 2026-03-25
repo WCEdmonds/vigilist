@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import User
+from app.models import PendingInvite, ProductionAccess, User
 from app.schemas import UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -62,7 +62,30 @@ async def get_current_user(
 
 @router.post("/sync", response_model=UserOut)
 async def sync_user(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Called after Firebase login to ensure user exists in backend DB."""
+    """Called after Firebase login to ensure user exists in backend DB.
+    Also resolves any pending invites for this user's email.
+    """
+    # Resolve pending invites
+    result = await db.execute(
+        select(PendingInvite).where(PendingInvite.email == user.email.lower())
+    )
+    pending = result.scalars().all()
+    for invite in pending:
+        # Check if access already exists
+        existing = await db.execute(
+            select(ProductionAccess).where(
+                ProductionAccess.production_id == invite.production_id,
+                ProductionAccess.user_id == user.id,
+            )
+        )
+        if not existing.scalar_one_or_none():
+            db.add(ProductionAccess(
+                production_id=invite.production_id,
+                user_id=user.id,
+                granted_by=invite.invited_by,
+            ))
+        await db.delete(invite)
+
     await db.commit()
     return user
 
