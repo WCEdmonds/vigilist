@@ -1,48 +1,74 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from itsdangerous import URLSafeTimedSerializer
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.schemas import LoginRequest
+from app.database import get_db
+from app.models import User
+from app.schemas import UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-serializer = URLSafeTimedSerializer(settings.secret_key)
-SESSION_COOKIE = "descubre_session"
-MAX_AGE = 60 * 60 * 24 * 7  # 1 week
-
-
-def get_current_user(request: Request) -> str:
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+# Initialize Firebase Admin SDK (once at import time)
+if not firebase_admin._apps:
     try:
-        username = serializer.loads(token, max_age=MAX_AGE)
+        firebase_admin.initialize_app()
     except Exception:
-        raise HTTPException(status_code=401, detail="Session expired")
-    return username
+        if settings.firebase_project_id:
+            firebase_admin.initialize_app(options={"projectId": settings.firebase_project_id})
+        else:
+            firebase_admin.initialize_app()
 
 
-@router.post("/login")
-async def login(body: LoginRequest, response: Response):
-    if body.username != settings.auth_username or body.password != settings.auth_password:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = serializer.dumps(body.username)
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=MAX_AGE,
-        httponly=True,
-        samesite="lax",
-    )
-    return {"username": body.username}
+async def get_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Extract and verify Firebase ID token, upsert user in DB."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    token = auth_header[7:]  # Strip "Bearer "
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    uid = decoded["uid"]
+    email = decoded.get("email", "")
+    display_name = decoded.get("name", "")
+
+    # Upsert user
+    result = await db.execute(select(User).where(User.id == uid))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        user = User(id=uid, email=email, display_name=display_name)
+        db.add(user)
+        await db.flush()
+    else:
+        # Update email/name if changed in Firebase
+        if user.email != email and email:
+            user.email = email
+        if user.display_name != display_name and display_name:
+            user.display_name = display_name
+        await db.flush()
+
+    return user
 
 
-@router.post("/logout")
-async def logout(response: Response):
-    response.delete_cookie(SESSION_COOKIE)
-    return {"ok": True}
+@router.post("/sync", response_model=UserOut)
+async def sync_user(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Called after Firebase login to ensure user exists in backend DB."""
+    await db.commit()
+    return user
 
 
-@router.get("/me")
-async def me(username: str = Depends(get_current_user)):
-    return {"username": username}
+@router.get("/me", response_model=UserOut)
+async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Return current user profile."""
+    await db.commit()
+    return user
