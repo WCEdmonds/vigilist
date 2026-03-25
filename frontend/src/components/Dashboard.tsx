@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getDashboard, getQCStats } from '../api/client';
 import type { DashboardStats, QCStats } from '../types';
 
@@ -12,25 +12,32 @@ export default function Dashboard({ productionId, onClose }: Props) {
   const [qcStats, setQcStats] = useState<QCStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [d, q] = await Promise.all([
-        getDashboard(productionId),
-        getQCStats(productionId),
-      ]);
-      setStats(d);
-      setQcStats(q);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load dashboard');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleRefresh = useCallback(() => {
+    setRefreshKey(k => k + 1);
+  }, []);
 
-  useEffect(() => { load(); }, [productionId]);
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [d, q] = await Promise.all([
+          getDashboard(productionId),
+          getQCStats(productionId),
+        ]);
+        if (!cancelled) { setStats(d); setQcStats(q); }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [productionId, refreshKey]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -38,7 +45,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
         <div className="modal-header">
           <h2>Review Dashboard</h2>
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-            <button className="btn btn-secondary btn-sm" onClick={load} disabled={loading}>
+            <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={loading}>
               Refresh
             </button>
             <button onClick={onClose}>&times;</button>
@@ -55,7 +62,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
         {error && !loading && (
           <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-error)' }}>
             <div style={{ marginBottom: 'var(--space-3)' }}>{error}</div>
-            <button className="btn btn-secondary btn-sm" onClick={load}>Retry</button>
+            <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Retry</button>
           </div>
         )}
 
@@ -69,7 +76,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
               </h3>
               <div style={{ marginBottom: 'var(--space-3)' }}>
                 <span style={{ fontSize: 'var(--text-3xl)', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--color-primary-900)' }}>
-                  {stats.percent_complete.toFixed(1)}%
+                  {(stats.percent_complete || 0).toFixed(1)}%
                 </span>
               </div>
               <progress value={stats.reviewed_documents} max={stats.total_documents} style={{ width: '100%', marginBottom: 'var(--space-3)' }} />
@@ -159,14 +166,15 @@ export default function Dashboard({ productionId, onClose }: Props) {
                   Tag Distribution
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                  {Object.entries(stats.tag_breakdown).map(([category, tags]) => (
+                  {Object.entries(stats.tag_breakdown).map(([category, tags]) => {
+                    const maxCount = Object.values(tags).length > 0 ? Math.max(...Object.values(tags)) : 1;
+                    return (
                     <div key={category}>
                       <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-neutral-500)', marginBottom: 'var(--space-2)', textTransform: 'uppercase' }}>
                         {category}
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
                         {Object.entries(tags).map(([tagName, count]) => {
-                          const maxCount = Math.max(...Object.values(tags));
                           const barWidth = maxCount > 0 ? (count / maxCount) * 100 : 0;
                           return (
                             <div key={tagName} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
@@ -184,7 +192,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
                         })}
                       </div>
                     </div>
-                  ))}
+                  ); })}
                 </div>
               </section>
             )}
