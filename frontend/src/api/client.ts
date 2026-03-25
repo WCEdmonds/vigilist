@@ -1,6 +1,7 @@
 import { auth } from '../firebase';
 import type {
   DocumentDetail, DocumentTagEntry, NoteEntry, PaginatedDocuments,
+  PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
   SavedSearch, SearchResponse, Tag,
 } from '../types';
 
@@ -152,3 +153,20 @@ export const findSimilar = (docId: string) =>
   request<{ source_id: string; search_terms: string; results: unknown[]; total: number }>(
     `/api/ai/find-similar/${docId}`, { method: 'POST' }
   );
+
+// ── Productions ──
+
+export const listProductions = () =>
+  request<ProductionInfo[]>('/api/productions');
+
+export const getProductionAccess = (productionId: number) =>
+  request<ProductionAccessEntry[]>(`/api/productions/${productionId}/access`);
+
+export const getProductionInvites = (productionId: number) =>
+  request<PendingInviteEntry[]>(`/api/productions/${productionId}/invites`);
+
+export const inviteUser = (productionId: number, email: string) =>
+  request<{ status: string; email: string }>(`/api/productions/${productionId}/access`, json({ email }));
+
+export const revokeAccess = (productionId: number, userId: string) =>
+  request(`/api/productions/${productionId}/access/${userId}`, { method: 'DELETE' });
