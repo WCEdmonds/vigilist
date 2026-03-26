@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ref, uploadBytes } from 'firebase/storage';
+import { ref, uploadBytesResumable } from 'firebase/storage';
 import { firebaseStorage, auth } from '../firebase';
 import { createProductionForIngest, startProcessing, getIngestStatus } from '../api/client';
 import type { IngestJob } from '../types';
@@ -16,7 +16,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [stage, setStage] = useState<Stage>('setup');
-  const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0 });
+  const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
   const [job, setJob] = useState<IngestJob | null>(null);
   const [error, setError] = useState('');
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -53,7 +53,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     if (!name.trim() || files.length === 0) return;
     setError('');
     setStage('uploading');
-    setUploadProgress({ uploaded: 0, total: files.length });
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+    setUploadProgress({ uploaded: 0, total: files.length, bytesUploaded: 0, totalBytes, startTime: Date.now() });
 
     try {
       // Phase 1: Create production in backend to get real production_id
@@ -67,22 +68,40 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
       }
 
       // Phase 2: Upload files to Firebase Storage under the real production path
-      const batchSize = 10;
-      let uploaded = 0;
+      // Use resumable uploads for real-time progress and automatic retry on failure.
+      // Shared mutable counters are safe here — JS is single-threaded so callbacks
+      // from concurrent uploads won't interleave mid-increment.
+      let filesCompleted = 0;
+      let totalBytesUploaded = 0;
 
+      const uploadFile = (file: File): Promise<void> =>
+        new Promise((resolve, reject) => {
+          const parts = file.webkitRelativePath.split('/');
+          const relativePath = parts.slice(1).join('/');
+          const storagePath = `productions/${production_id}/raw/${relativePath}`;
+          const task = uploadBytesResumable(ref(firebaseStorage, storagePath), file);
+          let fileBytesTransferred = 0;
+
+          task.on(
+            'state_changed',
+            (snapshot) => {
+              const delta = snapshot.bytesTransferred - fileBytesTransferred;
+              fileBytesTransferred = snapshot.bytesTransferred;
+              totalBytesUploaded += delta;
+              setUploadProgress(prev => ({ ...prev, bytesUploaded: totalBytesUploaded }));
+            },
+            reject,
+            () => {
+              filesCompleted++;
+              setUploadProgress(prev => ({ ...prev, uploaded: filesCompleted, bytesUploaded: totalBytesUploaded }));
+              resolve();
+            },
+          );
+        });
+
+      const batchSize = 50;
       for (let i = 0; i < files.length; i += batchSize) {
-        const batch = files.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (file) => {
-            const parts = file.webkitRelativePath.split('/');
-            const relativePath = parts.slice(1).join('/');
-            const storagePath = `productions/${production_id}/raw/${relativePath}`;
-            const storageRef = ref(firebaseStorage, storagePath);
-            await uploadBytes(storageRef, file);
-          })
-        );
-        uploaded += batch.length;
-        setUploadProgress({ uploaded, total: files.length });
+        await Promise.all(files.slice(i, i + batchSize).map(uploadFile));
       }
 
       // Phase 3: Start backend processing
@@ -118,124 +137,219 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     poll();
   };
 
-  const progressPercent = stage === 'uploading' && uploadProgress.total > 0
-    ? Math.round((uploadProgress.uploaded / uploadProgress.total) * 100)
+  const formatEta = (seconds: number) => {
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  };
+
+  const uploadSpeed = uploadProgress.startTime > 0 && uploadProgress.bytesUploaded > 0
+    ? uploadProgress.bytesUploaded / ((Date.now() - uploadProgress.startTime) / 1000)
+    : 0;
+  const etaSeconds = uploadSpeed > 0 && uploadProgress.totalBytes > uploadProgress.bytesUploaded
+    ? (uploadProgress.totalBytes - uploadProgress.bytesUploaded) / uploadSpeed
+    : 0;
+  const speedLabel = uploadSpeed > 0
+    ? uploadSpeed >= 1_000_000
+      ? `${(uploadSpeed / 1_000_000).toFixed(1)} MB/s`
+      : `${(uploadSpeed / 1_000).toFixed(0)} KB/s`
+    : '';
+
+  const progressPercent = stage === 'uploading' && uploadProgress.totalBytes > 0
+    ? Math.round((uploadProgress.bytesUploaded / uploadProgress.totalBytes) * 100)
     : job && job.total_files > 0
     ? Math.round((job.processed_files / job.total_files) * 100)
     : 0;
 
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-panel" style={{ width: 520 }} onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>
-            Ingest Production
-          </h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>Close</button>
-        </div>
+  const isActive = stage === 'uploading' || stage === 'processing';
+  const isDone = stage === 'complete' || stage === 'error';
+  const [minimized, setMinimized] = useState(false);
 
-        <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          {stage === 'setup' && (
-            <>
-              <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Production Name
-                </label>
-                <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="e.g., SCHLEGEL_PROD001" />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Description (optional)
-                </label>
-                <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief description" />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Production Folder
-                </label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                  <button className="btn btn-secondary btn-sm" onClick={() => folderInputRef.current?.click()}>
-                    Select Folder
-                  </button>
-                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
-                    {files.length > 0 ? `${files.length} files selected` : 'No folder selected'}
-                  </span>
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    onChange={handleFolderSelect}
-                    style={{ display: 'none' }}
-                    multiple
-                  />
+  const handleClose = () => {
+    if (isActive) { setMinimized(true); return; }
+    onClose();
+  };
+
+  const fmt = (b: number) => b >= 1_000_000 ? `${(b / 1_000_000).toFixed(1)} MB` : `${(b / 1_000).toFixed(0)} KB`;
+
+  const statusLine = stage === 'uploading'
+    ? `${fmt(uploadProgress.bytesUploaded)} / ${fmt(uploadProgress.totalBytes)}${speedLabel ? ` · ${speedLabel}${etaSeconds > 1 ? ` · ${formatEta(etaSeconds)} remaining` : ''}` : ''}`
+    : stage === 'processing'
+    ? job ? `Processing · ${job.processed_files} / ${job.total_files} documents` : 'Processing…'
+    : stage === 'complete'
+    ? `Done · ${job?.processed_files ?? 0} documents`
+    : error;
+
+  // Corner progress panel (shown when minimized or when active and not minimized—renders behind modal too)
+  const cornerPanel = (isActive || isDone) && minimized && (
+    <div
+      style={{
+        position: 'fixed', bottom: 24, right: 24, zIndex: 1100,
+        width: 320, background: 'var(--color-neutral-900)', color: '#fff',
+        borderRadius: 'var(--radius-lg)', boxShadow: '0 8px 32px rgba(30,24,16,0.35)',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: '10px 14px' }}>
+        {isActive && <span className="spinner spinner-sm" style={{ flexShrink: 0 }} />}
+        {stage === 'complete' && <span style={{ color: 'var(--color-success-400)', fontSize: 14 }}>✓</span>}
+        {stage === 'error' && <span style={{ color: 'var(--color-danger-400)', fontSize: 14 }}>✕</span>}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {name}
+          </div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {statusLine}
+          </div>
+        </div>
+        <button
+          onClick={() => setMinimized(false)}
+          title="Expand"
+          style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
+        >
+          ↗
+        </button>
+        {isDone && (
+          <button
+            onClick={() => { if (stage === 'complete') onComplete(); onClose(); }}
+            title="Dismiss"
+            style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1 }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {/* Progress bar */}
+      {(isActive || stage === 'complete') && (
+        <div style={{ height: 3, background: 'rgba(255,255,255,0.1)' }}>
+          <div style={{
+            height: '100%',
+            width: `${stage === 'complete' ? 100 : progressPercent}%`,
+            background: stage === 'complete' ? 'var(--color-success-400)' : 'var(--color-brand-400)',
+            transition: 'width 0.3s ease',
+          }} />
+        </div>
+      )}
+    </div>
+  );
+
+  if (minimized) return <>{cornerPanel}</>;
+
+  return (
+    <>
+      {cornerPanel}
+      <div className="modal-overlay" onClick={handleClose}>
+        <div className="modal-panel" style={{ width: 520 }} onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h3 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>
+              Ingest Production
+            </h3>
+            <button className="btn btn-ghost btn-sm" onClick={handleClose}>
+              {isActive ? 'Minimize' : 'Close'}
+            </button>
+          </div>
+
+          <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            {stage === 'setup' && (
+              <>
+                <div>
+                  <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Production Name
+                  </label>
+                  <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="e.g., SCHLEGEL_PROD001" />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Description (optional)
+                  </label>
+                  <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief description" />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Production Folder
+                  </label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => folderInputRef.current?.click()}>
+                      Select Folder
+                    </button>
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
+                      {files.length > 0 ? `${files.length} files selected` : 'No folder selected'}
+                    </span>
+                    <input
+                      ref={folderInputRef}
+                      type="file"
+                      onChange={handleFolderSelect}
+                      style={{ display: 'none' }}
+                      multiple
+                    />
+                  </div>
+                </div>
+
+                {error && (
+                  <div style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--color-danger-700)', background: 'var(--color-danger-50)', border: '1px solid var(--color-danger-100)', borderRadius: 'var(--radius-md)' }}>
+                    {error}
+                  </div>
+                )}
+
+                <button
+                  className="btn btn-primary"
+                  onClick={handleStart}
+                  disabled={!name.trim() || files.length === 0}
+                  style={{ width: '100%' }}
+                >
+                  Start Ingest
+                </button>
+              </>
+            )}
+
+            {(stage === 'uploading' || stage === 'processing') && (
+              <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
+                <div className="spinner spinner-md" style={{ margin: '0 auto var(--space-4)' }} />
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-2)' }}>
+                  {stage === 'uploading' ? 'Uploading files…' : 'Processing production…'}
+                </div>
+                <div style={{ width: '100%', height: 6, background: 'var(--color-neutral-200)', borderRadius: 3, overflow: 'hidden', marginBottom: 'var(--space-2)' }}>
+                  <div style={{ width: `${progressPercent}%`, height: '100%', background: 'var(--color-brand-500)', borderRadius: 3, transition: 'width 0.3s ease' }} />
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-mono)' }}>
+                  {statusLine}
                 </div>
               </div>
+            )}
 
-              {error && (
-                <div style={{ padding: 'var(--space-2) var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--color-danger-700)', background: 'var(--color-danger-50)', border: '1px solid var(--color-danger-100)', borderRadius: 'var(--radius-md)' }}>
+            {stage === 'complete' && (
+              <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
+                <div style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-serif)', color: 'var(--color-success-700)', marginBottom: 'var(--space-2)' }}>
+                  Ingest Complete
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-4)' }}>
+                  {job?.processed_files} documents processed
+                  {job?.errors && job.errors.length > 0 && ` (${job.errors.length} warnings)`}
+                </div>
+                <button className="btn btn-primary" onClick={() => { onComplete(); onClose(); }}>
+                  View Production
+                </button>
+              </div>
+            )}
+
+            {stage === 'error' && (
+              <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
+                <div style={{ fontSize: 'var(--text-lg)', color: 'var(--color-danger-700)', marginBottom: 'var(--space-2)' }}>
+                  Ingest Failed
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-danger-600)', marginBottom: 'var(--space-4)' }}>
                   {error}
                 </div>
-              )}
-
-              <button
-                className="btn btn-primary"
-                onClick={handleStart}
-                disabled={!name.trim() || files.length === 0}
-                style={{ width: '100%' }}
-              >
-                Start Ingest
-              </button>
-            </>
-          )}
-
-          {(stage === 'uploading' || stage === 'processing') && (
-            <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
-              <div className="spinner spinner-md" style={{ margin: '0 auto var(--space-4)' }} />
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-2)' }}>
-                {stage === 'uploading' ? 'Uploading files...' : 'Processing production...'}
+                <button className="btn btn-secondary" onClick={() => { setStage('setup'); setError(''); }}>
+                  Try Again
+                </button>
               </div>
-              <div style={{ width: '100%', height: 6, background: 'var(--color-neutral-200)', borderRadius: 3, overflow: 'hidden', marginBottom: 'var(--space-2)' }}>
-                <div style={{ width: `${progressPercent}%`, height: '100%', background: 'var(--color-brand-500)', borderRadius: 3, transition: 'width 0.3s ease' }} />
-              </div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-mono)' }}>
-                {stage === 'uploading'
-                  ? `${uploadProgress.uploaded} / ${uploadProgress.total} files`
-                  : job
-                  ? `${job.processed_files} / ${job.total_files} documents`
-                  : ''}
-              </div>
-            </div>
-          )}
-
-          {stage === 'complete' && (
-            <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
-              <div style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-serif)', color: 'var(--color-success-700)', marginBottom: 'var(--space-2)' }}>
-                Ingest Complete
-              </div>
-              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-4)' }}>
-                {job?.processed_files} documents processed
-                {job?.errors && job.errors.length > 0 && ` (${job.errors.length} warnings)`}
-              </div>
-              <button className="btn btn-primary" onClick={() => { onComplete(); onClose(); }}>
-                View Production
-              </button>
-            </div>
-          )}
-
-          {stage === 'error' && (
-            <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
-              <div style={{ fontSize: 'var(--text-lg)', color: 'var(--color-danger-700)', marginBottom: 'var(--space-2)' }}>
-                Ingest Failed
-              </div>
-              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-danger-600)', marginBottom: 'var(--space-4)' }}>
-                {error}
-              </div>
-              <button className="btn btn-secondary" onClick={() => { setStage('setup'); setError(''); }}>
-                Try Again
-              </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
