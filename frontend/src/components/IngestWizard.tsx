@@ -187,7 +187,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
       style={{
         position: 'fixed', bottom: 24, right: 24, zIndex: 1100,
         width: 320, background: 'var(--color-neutral-900)', color: '#fff',
-        borderRadius: 'var(--radius-lg)', boxShadow: '0 8px 32px rgba(30,24,16,0.35)',
+        borderRadius: 'var(--radius-lg)', boxShadow: '0 8px 32px rgba(44,62,107,0.35)',
         overflow: 'hidden',
       }}
     >
