@@ -589,6 +589,36 @@ mark {
   border: 1px solid rgba(44, 62, 107, 0.12);
 }
 
+/* ── Link button (inline text link styled as button) ── */
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--color-ink-light);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: all var(--transition-fast);
+}
+.link-btn:hover {
+  color: var(--color-ink);
+  text-decoration-color: currentColor;
+}
+
+/* ── Error message ── */
+
+.error-msg {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-danger-700);
+  background: rgba(183, 28, 28, 0.06);
+  border: 1px solid rgba(183, 28, 28, 0.12);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
 /* ── AI indicator ── */
 
 .ai-indicator {
