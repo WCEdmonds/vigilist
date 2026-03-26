@@ -48,20 +48,27 @@
   /* ── Semantic ── */
   --color-success-50: rgba(46, 125, 50, 0.06);
   --color-success-100: rgba(46, 125, 50, 0.1);
+  --color-success-400: #43a047;
   --color-success-500: #2e7d32;
   --color-success-600: #256428;
   --color-success-700: #1b5e20;
+  --color-success: #2e7d32;
 
   --color-warning-50: rgba(230, 81, 0, 0.06);
   --color-warning-100: rgba(230, 81, 0, 0.1);
+  --color-warning-400: #fb8c00;
   --color-warning-500: #e65100;
   --color-warning-600: #bf4400;
+  --color-warning: #e65100;
 
   --color-danger-50: rgba(183, 28, 28, 0.06);
   --color-danger-100: rgba(183, 28, 28, 0.1);
+  --color-danger-300: #ef9a9a;
+  --color-danger-400: #e53935;
   --color-danger-500: #c62828;
   --color-danger-600: #b71c1c;
   --color-danger-700: #8e0000;
+  --color-error: #b71c1c;
 
   --color-purple-50: rgba(69, 39, 160, 0.06);
   --color-purple-500: #4527a0;
