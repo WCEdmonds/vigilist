@@ -85,7 +85,7 @@ export default function AnnotationSidebar({ annotations, rotation, pageCount, on
               borderRadius: 0,
               transition: 'background 0.1s',
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-hover, rgba(30,24,16,0.06))'; }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--color-hover, rgba(44,62,107,0.06))'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>

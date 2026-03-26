@@ -85,7 +85,7 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
           <div key={i} id={`page-${i + 1}`} style={{ position: 'relative', flexShrink: 0, width: 'fit-content' }}>
             <div style={{
               position: 'absolute', top: 4, left: 4, padding: '2px 8px',
-              background: 'rgba(30,24,16,0.65)', color: '#fff', fontSize: 11,
+              background: 'rgba(44,62,107,0.65)', color: '#fff', fontSize: 11,
               borderRadius: 4, zIndex: 1,
             }}>
               {i + 1}
