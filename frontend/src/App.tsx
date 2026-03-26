@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getMyBatches, getTags, imageUrl, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
+import AuthImage from './components/AuthImage';
+import AIReviewPage from './components/AIReviewPage';
 import AuthPage from './components/AuthPage';
+import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
@@ -45,7 +48,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
-  const [hideNativeOnly, setHideNativeOnly] = useState(true);
+
   const [showManageAccess, setShowManageAccess] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
@@ -53,6 +56,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [showDashboard, setShowDashboard] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
+  const [showAIReview, setShowAIReview] = useState(false);
 
   const perPage = 50;
 
@@ -79,8 +83,15 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
+
+    // Auto-detect: use semantic for natural language, fulltext for keywords/operators
+    const isNaturalLanguage = query.length > 40
+      || /\b(what|where|who|when|why|how|which|find|show|any|all)\b/i.test(query)
+      || query.includes('?');
+    const mode = isNaturalLanguage ? 'semantic' as const : 'fulltext' as const;
+
     try {
-      const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, metadata);
+      const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, metadata, mode);
       setSearchResults(res.results);
       setSearchTotal(res.total);
     } finally {
@@ -114,6 +125,11 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     else loadDocuments(docPage);
   };
 
+  // AI Review full-screen mode
+  if (showAIReview) {
+    return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
+  }
+
   // Batch review full-screen mode
   if (activeBatchId) {
     return (
@@ -141,9 +157,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     );
   }
 
-  const displayDocs = hideNativeOnly
-    ? documents.filter(d => !d.has_native || d.page_count > 0)
-    : documents;
+  const displayDocs = documents;
   const totalPages = Math.ceil(docTotal / perPage);
 
   return (
@@ -160,14 +174,18 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         {production.is_owner && (
           <button className="btn-header" onClick={() => setShowManageAccess(true)}>Share</button>
         )}
-        {production.is_owner && (
-          <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
-        )}
+        <button className="btn btn-secondary btn-sm" onClick={() => setShowAIReview(true)}>
+          <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
+          AI Review
+        </button>
         <button className="btn btn-secondary" onClick={() => setShowQueueManager(true)}>Review Queues</button>
         <button className="btn-header" onClick={() => setShowDashboard(true)}>Dashboard</button>
         <div className="user-menu">
+          {production.is_owner && (
+            <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
+          )}
           <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
-          <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} size={26} />
+          <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} photoUrl={user?.photoURL} size={26} />
           <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
           <button className="btn-header" onClick={logout}>Sign out</button>
         </div>
@@ -175,7 +193,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
 
       {/* Content */}
       <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
-        <SearchBar onSearch={handleSearch} initialQuery={searchQuery} />
+        <SearchBar onSearch={handleSearch} initialQuery={searchQuery} productionId={production.id} />
 
         {/* My Review Batches */}
         {myBatches.length > 0 && (
@@ -247,11 +265,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 <a href={exportDocsCsvUrl()} className="btn btn-ghost btn-sm" download style={{ textDecoration: 'none' }}>
                   Export CSV
                 </a>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={hideNativeOnly} onChange={e => setHideNativeOnly(e.target.checked)} style={{ accentColor: 'var(--color-primary-800)' }} />
-                  Hide native-only
-                </label>
-                <div className="view-toggle">
+<div className="view-toggle">
                   <button
                     className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
                     onClick={() => setViewMode('list')}
@@ -316,7 +330,16 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                           )}
                         </td>
                         <td style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {d.title || '—'}
+                          {d.processing_status !== 'complete' && (
+                            <span className="badge badge-yellow" style={{ marginRight: 6, fontSize: 9 }}>Processing</span>
+                          )}
+                          <EditableTitle
+                            docId={d.id}
+                            title={d.title}
+                            onUpdated={(newTitle) => {
+                              setDocuments(prev => prev.map(doc => doc.id === d.id ? { ...doc, title: newTitle } : doc));
+                            }}
+                          />
                         </td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
@@ -344,7 +367,13 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 {displayDocs.map(d => (
                   <div key={d.id} className="doc-grid-card card" onClick={() => setViewDocId(d.id)}>
                     <div className="doc-grid-thumb">
-                      <img src={imageUrl(d.id, 1)} alt={d.bates_begin} loading="lazy" />
+                      {d.processing_status !== 'complete' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: 'var(--color-neutral-100)', color: 'var(--color-neutral-400)', fontSize: 'var(--text-xs)' }}>
+                          <span className="spinner spinner-sm" style={{ marginRight: 6 }} />Processing
+                        </div>
+                      ) : (
+                        <AuthImage docId={d.id} pageNum={1} width={300} alt={d.bates_begin} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
                     </div>
                     <div className="doc-grid-info">
                       <div className="doc-grid-bates">{d.bates_begin}</div>
@@ -468,6 +497,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
           </button>
         </div>
       )}
+
     </div>
   );
 }
