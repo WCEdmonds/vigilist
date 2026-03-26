@@ -97,7 +97,7 @@ export default function AnnotationPopover({
     background: 'var(--color-surface, #fff)',
     border: '1px solid var(--color-border, #e2e8f0)',
     borderRadius: 'var(--radius-md, 8px)',
-    boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+    boxShadow: '0 4px 16px rgba(30,24,16,0.12)',
     minWidth: 200,
     maxWidth: 280,
     padding: 'var(--space-3, 12px)',
@@ -120,11 +120,11 @@ export default function AnnotationPopover({
                 height: 28,
                 borderRadius: '50%',
                 background: hex,
-                border: selectedColor === name ? '3px solid var(--color-text, #1a202c)' : '2px solid white',
+                border: selectedColor === name ? '3px solid var(--color-text, #1a202c)' : '2px solid var(--color-surface)',
                 outline: selectedColor === name ? '2px solid var(--color-text, #1a202c)' : 'none',
                 cursor: 'pointer',
                 padding: 0,
-                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                boxShadow: '0 1px 3px rgba(30,24,16,0.15)',
               }}
             />
           ))}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { imageUrl } from '../api/client';
+import { fetchImageBlob } from '../api/client';
 import type { Annotation } from '../types';
 import AnnotationOverlay from './AnnotationOverlay';
 
@@ -17,12 +17,30 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
   const [rotation, setRotation] = useState(0);
   const [vpWidth, setVpWidth] = useState(800);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const [blobUrls, setBlobUrls] = useState<Record<number, string>>({});
 
   useEffect(() => {
     setZoom(0.5);
     setRotation(0);
+    setBlobUrls({});
     viewportRef.current?.scrollTo(0, 0);
-  }, [docId]);
+
+    // Fetch all page images as authenticated blobs (request at 1200px width for performance)
+    let cancelled = false;
+    for (let p = 1; p <= pageCount; p++) {
+      fetchImageBlob(docId, p, 1200).then(url => {
+        if (!cancelled) setBlobUrls(prev => ({ ...prev, [p]: url }));
+      }).catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+      // Revoke old blob URLs
+      setBlobUrls(prev => {
+        Object.values(prev).forEach(url => URL.revokeObjectURL(url));
+        return {};
+      });
+    };
+  }, [docId, pageCount]);
 
   // Track viewport width for zoom calculations
   useEffect(() => {
@@ -67,21 +85,27 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
           <div key={i} id={`page-${i + 1}`} style={{ position: 'relative', flexShrink: 0, width: 'fit-content' }}>
             <div style={{
               position: 'absolute', top: 4, left: 4, padding: '2px 8px',
-              background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 11,
+              background: 'rgba(30,24,16,0.65)', color: '#fff', fontSize: 11,
               borderRadius: 4, zIndex: 1,
             }}>
               {i + 1}
             </div>
-            <img
-              src={imageUrl(docId, i + 1)}
-              alt={`Page ${i + 1}`}
-              style={{
-                width: imgWidth,
-                display: 'block',
-                transform: rotation ? `rotate(${rotation}deg)` : undefined,
-              }}
-              draggable={false}
-            />
+            {blobUrls[i + 1] ? (
+              <img
+                src={blobUrls[i + 1]}
+                alt={`Page ${i + 1}`}
+                style={{
+                  width: imgWidth,
+                  display: 'block',
+                  transform: rotation ? `rotate(${rotation}deg)` : undefined,
+                }}
+                draggable={false}
+              />
+            ) : (
+              <div style={{ width: imgWidth, height: imgWidth * 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-neutral-100)' }}>
+                <span className="spinner spinner-sm" />
+              </div>
+            )}
             <AnnotationOverlay
               annotations={annotations || []}
               pageNum={i + 1}
