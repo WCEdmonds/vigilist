@@ -1,11 +1,12 @@
 import { auth } from '../firebase';
 import type {
-  Annotation, BatchDocument, DashboardStats, DocumentDetail, DocumentTagEntry, IngestJob, NoteEntry,
-  PaginatedAuditLogs, PaginatedDocuments, PendingInviteEntry, ProductionAccessEntry, ProductionInfo,
-  QCContext, QCStats, ReviewBatch, ReviewQueue, SavedSearch, SearchResponse, Tag,
+  AIReviewResult, Annotation, BatchDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
+  ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
+  SearchResponse, SearchResult, Tag,
 } from '../types';
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
+export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {};
 
   // Add Firebase Bearer token if user is logged in
@@ -39,16 +40,24 @@ const json = (body: unknown) => ({
 
 // ── Documents ──
 
+export function getRandomDocument(productionId?: number): Promise<{ id: string }> {
+  const params = new URLSearchParams();
+  if (productionId) params.set('production_id', String(productionId));
+  return request(`/api/documents/random?${params}`);
+}
+
 export function getMetadataKeys(productionId?: number): Promise<string[]> {
   const params = new URLSearchParams();
   if (productionId) params.set('production_id', String(productionId));
   return request<string[]>(`/api/documents/metadata-keys?${params}`);
 }
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number) {
-  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number) {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
+  if (fileType) params.set('file_type', fileType);
+  if (clusterId) params.set('cluster_id', String(clusterId));
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
 
@@ -69,8 +78,43 @@ export function getByBates(bates: string, productionId?: number) {
 export const imageUrl = (docId: string, pageNum: number) =>
   `/api/documents/${docId}/image/${pageNum}`;
 
+const _imageBlobCache = new Map<string, string>();
+
+export async function fetchImageBlob(docId: string, pageNum: number, width?: number): Promise<string> {
+  const key = `${docId}:${pageNum}:${width || 'full'}`;
+  const cached = _imageBlobCache.get(key);
+  if (cached) return cached;
+
+  const headers: Record<string, string> = {};
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const params = width ? `?w=${width}` : '';
+  const res = await fetch(`/api/documents/${docId}/image/${pageNum}${params}`, { headers });
+  if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  _imageBlobCache.set(key, url);
+  if (_imageBlobCache.size > 200) {
+    const oldest = _imageBlobCache.keys().next().value!;
+    URL.revokeObjectURL(_imageBlobCache.get(oldest)!);
+    _imageBlobCache.delete(oldest);
+  }
+  return url;
+}
+
 export const nativeUrl = (docId: string) =>
   `/api/documents/${docId}/native`;
+
+export function updateDocTitle(docId: string, title: string): Promise<{ ok: boolean; title: string | null }> {
+  return request(`/api/documents/${docId}/title`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
+}
+
+export function getNativeUrl(docId: string): Promise<{ url: string; extension: string; filename: string }> {
+  return request(`/api/documents/${docId}/native-url`);
+}
 
 export const streamUrl = (docId: string) =>
   `/api/documents/${docId}/stream`;
@@ -85,6 +129,7 @@ export async function searchDocuments(
   productionId?: number,
   tagIds?: number[],
   metadata?: Record<string, string>,
+  mode?: 'fulltext' | 'semantic',
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -92,6 +137,7 @@ export async function searchDocuments(
   if (metadata && Object.keys(metadata).length > 0) {
     params.set('metadata', JSON.stringify(metadata));
   }
+  if (mode) params.set('mode', mode);
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
@@ -120,8 +166,8 @@ export const bulkTag = (docIds: string[], tagIds: number[]) =>
 export const getNotes = (docId: string) =>
   request<NoteEntry[]>(`/api/documents/${docId}/notes`);
 
-export const createNote = (docId: string, content: string) =>
-  request<NoteEntry>(`/api/documents/${docId}/notes`, json({ content }));
+export const createNote = (docId: string, content: string, timestamp?: number) =>
+  request<NoteEntry>(`/api/documents/${docId}/notes`, json({ content, timestamp: timestamp ?? null }));
 
 export const updateNote = (noteId: number, content: string) =>
   request<NoteEntry>(`/api/notes/${noteId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
@@ -152,22 +198,39 @@ export const nlSearch = (query: string) =>
 
 // ── Export ──
 
-export const exportDocsCsvUrl = (productionId?: number, tagId?: number) => {
+async function downloadCsv(url: string, filename: string) {
+  const headers: Record<string, string> = {};
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+export async function exportDocsCsv(productionId?: number, tagId?: number) {
   const params = new URLSearchParams();
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
   const qs = params.toString();
-  return `/api/export/documents/csv${qs ? `?${qs}` : ''}`;
-};
+  await downloadCsv(`/api/export/documents/csv${qs ? `?${qs}` : ''}`, 'documents.csv');
+}
 
-export const exportSearchCsvUrl = (q: string, productionId?: number) => {
+export async function exportSearchCsv(q: string, productionId?: number) {
   const params = new URLSearchParams({ q });
   if (productionId) params.set('production_id', String(productionId));
-  return `/api/export/search/csv?${params}`;
-};
+  await downloadCsv(`/api/export/search/csv?${params}`, 'search_results.csv');
+}
 
 export const findSimilar = (docId: string) =>
-  request<{ source_id: string; search_terms: string; results: unknown[]; total: number }>(
+  request<{ source_id: string; search_terms: string; results: SearchResult[]; total: number }>(
     `/api/ai/find-similar/${docId}`, { method: 'POST' }
   );
 
@@ -309,4 +372,72 @@ export function updateAnnotation(annId: number, data: { content?: string; color?
 
 export function deleteAnnotation(annId: number): Promise<void> {
   return request(`/api/annotations/${annId}`, { method: 'DELETE' });
+}
+
+// ── AI Review ──
+
+export const listReviewProjects = (productionId: number) =>
+  request<ReviewProject[]>(`/api/review/projects/${productionId}`);
+
+export const createReviewProject = (productionId: number, data: { name: string; prompt_text: string; sample_size?: number; categories?: { name: string; color: string; description: string }[] }) =>
+  request<ReviewProject>(`/api/review/projects/${productionId}`, json(data));
+
+export const updateReviewProject = (productionId: number, projectId: number, data: { name?: string; prompt_text?: string }) =>
+  request<ReviewProject>(`/api/review/projects/${productionId}/${projectId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+
+export const deleteReviewProject = (productionId: number, projectId: number) =>
+  request(`/api/review/projects/${productionId}/${projectId}`, { method: 'DELETE' });
+
+export const runSample = (productionId: number, projectId: number) =>
+  request<{ status: string; sample_size: number }>(`/api/review/projects/${productionId}/${projectId}/sample`, { method: 'POST' });
+
+export const runFull = (productionId: number, projectId: number) =>
+  request<{ status: string; remaining: number }>(`/api/review/projects/${productionId}/${projectId}/run`, { method: 'POST' });
+
+export const pauseRun = (productionId: number, projectId: number) =>
+  request(`/api/review/projects/${productionId}/${projectId}/pause`, { method: 'POST' });
+
+export const getProjectStatus = (productionId: number, projectId: number) =>
+  request<{ status: string; total_documents: number; processed_documents: number; total_cost_tokens: number }>(
+    `/api/review/projects/${productionId}/${projectId}/status`
+  );
+
+export const listReviewResults = (
+  productionId: number, projectId: number,
+  page = 1, perPage = 50, sort = 'confidence_asc',
+  options?: { decision_filter?: string; sample_only?: boolean; needs_review_only?: boolean },
+) => {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
+  if (options?.decision_filter) params.set('decision_filter', options.decision_filter);
+  if (options?.sample_only) params.set('sample_only', 'true');
+  if (options?.needs_review_only) params.set('needs_review_only', 'true');
+  return request<PaginatedReviewResults>(`/api/review/projects/${productionId}/${projectId}/results?${params}`);
+};
+
+export const recordDecision = (resultId: number, decision: string, note?: string) =>
+  request<AIReviewResult>(`/api/review/results/${resultId}/decide`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, note }),
+  });
+
+// ── Intelligence ──
+
+export function detectDuplicates(productionId: number): Promise<{ status: string; exact_groups: number; similar_groups: number; total_documents_grouped: number }> {
+  return request(`/api/productions/${productionId}/detect-duplicates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+}
+
+export function clusterProduction(productionId: number): Promise<{ status: string; clusters: ClusterInfo[] }> {
+  return request(`/api/productions/${productionId}/cluster`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+}
+
+export function getClusters(productionId: number): Promise<ClusterInfo[]> {
+  return request<ClusterInfo[]>(`/api/productions/${productionId}/clusters`);
+}
+
+export function getDocumentDuplicates(docId: string): Promise<DuplicateEntry[]> {
+  return request<DuplicateEntry[]>(`/api/documents/${docId}/duplicates`);
+}
+
+export function propagateTag(docId: string, tagId: number, relationshipType: string): Promise<{ tagged_count: number }> {
+  return request(`/api/documents/${docId}/propagate-tag`, json({ tag_id: tagId, relationship_type: relationshipType }));
 }
