@@ -4,18 +4,28 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Annotation, Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
-from app.dependencies import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
-from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut
+from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut, get_file_type
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+
+FILE_TYPE_EXTENSIONS = {
+    "video": [".mp4", ".mov", ".avi", ".webm"],
+    "audio": [".wav", ".mp3"],
+    "pdf": [".pdf"],
+    "office": [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
+    "image": [".png", ".jpg", ".jpeg", ".gif", ".bmp"],
+    "email": [".msg", ".eml"],
+}
 
 
 @router.get("", response_model=PaginatedDocuments)
@@ -23,6 +33,9 @@ async def list_documents(
     production_id: int | None = None,
     tag_id: int | None = None,
     has_annotations: bool | None = None,
+    file_type: str | None = Query(None, description="Filter by file type: video, audio, pdf, office, image, email, native, images_only"),
+    sort: str = Query("bates", pattern="^(bates|recent|size)$"),
+    cluster_id: int | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -51,7 +64,45 @@ async def list_documents(
         query = query.where(Document.id.notin_(select(Annotation.document_id).distinct()))
         count_query = count_query.where(Document.id.notin_(select(Annotation.document_id).distinct()))
 
-    query = query.order_by(Document.bates_begin)
+    if file_type:
+        if file_type == "native":
+            query = query.where(Document.native_path.isnot(None))
+            count_query = count_query.where(Document.native_path.isnot(None))
+        elif file_type == "images_only":
+            query = query.where(Document.native_path.is_(None))
+            count_query = count_query.where(Document.native_path.is_(None))
+        elif file_type in FILE_TYPE_EXTENSIONS:
+            from sqlalchemy import or_
+            exts = FILE_TYPE_EXTENSIONS[file_type]
+            conditions = [func.lower(Document.native_path).like(f"%{ext}") for ext in exts]
+            query = query.where(or_(*conditions))
+            count_query = count_query.where(or_(*conditions))
+
+    if cluster_id:
+        from app.models import DocumentClusterAssignment
+        query = query.where(Document.id.in_(
+            select(DocumentClusterAssignment.document_id)
+            .where(DocumentClusterAssignment.cluster_id == cluster_id)
+        ))
+        count_query = count_query.where(Document.id.in_(
+            select(DocumentClusterAssignment.document_id)
+            .where(DocumentClusterAssignment.cluster_id == cluster_id)
+        ))
+
+    if sort == "recent":
+        # Sort by most recent activity (view, tag, note, annotation)
+        from app.models import AuditLog
+        latest_activity = (
+            select(func.max(AuditLog.created_at))
+            .where(AuditLog.resource_id == func.cast(Document.id, String))
+            .correlate(Document)
+            .scalar_subquery()
+        )
+        query = query.order_by(latest_activity.desc().nulls_last(), Document.bates_begin)
+    elif sort == "size":
+        query = query.order_by(Document.page_count.desc(), Document.bates_begin)
+    else:
+        query = query.order_by(Document.bates_begin)
     total = (await db.execute(count_query)).scalar() or 0
 
     query = query.offset((page - 1) * per_page).limit(per_page)
@@ -87,6 +138,7 @@ async def list_documents(
                 bates_end=d.bates_end,
                 page_count=d.page_count,
                 has_native=d.native_path is not None,
+                file_type=get_file_type(d.native_path, d.page_count),
                 title=d.title,
                 processing_status=d.processing_status,
                 tags=[TagOut.model_validate(dt.tag) for dt in d.tags],
@@ -99,6 +151,24 @@ async def list_documents(
         page=page,
         per_page=per_page,
     )
+
+
+@router.get("/random")
+async def random_document(
+    production_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    query = select(Document.id).where(Document.production_id.in_(accessible))
+    if production_id:
+        query = query.where(Document.production_id == production_id)
+    query = query.order_by(func.random()).limit(1)
+    result = await db.execute(query)
+    doc_id = result.scalar_one_or_none()
+    if not doc_id:
+        raise HTTPException(status_code=404, detail="No documents found")
+    return {"id": str(doc_id)}
 
 
 @router.get("/metadata-keys")
@@ -165,10 +235,34 @@ async def get_document(
     return await _doc_detail(doc, db)
 
 
+@router.put("/{doc_id}/title")
+async def update_title(
+    doc_id: UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+    role = await get_user_role_for_production(db, user, doc.production_id)
+    if role == "readonly":
+        raise HTTPException(status_code=403, detail="Read-only access")
+    doc.title = body.get("title", "").strip() or None
+    await log_action(db, user, "document_title_updated", "document", str(doc_id),
+                     production_id=doc.production_id, details={"title": doc.title})
+    await db.commit()
+    return {"ok": True, "title": doc.title}
+
+
 @router.get("/{doc_id}/image/{page_num}")
 async def get_image(
     doc_id: UUID,
     page_num: int,
+    w: int | None = Query(None, ge=50, le=2000, description="Resize width for thumbnails"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -190,6 +284,16 @@ async def get_image(
             data = get_download_bytes(raw_path)
         except Exception:
             raise HTTPException(status_code=404, detail="Image file not found in storage")
+        if w:
+            import io
+            from PIL import Image as PILImage
+            img = PILImage.open(io.BytesIO(data))
+            ratio = w / img.width
+            new_h = int(img.height * ratio)
+            img = img.resize((w, new_h), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=75)
+            data = buf.getvalue()
         return Response(content=data, media_type="image/jpeg")
     else:
         path = Path(raw_path.replace("\\", "/")).resolve()
@@ -257,6 +361,32 @@ async def get_native(
         }
         media_type = media_types.get(suffix, "application/octet-stream")
         return FileResponse(str(path), media_type=media_type, filename=path.name)
+
+
+@router.get("/{doc_id}/native-url")
+async def get_native_url(
+    doc_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return a signed URL for the native file (for browser-based viewing)."""
+    accessible = await get_accessible_production_ids(db, user)
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not doc.native_path:
+        raise HTTPException(status_code=404, detail="No native file for this document")
+
+    if doc.native_path.startswith("productions/"):
+        from app.services.storage import get_signed_url
+        url = get_signed_url(doc.native_path, expiration_minutes=60)
+        suffix = doc.native_path.rsplit(".", 1)[-1].lower() if "." in doc.native_path else ""
+        return {"url": url, "extension": suffix, "filename": doc.native_path.rsplit("/", 1)[-1]}
+
+    # Local dev: return the regular endpoint URL (auth handled by cookie/session)
+    return {"url": f"/api/documents/{doc_id}/native", "extension": doc.native_path.rsplit(".", 1)[-1].lower(), "filename": doc.native_path.rsplit("/", 1)[-1]}
 
 
 STREAM_MEDIA_TYPES = {
