@@ -5,6 +5,29 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+def get_file_type(native_path: str | None, page_count: int) -> str:
+    """Derive a file type category from the native file extension."""
+    if not native_path:
+        return "document"  # image-only docs
+    ext = native_path.rsplit(".", 1)[-1].lower() if "." in native_path else ""
+    VIDEO_EXTS = {"mp4", "mov", "avi", "wmv", "mkv", "webm"}
+    AUDIO_EXTS = {"wav", "mp3", "aac", "flac", "ogg", "wma"}
+    PDF_EXTS = {"pdf"}
+    EMAIL_EXTS = {"msg", "eml"}
+    SPREADSHEET_EXTS = {"xlsx", "xls", "csv"}
+    PRESENTATION_EXTS = {"pptx", "ppt"}
+    IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "tiff"}
+    if ext in VIDEO_EXTS: return "video"
+    if ext in AUDIO_EXTS: return "audio"
+    if ext in PDF_EXTS: return "pdf"
+    if ext in EMAIL_EXTS: return "email"
+    if ext in SPREADSHEET_EXTS: return "spreadsheet"
+    if ext in PRESENTATION_EXTS: return "presentation"
+    if ext in IMAGE_EXTS: return "image"
+    if ext: return "other"
+    return "document"
+
+
 class UserOut(BaseModel):
     id: str
     email: str
@@ -66,7 +89,10 @@ class NoteOut(BaseModel):
     id: int
     document_id: UUID
     content: str
+    timestamp: float | None = None
     created_by: str
+    created_by_email: str = ""
+    created_by_display_name: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -75,6 +101,7 @@ class NoteOut(BaseModel):
 
 class NoteCreate(BaseModel):
     content: str
+    timestamp: float | None = None
 
 
 class NoteUpdate(BaseModel):
@@ -109,6 +136,7 @@ class DocumentSummary(BaseModel):
     bates_end: str
     page_count: int
     has_native: bool
+    file_type: str = "document"
     title: str | None = None
     processing_status: str = "complete"
     tags: list[TagOut] = []
@@ -408,3 +436,27 @@ class AnnotationOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Intelligence ──
+
+class DuplicateEntryOut(BaseModel):
+    document_id: UUID
+    bates_begin: str
+    title: str | None
+    similarity: float
+    type: str
+
+
+class ClusterOut(BaseModel):
+    id: int
+    cluster_index: int
+    label: str | None
+    doc_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class PropagateTagRequest(BaseModel):
+    tag_id: int
+    relationship_type: Literal["duplicate", "family", "thread"]
