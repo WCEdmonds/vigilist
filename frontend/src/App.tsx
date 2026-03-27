@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { bulkTag, exportDocsCsvUrl, exportSearchCsvUrl, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, exportDocsCsv, exportSearchCsv, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AIReviewPage from './components/AIReviewPage';
+import CorpusAnalysis from './components/CorpusAnalysis';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
@@ -13,12 +14,13 @@ import BatchReview from './components/BatchReview';
 import Dashboard from './components/Dashboard';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
+import TopicGroups from './components/TopicGroups';
 import { ToastContainer } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import UserAvatar from './components/UserAvatar';
 import { AuthProvider, useAuth } from './hooks/useAuth';
-import type { DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
+import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -44,10 +46,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [docPage, setDocPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [lastSearchMode, setLastSearchMode] = useState<'fulltext' | 'semantic'>('fulltext');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [filterTagId, setFilterTagId] = useState<number | null>(null);
+  const [filterFileType, setFilterFileType] = useState<string>('');
+  const [sortBy, setSortBy] = useState<string>('bates');
 
   const [showManageAccess, setShowManageAccess] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
@@ -57,19 +63,24 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showAIReview, setShowAIReview] = useState(false);
+  const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(false);
 
-  const perPage = 50;
+  const [clusters, setClusters] = useState<ClusterInfo[]>([]);
+  const [filterClusterId, setFilterClusterId] = useState<number | null>(null);
+
+  const [perPage, setPerPage] = useState(50);
 
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(() => {});
     getMyBatches(production.id).then(setMyBatches).catch(() => {});
-  }, [production.id]);
+    getClusters(production.id).then(setClusters).catch(() => {});
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, filterClusterId ?? undefined);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -78,20 +89,23 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     }
   };
 
-  const handleSearch = async (query: string, metadata?: Record<string, string>) => {
+  const handleSearch = async (query: string, _metadata?: Record<string, string>, forceMode?: 'fulltext' | 'semantic') => {
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
 
-    // Auto-detect: use semantic for natural language, fulltext for keywords/operators
-    const isNaturalLanguage = query.length > 40
-      || /\b(what|where|who|when|why|how|which|find|show|any|all)\b/i.test(query)
-      || query.includes('?');
-    const mode = isNaturalLanguage ? 'semantic' as const : 'fulltext' as const;
+    // Use forced mode if provided, otherwise auto-detect
+    const mode = forceMode ?? (
+      query.length > 40
+        || /\b(what|where|who|when|why|how|which|find|show|any|all)\b/i.test(query)
+        || query.includes('?')
+      ? 'semantic' : 'fulltext'
+    );
+    setLastSearchMode(mode);
 
     try {
-      const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, metadata, mode);
+      const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, undefined, mode);
       setSearchResults(res.results);
       setSearchTotal(res.total);
     } finally {
@@ -130,6 +144,11 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
   }
 
+  // Corpus Analysis full-screen mode
+  if (showCorpusAnalysis) {
+    return <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onBack={() => setShowCorpusAnalysis(false)} />;
+  }
+
   // Batch review full-screen mode
   if (activeBatchId) {
     return (
@@ -144,6 +163,11 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     );
   }
 
+  // Build the current doc ID list for nav (search results or filtered docs)
+  const currentDocIds = hasSearched
+    ? searchResults.map(r => r.id)
+    : documents.map(d => d.id);
+
   // Document viewer mode
   if (viewDocId) {
     return (
@@ -153,6 +177,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         onBack={() => setViewDocId(null)}
         searchQuery={searchQuery}
         onSearch={(q) => { setViewDocId(null); handleSearch(q); }}
+        onSimilarResults={(label, results) => {
+          setViewDocId(null);
+          setSearchQuery(label);
+          setHasSearched(true);
+          setSearchResults(results);
+          setSearchTotal(results.length);
+        }}
+        docIds={currentDocIds}
       />
     );
   }
@@ -167,33 +199,60 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         <span className="logo" onClick={clearSearch}>
           Vigilist
         </span>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-primary-300)', opacity: 0.7 }}>/</span>
-        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-primary-200)', cursor: 'pointer' }} onClick={onSwitchProduction}>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44, 62, 107, 0.25)', margin: '0 2px' }}>/</span>
+        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink)', cursor: 'pointer', marginRight: 'var(--space-3)' }} onClick={onSwitchProduction}>
           {production.name}
         </span>
-        {production.is_owner && (
-          <button className="btn-header" onClick={() => setShowManageAccess(true)}>Share</button>
-        )}
-        <button className="btn btn-secondary btn-sm" onClick={() => setShowAIReview(true)}>
-          <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
-          AI Review
-        </button>
-        <button className="btn btn-secondary" onClick={() => setShowQueueManager(true)}>Review Queues</button>
-        <button className="btn-header" onClick={() => setShowDashboard(true)}>Dashboard</button>
-        <div className="user-menu">
+        <div className="desktop-only" style={{ display: 'flex', gap: 4, background: 'rgba(44, 62, 107, 0.05)', borderRadius: 'var(--radius-md)', padding: 3 }}>
           {production.is_owner && (
-            <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
+            <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowManageAccess(true)}>Share</button>
           )}
-          <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
+          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setShowAIReview(true)}>
+            <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
+            Smart Review
+          </button>
+          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setShowCorpusAnalysis(true)}>
+            <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
+            Analyze
+          </button>
+          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowQueueManager(true)}>Review Queues</button>
+          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowDashboard(true)}>Dashboard</button>
+        </div>
+        <div className="user-menu">
+          <span className="desktop-only" style={{ display: 'contents' }}>
+            {production.is_owner && (
+              <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
+            )}
+            <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
+          </span>
           <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} photoUrl={user?.photoURL} size={26} />
-          <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
+          <span className="desktop-only" style={{ color: 'var(--color-ink)', fontWeight: 500 }}>{user?.displayName || user?.email}</span>
           <button className="btn-header" onClick={logout}>Sign out</button>
         </div>
       </div>
 
       {/* Content */}
       <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
-        <SearchBar onSearch={handleSearch} initialQuery={searchQuery} productionId={production.id} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+          <div style={{ flex: 1 }}>
+            <SearchBar onSearch={handleSearch} initialQuery={searchQuery} />
+          </div>
+          <button
+            className="btn btn-primary desktop-only"
+            onClick={async () => {
+              try {
+                const { getRandomDocument } = await import('./api/client');
+                const { id } = await getRandomDocument(production.id);
+                setViewDocId(id);
+              } catch {}
+            }}
+            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+          >
+            I'm Feeling Lucky
+          </button>
+        </div>
+
+        <TopicGroups clusters={clusters} activeClusterId={filterClusterId} onSelect={setFilterClusterId} />
 
         {/* My Review Batches */}
         {myBatches.length > 0 && (
@@ -237,9 +296,19 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
               <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-mono)' }}>
                 {searchTotal} result{searchTotal !== 1 ? 's' : ''}
               </span>
-              <a href={exportSearchCsvUrl(searchQuery)} className="btn btn-ghost btn-sm" download style={{ marginLeft: 'auto', textDecoration: 'none' }}>
+              <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44,62,107,0.4)', padding: '2px 8px', background: 'rgba(44,62,107,0.04)', borderRadius: 'var(--radius-sm)' }}>
+                {lastSearchMode === 'semantic' ? 'Semantic' : 'Full-text'}
+              </span>
+              <button
+                className="btn btn-ghost btn-xs"
+                onClick={() => handleSearch(searchQuery, undefined, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic')}
+                style={{ fontSize: 'var(--text-xs)' }}
+              >
+                Try {lastSearchMode === 'semantic' ? 'full-text' : 'semantic'} search
+              </button>
+              <button className="btn btn-ghost btn-sm desktop-only" style={{ marginLeft: 'auto' }} onClick={() => exportSearchCsv(searchQuery, production.id)}>
                 Export CSV
-              </a>
+              </button>
             </div>
             <div className="card">
               <SearchResults
@@ -254,7 +323,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && displayDocs.length > 0 && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType) && (
           <div>
             <div className="section-header">
               <h2 className="section-title">
@@ -262,9 +331,51 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 <span className="section-count">{docTotal}</span>
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                <a href={exportDocsCsvUrl()} className="btn btn-ghost btn-sm" download style={{ textDecoration: 'none' }}>
+                <select
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 120 }}
+                  value={filterTagId ?? ''}
+                  onChange={e => { setFilterTagId(e.target.value ? Number(e.target.value) : null); setDocPage(1); }}
+                >
+                  <option value="">All tags</option>
+                  {allTags.map(t => (
+                    <option key={t.id} value={t.id}>{t.category}: {t.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 120 }}
+                  value={filterFileType}
+                  onChange={e => { setFilterFileType(e.target.value); setDocPage(1); }}
+                >
+                  <option value="">All types</option>
+                  <option value="images_only">Documents (images)</option>
+                  <option value="video">Video</option>
+                  <option value="audio">Audio</option>
+                  <option value="pdf">PDF</option>
+                  <option value="office">Office (Word/Excel/PPT)</option>
+                  <option value="email">Email (.msg/.eml)</option>
+                  <option value="image">Image (PNG/JPG)</option>
+                  <option value="native">All native files</option>
+                </select>
+                <select
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 100 }}
+                  value={sortBy}
+                  onChange={e => { setSortBy(e.target.value); setDocPage(1); }}
+                >
+                  <option value="bates">Bates #</option>
+                  <option value="recent">Recent</option>
+                  <option value="size">Size</option>
+                </select>
+                {(filterTagId || filterFileType) && (
+                  <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setDocPage(1); }}>
+                    Clear filters
+                  </button>
+                )}
+                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportDocsCsv(production.id)}>
                   Export CSV
-                </a>
+                </button>
 <div className="view-toggle">
                   <button
                     className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
@@ -304,6 +415,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                       </th>
                       <th>Bates Range</th>
                       <th>Title</th>
+                      <th style={{ width: 80 }}>Type</th>
                       <th>Pages</th>
                       <th>Tags</th>
                       <th>Notes</th>
@@ -341,6 +453,20 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                             }}
                           />
                         </td>
+                        <td className="meta-cell">
+                          <span className={`badge badge-${
+                            d.file_type === 'video' ? 'purple' :
+                            d.file_type === 'audio' ? 'blue' :
+                            d.file_type === 'email' ? 'yellow' :
+                            d.file_type === 'pdf' ? 'red' :
+                            d.file_type === 'spreadsheet' ? 'green' :
+                            d.file_type === 'presentation' ? 'yellow' :
+                            d.file_type === 'image' ? 'blue' :
+                            'gray'
+                          }`} style={{ fontSize: 10, textTransform: 'capitalize' }}>
+                            {d.file_type === 'document' ? 'doc' : d.file_type}
+                          </span>
+                        </td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -371,8 +497,13 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: 'var(--color-neutral-100)', color: 'var(--color-neutral-400)', fontSize: 'var(--text-xs)' }}>
                           <span className="spinner spinner-sm" style={{ marginRight: 6 }} />Processing
                         </div>
-                      ) : (
+                      ) : d.page_count > 0 ? (
                         <AuthImage docId={d.id} pageNum={1} width={300} alt={d.bates_begin} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', background: 'var(--color-neutral-100)', color: 'rgba(44,62,107,0.35)', fontSize: 28, flexDirection: 'column', gap: 4 }}>
+                          {d.has_native ? '◉' : '○'}
+                          <span style={{ fontSize: 'var(--text-xs)' }}>{d.title || 'Native'}</span>
+                        </div>
                       )}
                     </div>
                     <div className="doc-grid-info">
@@ -392,28 +523,45 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
               </div>
             )}
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="pagination">
-                <button
-                  className="btn btn-secondary btn-sm"
-                  disabled={docPage <= 1}
-                  onClick={() => loadDocuments(docPage - 1)}
-                >
-                  ← Prev
-                </button>
-                <span className="page-info">
-                  Page {docPage} of {totalPages}
-                </span>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  disabled={docPage >= totalPages}
-                  onClick={() => loadDocuments(docPage + 1)}
-                >
-                  Next →
-                </button>
+            {displayDocs.length === 0 && (
+              <div style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--color-neutral-400)' }}>
+                No documents match the current filters.
               </div>
             )}
+
+            {/* Pagination */}
+            <div className="pagination">
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled={docPage <= 1}
+                onClick={() => loadDocuments(docPage - 1)}
+              >
+                ← Prev
+              </button>
+              <span className="page-info">
+                Page {docPage} of {totalPages || 1}
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled={docPage >= totalPages}
+                onClick={() => loadDocuments(docPage + 1)}
+              >
+                Next →
+              </button>
+              <select
+                value={perPage}
+                onChange={e => { const v = Number(e.target.value); setPerPage(v); }}
+                style={{
+                  marginLeft: 'var(--space-3)', padding: '3px var(--space-2)', fontSize: 'var(--text-xs)',
+                  border: '1px solid var(--color-neutral-300)', borderRadius: 'var(--radius-sm)',
+                  color: 'var(--color-neutral-600)', background: 'white', cursor: 'pointer',
+                }}
+              >
+                {[25, 50, 100, 200].map(n => (
+                  <option key={n} value={n}>{n} per page</option>
+                ))}
+              </select>
+            </div>
           </div>
         )}
 
@@ -432,6 +580,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       {showManageAccess && (
         <ManageAccess
           productionId={production.id}
+          productionName={production.name}
           onClose={() => setShowManageAccess(false)}
         />
       )}
@@ -461,6 +610,11 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       {showDashboard && (
         <Dashboard productionId={production.id} onClose={() => setShowDashboard(false)} />
       )}
+
+      {/* Footer */}
+      <div style={{ textAlign: 'center', padding: 'var(--space-6) 0 var(--space-4)', fontSize: 11, color: 'rgba(44,62,107,0.3)' }}>
+        Built by <a href="https://qndary.com" target="_blank" rel="noopener noreferrer" style={{ color: 'rgba(44,62,107,0.45)', textDecoration: 'none', fontWeight: 600 }}>QNDARY</a>
+      </div>
 
       {/* Floating bulk action bar */}
       {selectedIds.size > 0 && (
