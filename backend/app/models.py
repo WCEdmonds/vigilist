@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.types import UserDefinedType
@@ -75,11 +77,31 @@ class Document(Base):
     image_paths = Column(JSONB, nullable=False, default=list)
     raw_image_paths = Column(JSONB, nullable=False, default=list)
     processing_status = Column(String(20), nullable=False, default="pending")
+    family_id = Column(String(255), nullable=True)
+    thread_id = Column(String(255), nullable=True)
+    is_inclusive = Column(Boolean, nullable=False, default=False)
 
     production = relationship("Production", back_populates="documents")
     tags = relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
     notes = relationship("Note", back_populates="document", cascade="all, delete-orphan", order_by="Note.created_at.desc()")
     annotations = relationship("Annotation", back_populates="document", cascade="all, delete-orphan", order_by="Annotation.page_num, Annotation.created_at")
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_chunk_doc_idx"),
+        Index("ix_chunks_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(1024), nullable=False)
+
+    document = relationship("Document", back_populates="chunks")
 
 
 class Tag(Base):
@@ -117,6 +139,7 @@ class Note(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     content = Column(Text, nullable=False)
+    timestamp = Column(Float, nullable=True)  # seconds into media file, null = no timestamp
     created_by = Column(String(100), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -299,3 +322,59 @@ class Annotation(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     document = relationship("Document", back_populates="annotations")
+
+
+class DuplicateGroup(Base):
+    __tablename__ = "duplicate_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    type = Column(String(20), nullable=False)  # 'exact' or 'similar'
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    members = relationship("DocumentDuplicate", back_populates="group", cascade="all, delete-orphan")
+
+
+class DocumentDuplicate(Base):
+    __tablename__ = "document_duplicates"
+    __table_args__ = (
+        UniqueConstraint("document_id", "group_id", name="uq_doc_dup_group"),
+        Index("ix_document_duplicates_document_id", "document_id"),
+        Index("ix_document_duplicates_group_id", "group_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(Integer, ForeignKey("duplicate_groups.id", ondelete="CASCADE"), nullable=False)
+    similarity = Column(Float, nullable=False)
+
+    group = relationship("DuplicateGroup", back_populates="members")
+    document = relationship("Document")
+
+
+class DocumentCluster(Base):
+    __tablename__ = "document_clusters"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    cluster_index = Column(Integer, nullable=False)
+    label = Column(String(100), nullable=True)
+    doc_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    assignments = relationship("DocumentClusterAssignment", back_populates="cluster", cascade="all, delete-orphan")
+
+
+class DocumentClusterAssignment(Base):
+    __tablename__ = "document_cluster_assignments"
+    __table_args__ = (
+        UniqueConstraint("document_id", name="uq_doc_cluster"),
+        Index("ix_doc_cluster_assignments_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    cluster_id = Column(Integer, ForeignKey("document_clusters.id", ondelete="CASCADE"), nullable=False)
+
+    cluster = relationship("DocumentCluster", back_populates="assignments")
+    document = relationship("Document")
