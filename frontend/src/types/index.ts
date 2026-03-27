@@ -17,7 +17,10 @@ export interface NoteEntry {
   id: number;
   document_id: string;
   content: string;
+  timestamp: number | null;
   created_by: string;
+  created_by_email: string;
+  created_by_display_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -38,6 +41,7 @@ export interface DocumentSummary {
   bates_end: string;
   page_count: number;
   has_native: boolean;
+  file_type: string;
   title: string | null;
   processing_status: string;
   tags: Tag[];
@@ -231,4 +235,71 @@ export interface Annotation {
   created_by_display_name: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ── AI Review ──
+
+export interface ReviewProject {
+  id: number;
+  production_id: number;
+  name: string;
+  prompt_text: string;
+  prompt_versions: { version: number; text: string; created_at: string }[];
+  categories: { name: string; color: string; description: string }[];
+  sample_size: number;
+  agreement_threshold: number;
+  status: string;
+  total_documents: number;
+  processed_documents: number;
+  total_cost_tokens: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  sample_agreement_rate: number | null;
+  decision_breakdown: Record<string, number> | null;
+}
+
+export interface AIReviewResult {
+  id: number;
+  project_id: number;
+  document_id: string;
+  bates_begin: string | null;
+  title: string | null;
+  is_sample: number;
+  ai_decision: string;
+  confidence_score: number;
+  reasoning: string;
+  key_excerpts: { text: string; start_offset: number; end_offset: number }[];
+  considerations: string | null;
+  attorney_decision: string | null;
+  attorney_note: string | null;
+  prompt_version: number;
+  api_model: string;
+  api_cost_tokens: number;
+  created_at: string;
+}
+
+export interface PaginatedReviewResults {
+  results: AIReviewResult[];
+  total: number;
+  page: number;
+  per_page: number;
+  agreement_rate: number | null;
+}
+
+// ── Intelligence ──
+
+export interface ClusterInfo {
+  id: number;
+  cluster_index: number;
+  label: string | null;
+  doc_count: number;
+}
+
+export interface DuplicateEntry {
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
+  similarity: number;
+  type: string;
 }
