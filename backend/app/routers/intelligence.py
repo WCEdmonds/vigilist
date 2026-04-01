@@ -1,14 +1,14 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_user_role_for_production, ROLE_RANK, get_accessible_production_ids
 from app.models import (
-    Document, DocumentCluster, DocumentClusterAssignment,
-    DocumentDuplicate, DocumentTag, DuplicateGroup, User,
+    AuditLog, Document, DocumentCluster, DocumentClusterAssignment,
+    DocumentDuplicate, DocumentTag, DuplicateGroup, Note, User,
 )
 from app.routers.auth import get_current_user
 from app.schemas import ClusterOut, DuplicateEntryOut, PropagateTagRequest
@@ -63,11 +63,27 @@ async def list_clusters(
 ):
     await get_user_role_for_production(db, user, production_id)
     result = await db.execute(
-        select(DocumentCluster)
+        select(
+            DocumentCluster,
+            func.coalesce(func.sum(Document.page_count), 0).label("page_count"),
+        )
+        .outerjoin(DocumentClusterAssignment, DocumentCluster.id == DocumentClusterAssignment.cluster_id)
+        .outerjoin(Document, DocumentClusterAssignment.document_id == Document.id)
         .where(DocumentCluster.production_id == production_id)
+        .group_by(DocumentCluster.id)
         .order_by(DocumentCluster.doc_count.desc())
     )
-    return result.scalars().all()
+    rows = result.all()
+    return [
+        ClusterOut(
+            id=cluster.id,
+            cluster_index=cluster.cluster_index,
+            label=cluster.label,
+            doc_count=cluster.doc_count,
+            page_count=page_count,
+        )
+        for cluster, page_count in rows
+    ]
 
 
 @router.get("/documents/{doc_id}/duplicates", response_model=list[DuplicateEntryOut])
@@ -166,3 +182,56 @@ async def propagate_tag(
 
     await db.commit()
     return {"tagged_count": tagged}
+
+
+@router.get("/productions/{production_id}/leaderboard")
+async def get_leaderboard(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await get_user_role_for_production(db, user, production_id)
+
+    # Views leaderboard (document_viewed actions)
+    views_result = await db.execute(
+        select(AuditLog.user_id, AuditLog.user_email, func.count(AuditLog.id))
+        .where(AuditLog.production_id == production_id)
+        .where(AuditLog.action == "document_viewed")
+        .group_by(AuditLog.user_id, AuditLog.user_email)
+        .order_by(func.count(AuditLog.id).desc())
+    )
+    views = [{"user_id": uid, "email": email, "count": count} for uid, email, count in views_result.all()]
+
+    # Activity leaderboard (notes + tags)
+    notes_result = await db.execute(
+        select(Note.created_by, func.count(Note.id))
+        .join(Document, Note.document_id == Document.id)
+        .where(Document.production_id == production_id)
+        .group_by(Note.created_by)
+    )
+    note_counts = dict(notes_result.all())
+
+    tags_result = await db.execute(
+        select(DocumentTag.applied_by, func.count(DocumentTag.id))
+        .join(Document, DocumentTag.document_id == Document.id)
+        .where(Document.production_id == production_id)
+        .group_by(DocumentTag.applied_by)
+    )
+    tag_counts = dict(tags_result.all())
+
+    # Merge and resolve emails
+    all_user_ids = set(note_counts.keys()) | set(tag_counts.keys())
+    activity = []
+    for uid in all_user_ids:
+        u = await db.get(User, uid)
+        activity.append({
+            "user_id": uid,
+            "email": u.email if u else uid,
+            "display_name": u.display_name if u else None,
+            "notes": note_counts.get(uid, 0),
+            "tags": tag_counts.get(uid, 0),
+            "total": note_counts.get(uid, 0) + tag_counts.get(uid, 0),
+        })
+    activity.sort(key=lambda x: x["total"], reverse=True)
+
+    return {"views": views, "activity": activity}
