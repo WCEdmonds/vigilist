@@ -146,7 +146,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
 
   // Corpus Analysis full-screen mode
   if (showCorpusAnalysis) {
-    return <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onBack={() => setShowCorpusAnalysis(false)} />;
+    return <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onFilterCluster={() => {}} onBack={() => setShowCorpusAnalysis(false)} />;
   }
 
   // Batch review full-screen mode
