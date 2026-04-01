@@ -4,9 +4,11 @@ import type { NoteEntry } from '../types';
 
 interface Props {
   docId: string;
+  mediaTime?: number | null;
+  onSeek?: (time: number) => void;
 }
 
-export default function NotesPanel({ docId }: Props) {
+export default function NotesPanel({ docId, mediaTime: _mediaTime, onSeek: _onSeek }: Props) {
   const [notes, setNotes] = useState<NoteEntry[]>([]);
   const [newContent, setNewContent] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);

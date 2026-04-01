@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 interface Props {
   text: string | null;
   searchQuery?: string;
+  onTitleChanged?: (title: string) => void;
 }
 
 export default function TextPanel({ text, searchQuery }: Props) {

@@ -16,6 +16,11 @@ frontend/dist/
 
 # Firebase
 backend/firebase-service-account.json
+.firebase/
+
+# Plugins/tools
+.superpowers/
+frontend/.claude/
 
 # Storage
 backend/storage/

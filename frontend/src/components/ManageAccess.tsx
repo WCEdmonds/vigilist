@@ -4,10 +4,11 @@ import type { ProductionAccessEntry, PendingInviteEntry } from '../types';
 
 interface Props {
   productionId: number;
+  productionName?: string;
   onClose: () => void;
 }
 
-export default function ManageAccess({ productionId, onClose }: Props) {
+export default function ManageAccess({ productionId, productionName: _productionName, onClose }: Props) {
   const [access, setAccess] = useState<ProductionAccessEntry[]>([]);
   const [invites, setInvites] = useState<PendingInviteEntry[]>([]);
   const [email, setEmail] = useState('');
