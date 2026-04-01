@@ -12,8 +12,12 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "https://ediscover.web.app", "https://ediscover.firebaseapp.com"]
     # Anthropic API key for AI features
     anthropic_api_key: str = ""
+    # Resend email
+    resend_api_key: str = ""
+    resend_from_email: str = "Vigilist <noreply@qndary.com>"
+    app_url: str = "https://ediscover.web.app"
 
-    model_config = {"env_prefix": "VIGILIST_"}
+    model_config = {"env_prefix": "VIGILIST_", "env_file": ".env", "env_file_encoding": "utf-8"}
 
 
 settings = Settings()

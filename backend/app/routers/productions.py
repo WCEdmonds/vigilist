@@ -10,6 +10,7 @@ from app.models import PendingInvite, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.services.audit import log_action
 from app.services.claims import sync_user_claims
+from app.services.email import send_access_granted_email, send_invite_email
 from app.schemas import (
     InviteRequest,
     PendingInviteOut,
@@ -151,6 +152,9 @@ async def invite_user(
         # Sync the invited user's Firebase claims
         await sync_user_claims(db, target_user)
 
+        inviter_name = user.display_name or user.email
+        send_access_granted_email(email, inviter_name, prod.name, body.role)
+
         return {"status": "granted", "email": email}
     else:
         # Create pending invite
@@ -173,6 +177,10 @@ async def invite_user(
         await log_action(db, user, "user_invited", "production", str(production_id),
                          production_id=production_id, details={"email": body.email, "role": body.role})
         await db.commit()
+
+        inviter_name = user.display_name or user.email
+        send_invite_email(email, inviter_name, prod.name, body.role)
+
         return {"status": "invited", "email": email}
 
 
