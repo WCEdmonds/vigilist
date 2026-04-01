@@ -6,9 +6,11 @@ interface Props {
   doc: DocumentDetail;
   onNavigate: (id: string) => void;
   searchQuery?: string;
+  onTitleChanged?: (title: string) => void;
+  docIds?: string[];
 }
 
-export default function DocumentNav({ doc, onNavigate, searchQuery }: Props) {
+export default function DocumentNav({ doc, onNavigate, searchQuery, onTitleChanged: _onTitleChanged, docIds: _docIds }: Props) {
   const [prevId, setPrevId] = useState<string | null>(null);
   const [nextId, setNextId] = useState<string | null>(null);
   const [batesInput, setBatesInput] = useState('');

@@ -420,6 +420,12 @@ export const recordDecision = (resultId: number, decision: string, note?: string
     body: JSON.stringify({ decision, note }),
   });
 
+// ── Leaderboard ──
+
+export function getLeaderboard(productionId: number): Promise<{ views: { user_id: string; email: string; count: number }[]; activity: { user_id: string; email: string; display_name: string | null; notes: number; tags: number; total: number }[] }> {
+  return request(`/api/productions/${productionId}/leaderboard`);
+}
+
 // ── Intelligence ──
 
 export function detectDuplicates(productionId: number): Promise<{ status: string; exact_groups: number; similar_groups: number; total_documents_grouped: number }> {

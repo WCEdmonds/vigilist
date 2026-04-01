@@ -1,0 +1,120 @@
+"""AI-powered document classification for review workflows."""
+
+import json
+import logging
+
+import anthropic
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_CATEGORIES = [
+    {"name": "relevant", "color": "green", "description": "Supports our case theory or relates to key issues"},
+    {"name": "key_document", "color": "blue", "description": "Particularly significant, needs attorney attention"},
+    {"name": "not_relevant", "color": "gray", "description": "Not useful to our case"},
+    {"name": "needs_review", "color": "yellow", "description": "Ambiguous, attorney should examine manually"},
+]
+
+
+def build_system_prompt(categories: list[dict]) -> str:
+    cat_list = "\n".join(f'- "{c["name"]}": {c.get("description", c["name"])}' for c in categories)
+    cat_names = [f'"{c["name"]}"' for c in categories]
+    return f"""You are a legal document review assistant. You classify documents based on the attorney's review criteria.
+
+You MUST respond with a JSON object containing exactly these fields:
+{{
+  "decision": {" | ".join(cat_names)},
+  "confidence": 0-100,
+  "reasoning": "2-4 sentence explanation",
+  "key_excerpts": [{{"text": "exact quote from document", "start_offset": 0, "end_offset": 50}}],
+  "considerations": "any caveats or notes for the reviewer"
+}}
+
+Category definitions:
+{cat_list}
+
+Rules:
+- confidence 0-100: how certain you are about your decision
+- key_excerpts: quote the EXACT text passages that informed your decision, with character offsets
+- Be conservative: when in doubt, use "needs_review"
+- Respond with ONLY the JSON object, no other text"""
+
+
+def build_classification_prompt(review_criteria: str, document_text: str, categories: list[dict] | None = None) -> str:
+    cats = categories or DEFAULT_CATEGORIES
+    cat_names = ", ".join(c["name"] for c in cats)
+    truncated = document_text[:12000]
+    return f"""## Review Criteria
+
+{review_criteria}
+
+## Document Text
+
+{truncated}
+
+Classify this document as one of [{cat_names}] according to the review criteria above. Respond with JSON only."""
+
+
+def parse_classification_response(raw: str) -> dict:
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+
+        data = json.loads(cleaned)
+        return {
+            "decision": data.get("decision", "needs_review"),
+            "confidence": max(0, min(100, int(data.get("confidence", 50)))),
+            "reasoning": data.get("reasoning", "No reasoning provided."),
+            "key_excerpts": data.get("key_excerpts", []),
+            "considerations": data.get("considerations"),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        logger.warning("Failed to parse classification response: %s", e)
+        return {
+            "decision": "needs_review",
+            "confidence": 0,
+            "reasoning": f"Failed to parse AI response: {raw[:200]}",
+            "key_excerpts": [],
+            "considerations": "AI response could not be parsed. Manual review required.",
+        }
+
+
+async def classify_document(
+    review_criteria: str,
+    document_text: str,
+    categories: list[dict] | None = None,
+    model: str = "claude-sonnet-4-6",
+) -> tuple[dict, int]:
+    if not settings.anthropic_api_key:
+        return parse_classification_response("{}"), 0
+
+    cats = categories or DEFAULT_CATEGORIES
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    prompt = build_classification_prompt(review_criteria, document_text, cats)
+
+    try:
+        response = await client.messages.create(
+            model=model,
+            max_tokens=1000,
+            system=build_system_prompt(cats),
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw_text = ""
+        for block in response.content:
+            if block.type == "text":
+                raw_text = block.text
+                break
+
+        total_tokens = response.usage.input_tokens + response.usage.output_tokens
+        result = parse_classification_response(raw_text)
+        return result, total_tokens
+
+    except Exception as e:
+        logger.error("Classification failed: %s", e)
+        return parse_classification_response("{}"), 0
