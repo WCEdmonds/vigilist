@@ -294,6 +294,7 @@ export interface ClusterInfo {
   cluster_index: number;
   label: string | null;
   doc_count: number;
+  page_count: number;
 }
 
 export interface DuplicateEntry {

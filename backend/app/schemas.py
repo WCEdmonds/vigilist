@@ -453,6 +453,7 @@ class ClusterOut(BaseModel):
     cluster_index: int
     label: str | None
     doc_count: int
+    page_count: int = 0
 
     model_config = {"from_attributes": True}
 
