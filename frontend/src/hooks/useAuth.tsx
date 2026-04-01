@@ -15,6 +15,7 @@ interface UserProfile {
   uid: string;
   email: string;
   displayName: string | null;
+  photoURL: string | null;
 }
 
 interface AuthCtx {
@@ -51,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
           displayName: firebaseUser.displayName,
+          photoURL: firebaseUser.photoURL,
         });
       } else {
         setUser(null);
@@ -67,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       uid: cred.user.uid,
       email: cred.user.email || '',
       displayName: cred.user.displayName,
+      photoURL: cred.user.photoURL,
     });
   };
 
@@ -78,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       uid: cred.user.uid,
       email: cred.user.email || '',
       displayName,
+      photoURL: cred.user.photoURL,
     });
   };
 
@@ -88,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       uid: cred.user.uid,
       email: cred.user.email || '',
       displayName: cred.user.displayName,
+      photoURL: cred.user.photoURL,
     });
   };
 
