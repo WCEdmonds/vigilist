@@ -3,10 +3,13 @@ import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  apiKey: "AIzaSyDds56xoCKTcY8NEMMLqoQQZ3hNWB0TVts",
+  authDomain: "ediscover.firebaseapp.com",
+  projectId: "ediscover",
+  storageBucket: "ediscover.firebasestorage.app",
+  messagingSenderId: "634524579649",
+  appId: "1:634524579649:web:42a208267aaffdee9213c0",
+  measurementId: "G-4ZE0MWMDCK",
 };
 
 const app = initializeApp(firebaseConfig);
