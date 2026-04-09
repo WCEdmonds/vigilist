@@ -733,7 +733,29 @@ export default function App() {
 }
 
 function AppContent() {
-  const { user, loading } = useAuth();
+  const { user, loading, error } = useAuth();
+
+  if (error) {
+    return (
+      <div style={{ padding: 40, fontFamily: 'sans-serif', textAlign: 'center', maxWidth: 480, margin: '80px auto' }}>
+        <h2 style={{ marginBottom: 8, color: '#b91c1c' }}>Unable to connect</h2>
+        <p style={{ color: '#6b7280', marginBottom: 16 }}>
+          The app couldn't initialize authentication. This usually means Firebase
+          is misconfigured or unreachable.
+        </p>
+        <pre style={{ background: '#f3f4f6', padding: 12, borderRadius: 8, fontSize: 13, textAlign: 'left', overflowX: 'auto', color: '#991b1b' }}>
+          {error}
+        </pre>
+        <button
+          onClick={() => window.location.reload()}
+          style={{ marginTop: 20, padding: '8px 20px', cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 6, background: 'white' }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (loading) return <div className="loading-center"><span className="spinner spinner-md" /> Loading...</div>;
   if (!user) return <AuthPage />;
   return <AppRouter />;
