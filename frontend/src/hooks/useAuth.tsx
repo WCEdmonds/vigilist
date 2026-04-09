@@ -9,7 +9,7 @@ import {
   type User as FirebaseUser,
 } from 'firebase/auth';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { auth } from '../firebase';
+import { auth, initError } from '../firebase';
 
 interface UserProfile {
   uid: string;
@@ -21,6 +21,7 @@ interface UserProfile {
 interface AuthCtx {
   user: UserProfile | null;
   loading: boolean;
+  error: string | null;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
@@ -43,19 +44,34 @@ async function syncWithBackend(firebaseUser: FirebaseUser): Promise<void> {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(initError);
 
   useEffect(() => {
+    if (initError) {
+      setLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        await syncWithBackend(firebaseUser);
-        setUser({
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || '',
-          displayName: firebaseUser.displayName,
-          photoURL: firebaseUser.photoURL,
-        });
-      } else {
-        setUser(null);
+      try {
+        if (firebaseUser) {
+          try {
+            await syncWithBackend(firebaseUser);
+          } catch {
+            // Backend sync failed — still allow auth to proceed so the
+            // login screen doesn't hang. API calls will fail individually.
+          }
+          setUser({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            displayName: firebaseUser.displayName,
+            photoURL: firebaseUser.photoURL,
+          });
+        } else {
+          setUser(null);
+        }
+      } catch (err) {
+        console.error('Auth state error:', err);
+        setError(err instanceof Error ? err.message : 'Authentication error');
       }
       setLoading(false);
     });
@@ -108,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, loginWithGoogle, logout, getIdToken }}>
+    <AuthContext.Provider value={{ user, loading, error, login, register, loginWithGoogle, logout, getIdToken }}>
       {children}
     </AuthContext.Provider>
   );
