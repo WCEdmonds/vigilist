@@ -862,3 +862,250 @@
   color: rgba(255, 255, 255, 0.4);
   font-style: italic;
 }
+
+/* ══════════════════════════════════════════
+   RESPONSIVE — Mobile & Tablet
+   ══════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+
+  /* ── Utility: hide desktop-only elements ── */
+  .desktop-only {
+    display: none !important;
+  }
+
+  /* ── Hide red margin line on mobile ── */
+  body::after {
+    display: none;
+  }
+
+  /* ── Header: compact single row ── */
+  .app-header {
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
+    height: var(--header-height);
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .app-header::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-header .logo {
+    font-size: var(--text-lg);
+    flex-shrink: 0;
+  }
+
+  .app-header .user-menu {
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
+  .app-header .btn-header {
+    padding: 3px var(--space-2);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  /* ── Content area: reduce side padding ── */
+  .content-area {
+    padding: 0 var(--space-3);
+  }
+
+  /* ── Section header: stack title & filters ── */
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: var(--space-3) 0 var(--space-2);
+  }
+
+  .section-header > div:last-child {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+  }
+  .section-header > div:last-child::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ── Document table: scrollable, compact ── */
+  .card:has(.doc-table) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .doc-table th,
+  .doc-table td {
+    padding: var(--space-1-5) var(--space-2);
+    font-size: var(--text-xs);
+  }
+
+  /* Hide checkbox column on mobile */
+  .doc-table th:first-child,
+  .doc-table td:first-child {
+    display: none;
+  }
+
+  /* Hide notes column on mobile */
+  .doc-table th:last-child,
+  .doc-table td:last-child {
+    display: none;
+  }
+
+  .doc-table .bates-cell {
+    font-size: 10px;
+  }
+
+  /* ── Grid view: smaller cards ── */
+  .doc-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: var(--space-2);
+  }
+
+  /* ── Search bar ── */
+  .search-row {
+    flex-wrap: wrap;
+  }
+
+  /* ── Pagination: wrap ── */
+  .pagination {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-2);
+  }
+
+  /* ── Login card: responsive width ── */
+  .login-card {
+    width: calc(100vw - var(--space-6));
+    max-width: 380px;
+    padding: var(--space-6);
+  }
+
+  /* ── Modals: near full-width ── */
+  .modal-panel {
+    width: calc(100vw - var(--space-4));
+    max-width: 480px;
+    max-height: 85vh;
+  }
+
+  .modal-panel.modal-large {
+    width: calc(100vw - var(--space-4));
+    max-height: 90vh;
+  }
+
+  /* ── Welcome page: single column ── */
+  .welcome-features {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .welcome-title {
+    font-size: var(--text-2xl);
+  }
+
+  .welcome-content {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  /* ── Production picker: single column ── */
+  .production-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* ── Viewer: stack vertically ── */
+  .viewer-layout {
+    flex-direction: column;
+  }
+
+  .viewer-left-sidebar {
+    width: 100%;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--color-neutral-200);
+    overflow-y: visible;
+  }
+
+  .viewer-sidebar {
+    width: 100%;
+    max-height: none;
+    border-left: none;
+    border-top: 1px solid var(--color-neutral-200);
+  }
+
+  /* ── Doc nav: compact ── */
+  .doc-nav {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .doc-nav .jump-bates {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  /* ── Image viewport ── */
+  .image-viewport {
+    padding: var(--space-2);
+  }
+
+  .image-toolbar {
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    padding: var(--space-1-5) var(--space-2);
+  }
+
+  /* ── Toast: full width at bottom ── */
+  .toast-container {
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: var(--space-3);
+  }
+
+  .toast {
+    max-width: 100%;
+  }
+
+  /* ── Floating bar: full width ── */
+  .floating-bar {
+    left: var(--space-3);
+    right: var(--space-3);
+    transform: none;
+    bottom: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    justify-content: center;
+  }
+
+  @keyframes float-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Empty state: less padding ── */
+  .empty-state {
+    padding: var(--space-6) var(--space-3);
+  }
+
+  /* ── Tag bar ── */
+  .tag-bar {
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  /* ── Tabs: scrollable ── */
+  .tabs,
+  .viewer-center-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar,
+  .viewer-center-tabs::-webkit-scrollbar {
+    display: none;
+  }
+}
