@@ -205,7 +205,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   }, [docId, hasNative, hasImages]);
 
   if (error) return <div style={{ padding: 32, color: 'var(--color-danger-600)' }}>Error: {error}</div>;
-  if (!doc) return <div className="loading-center"><span className="spinner spinner-md" /> Loading document...</div>;
+  if (!doc) return (
+    <div className="loading-fullscreen">
+      <span className="spinner" />
+      <div>Loading document…</div>
+    </div>
+  );
 
   const showCenterTabs = hasNative && hasImages;
 
