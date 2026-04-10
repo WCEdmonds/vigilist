@@ -41,7 +41,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content modal-large" onClick={e => e.stopPropagation()}>
+      <div className="modal-panel modal-large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Review Dashboard</h2>
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
