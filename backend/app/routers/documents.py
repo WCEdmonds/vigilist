@@ -310,7 +310,10 @@ async def get_document_pdf(
 ):
     """Generate a multi-page PDF from the document's page images."""
     import io
-    from PIL import Image as PILImage
+    import logging
+    from PIL import Image as PILImage, UnidentifiedImageError
+
+    logger = logging.getLogger(__name__)
 
     accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
@@ -324,34 +327,59 @@ async def get_document_pdf(
     def load_image(raw_path: str) -> PILImage.Image | None:
         if not raw_path:
             return None
-        if raw_path.startswith("productions/"):
-            from app.services.storage import get_download_bytes
-            try:
+        try:
+            if raw_path.startswith("productions/"):
+                from app.services.storage import get_download_bytes
                 data = get_download_bytes(raw_path)
-            except Exception:
+                return PILImage.open(io.BytesIO(data))
+            path = Path(raw_path.replace("\\", "/")).resolve()
+            if not path.exists():
+                logger.warning("PDF build: local image missing: %s", raw_path)
                 return None
-            return PILImage.open(io.BytesIO(data))
-        path = Path(raw_path.replace("\\", "/")).resolve()
-        if not path.exists():
+            return PILImage.open(str(path))
+        except (UnidentifiedImageError, OSError) as e:
+            logger.warning("PDF build: could not open image %s: %s", raw_path, e)
             return None
-        return PILImage.open(str(path))
+        except Exception as e:
+            logger.exception("PDF build: unexpected error loading %s: %s", raw_path, e)
+            return None
 
     images: list[PILImage.Image] = []
+    load_errors = 0
     for raw in doc.image_paths:
         img = load_image(raw)
         if img is None:
+            load_errors += 1
             continue
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        images.append(img)
+        try:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            images.append(img)
+        except Exception as e:
+            logger.exception("PDF build: failed to convert image %s: %s", raw, e)
+            load_errors += 1
 
     if not images:
-        raise HTTPException(status_code=404, detail="No readable page images")
+        logger.error(
+            "PDF build: no readable pages for doc %s (paths=%d, failures=%d)",
+            doc.id, len(doc.image_paths), load_errors,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Could not build PDF: none of the page images could be read.",
+        )
 
-    buf = io.BytesIO()
-    first, rest = images[0], images[1:]
-    first.save(buf, format="PDF", save_all=True, append_images=rest, resolution=150.0)
-    pdf_bytes = buf.getvalue()
+    try:
+        buf = io.BytesIO()
+        first, rest = images[0], images[1:]
+        first.save(buf, format="PDF", save_all=True, append_images=rest, resolution=150.0)
+        pdf_bytes = buf.getvalue()
+    except Exception as e:
+        logger.exception("PDF build: Pillow save failed for doc %s: %s", doc.id, e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"PDF generation failed: {e}",
+        )
 
     filename = f"{doc.bates_begin}.pdf"
     return Response(
