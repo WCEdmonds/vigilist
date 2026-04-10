@@ -116,6 +116,18 @@ export function getNativeUrl(docId: string): Promise<{ url: string; extension: s
   return request(`/api/documents/${docId}/native-url`);
 }
 
+export async function fetchDocumentPdf(docId: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(`/api/documents/${docId}/pdf`, { headers });
+  if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
+  return res.blob();
+}
+
 export const streamUrl = (docId: string) =>
   `/api/documents/${docId}/stream`;
 
