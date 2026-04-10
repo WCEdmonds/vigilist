@@ -28,7 +28,12 @@ export default function ProductionPicker({ productions, onSelect, onIngest }: Pr
 
         <div className="production-grid">
           {productions.map(p => (
-            <div key={p.id} className="production-card card" onClick={() => onSelect(p)}>
+            <button
+              key={p.id}
+              type="button"
+              className="production-card card"
+              onClick={() => onSelect(p)}
+            >
               <div className="production-card-name">{p.name}</div>
               {p.description && <div className="production-card-desc">{p.description}</div>}
               <div className="production-card-meta">
@@ -38,7 +43,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest }: Pr
                   <span className="badge badge-gray">Shared</span>
                 )}
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </div>
