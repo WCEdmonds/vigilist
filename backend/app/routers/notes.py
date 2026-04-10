@@ -14,6 +14,27 @@ from app.schemas import NoteCreate, NoteOut, NoteUpdate
 router = APIRouter(prefix="/api", tags=["notes"])
 
 
+def _build_note_out(note: Note, email: str, display_name: str | None) -> NoteOut:
+    return NoteOut(
+        id=note.id,
+        document_id=note.document_id,
+        content=note.content,
+        timestamp=note.timestamp,
+        created_by=note.created_by,
+        created_by_email=email,
+        created_by_display_name=display_name,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )
+
+
+async def _note_out_for(db: AsyncSession, note: Note) -> NoteOut:
+    creator = await db.get(User, note.created_by)
+    email = creator.email if creator else note.created_by
+    display_name = creator.display_name if creator else None
+    return _build_note_out(note, email, display_name)
+
+
 @router.get("/documents/{doc_id}/notes", response_model=list[NoteOut])
 async def list_notes(
     doc_id: UUID,
@@ -28,7 +49,19 @@ async def list_notes(
         raise HTTPException(status_code=403, detail="Access denied")
     query = select(Note).where(Note.document_id == doc_id).order_by(Note.created_at.desc())
     result = await db.execute(query)
-    return result.scalars().all()
+    notes = result.scalars().all()
+
+    # Resolve unique user emails/display_names in one pass (mirrors annotations router).
+    user_cache: dict[str, User | None] = {}
+    out: list[NoteOut] = []
+    for note in notes:
+        if note.created_by not in user_cache:
+            user_cache[note.created_by] = await db.get(User, note.created_by)
+        creator = user_cache[note.created_by]
+        email = creator.email if creator else note.created_by
+        display_name = creator.display_name if creator else None
+        out.append(_build_note_out(note, email, display_name))
+    return out
 
 
 @router.post("/documents/{doc_id}/notes", response_model=NoteOut)
@@ -55,7 +88,7 @@ async def create_note(
                      production_id=doc.production_id, details={"document_id": str(doc_id)})
     await db.commit()
     await db.refresh(note)
-    return note
+    return _build_note_out(note, user.email, user.display_name)
 
 
 @router.put("/notes/{note_id}", response_model=NoteOut)
@@ -81,7 +114,7 @@ async def update_note(
                      details={"document_id": str(note.document_id)})
     await db.commit()
     await db.refresh(note)
-    return note
+    return await _note_out_for(db, note)
 
 
 @router.delete("/notes/{note_id}")
