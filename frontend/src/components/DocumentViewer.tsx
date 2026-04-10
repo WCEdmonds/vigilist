@@ -69,6 +69,25 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     if (doc) setDoc({ ...doc, tags });
   }, [doc]);
 
+  const handleDownload = async () => {
+    if (!doc) return;
+    try {
+      if (doc.native_path) {
+        const { getNativeUrl } = await import('../api/client');
+        const { url, filename } = await getNativeUrl(doc.id);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+      } else if (doc.image_paths.length > 0) {
+        const { fetchDocumentPdf } = await import('../api/client');
+        const blob = await fetchDocumentPdf(doc.id);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${doc.bates_begin}.pdf`; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } catch {}
+  };
+
   const handleAutoAdvance = useCallback(() => {
     if (nextId) onNavigate(nextId);
   }, [nextId, onNavigate]);
@@ -240,7 +259,15 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
             <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.bates_begin}</div>
             {doc.title && <div style={{ fontSize: 11, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</div>}
           </div>
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <button
+              onClick={handleDownload}
+              aria-label="Download"
+              title="Download"
+              style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
+            >
+              ↓
+            </button>
             <button disabled={!mobilePrev} onClick={() => mobilePrev && onNavigate(mobilePrev)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', opacity: mobilePrev ? 1 : 0.3 }}>←</button>
             {docIds && curIdx >= 0 && <span style={{ fontSize: 11, opacity: 0.5, alignSelf: 'center' }}>{curIdx + 1}/{docIds.length}</span>}
             <button disabled={!mobileNext} onClick={() => mobileNext && onNavigate(mobileNext)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', borderRadius: 4, padding: '6px 10px', cursor: 'pointer', opacity: mobileNext ? 1 : 0.3 }}>→</button>
@@ -324,22 +351,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         <button className="btn-header" onClick={onBack}>← Back</button>
         <span className="logo">Vigilist</span>
         <div className="user-menu">
-          <button className="btn-header" onClick={async () => {
-            try {
-              if (doc.native_path) {
-                const { url, filename } = await import('../api/client').then(m => m.getNativeUrl(doc.id));
-                const a = document.createElement('a');
-                a.href = url; a.download = filename; a.click();
-              } else if (doc.image_paths.length > 0) {
-                const { fetchDocumentPdf } = await import('../api/client');
-                const blob = await fetchDocumentPdf(doc.id);
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url; a.download = `${doc.bates_begin}.pdf`; a.click();
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
-              }
-            } catch {}
-          }}>Download File</button>
+          <button className="btn-header" onClick={handleDownload}>Download File</button>
         </div>
       </div>
 
