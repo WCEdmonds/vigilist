@@ -331,10 +331,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                 const a = document.createElement('a');
                 a.href = url; a.download = filename; a.click();
               } else if (doc.image_paths.length > 0) {
-                const { fetchImageBlob } = await import('../api/client');
-                const url = await fetchImageBlob(doc.id, 1);
+                const { fetchDocumentPdf } = await import('../api/client');
+                const blob = await fetchDocumentPdf(doc.id);
+                const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url; a.download = `${doc.bates_begin}.jpg`; a.click();
+                a.href = url; a.download = `${doc.bates_begin}.pdf`; a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
               }
             } catch {}
           }}>Download File</button>
