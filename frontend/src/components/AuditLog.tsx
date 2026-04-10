@@ -42,8 +42,8 @@ export default function AuditLog({ productionId, onClose }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-panel modal-large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Audit Log</h2>
-          <button onClick={onClose}>&times;</button>
+          <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Audit Log</h2>
+          <button className="modal-close-btn" aria-label="Close" onClick={onClose}>&times;</button>
         </div>
 
         <div className="modal-body">

@@ -30,7 +30,9 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
     for (let p = 1; p <= pageCount; p++) {
       fetchImageBlob(docId, p, 1200).then(url => {
         if (!cancelled) setBlobUrls(prev => ({ ...prev, [p]: url }));
-      }).catch(() => {});
+      }).catch(e => {
+        if (!cancelled) console.warn(`fetchImageBlob page ${p} failed:`, e);
+      });
     }
     return () => {
       cancelled = true;
@@ -102,8 +104,8 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
                 draggable={false}
               />
             ) : (
-              <div style={{ width: imgWidth, height: imgWidth * 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-neutral-100)' }}>
-                <span className="spinner spinner-sm" />
+              <div style={{ width: imgWidth, height: imgWidth * 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-2)', background: 'var(--color-neutral-100)', color: 'var(--color-neutral-500)', fontSize: 'var(--text-xs)' }}>
+                <span className="spinner spinner-sm" /> Loading page {i + 1}…
               </div>
             )}
             <AnnotationOverlay

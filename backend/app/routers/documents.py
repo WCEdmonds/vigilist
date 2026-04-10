@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -570,6 +571,143 @@ async def get_document_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class BulkZipRequest(BaseModel):
+    document_ids: list[UUID]
+
+
+@router.post("/bulk-zip")
+async def bulk_zip_documents(
+    body: BulkZipRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Package multiple documents into a single ZIP file for download.
+    Native files are included as-is; documents without a native fall back
+    to a PDF render of their page images."""
+    import io
+    import logging
+    import zipfile
+    from PIL import Image as PILImage, UnidentifiedImageError
+
+    logger = logging.getLogger(__name__)
+
+    if not body.document_ids:
+        raise HTTPException(status_code=400, detail="No documents selected")
+    if len(body.document_ids) > 500:
+        raise HTTPException(status_code=400, detail="Too many documents (max 500 per bulk download)")
+
+    accessible = await get_accessible_production_ids(db, user)
+
+    # Load all requested docs in one query and filter by access.
+    result = await db.execute(select(Document).where(Document.id.in_(body.document_ids)))
+    docs = [d for d in result.scalars().all() if d.production_id in accessible]
+
+    if not docs:
+        raise HTTPException(status_code=404, detail="None of the requested documents were found or accessible")
+
+    from app.services.storage import get_download_bytes
+
+    # Ensure unique filenames within the zip (two docs can share a bates prefix).
+    used_names: set[str] = set()
+
+    def unique_name(base: str) -> str:
+        name = base
+        i = 1
+        while name in used_names:
+            stem, _, ext = base.rpartition(".")
+            name = f"{stem}_{i}.{ext}" if stem else f"{base}_{i}"
+            i += 1
+        used_names.add(name)
+        return name
+
+    def render_pdf_from_images(doc: Document) -> bytes | None:
+        if not doc.image_paths:
+            return None
+        imgs: list[PILImage.Image] = []
+        for raw in doc.image_paths:
+            if not raw:
+                continue
+            try:
+                if raw.startswith("productions/"):
+                    data = get_download_bytes(raw)
+                    img = PILImage.open(io.BytesIO(data))
+                else:
+                    p = Path(raw.replace("\\", "/")).resolve()
+                    if not p.exists():
+                        continue
+                    img = PILImage.open(str(p))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                imgs.append(img)
+            except (UnidentifiedImageError, OSError) as e:
+                logger.warning("bulk-zip: could not open image %s: %s", raw, e)
+                continue
+        if not imgs:
+            return None
+        try:
+            buf = io.BytesIO()
+            first, rest = imgs[0], imgs[1:]
+            first.save(buf, format="PDF", save_all=True, append_images=rest, resolution=150.0)
+            return buf.getvalue()
+        except Exception as e:
+            logger.exception("bulk-zip: PDF render failed for doc %s: %s", doc.id, e)
+            return None
+
+    zip_buf = io.BytesIO()
+    skipped: list[str] = []
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for doc in docs:
+            try:
+                if doc.native_path:
+                    # Native file as-is.
+                    try:
+                        if doc.native_path.startswith("productions/"):
+                            data = get_download_bytes(doc.native_path)
+                        else:
+                            p = Path(doc.native_path.replace("\\", "/")).resolve()
+                            if not p.exists():
+                                skipped.append(doc.bates_begin)
+                                continue
+                            data = p.read_bytes()
+                        ext = Path(doc.native_path).suffix or ".bin"
+                        name = unique_name(f"{doc.bates_begin}{ext}")
+                        zf.writestr(name, data)
+                        continue
+                    except Exception as e:
+                        logger.warning("bulk-zip: native fetch failed for %s: %s", doc.bates_begin, e)
+                        # Fall through to PDF render below.
+
+                pdf = render_pdf_from_images(doc)
+                if pdf:
+                    name = unique_name(f"{doc.bates_begin}.pdf")
+                    zf.writestr(name, pdf)
+                else:
+                    skipped.append(doc.bates_begin)
+            except Exception as e:
+                logger.exception("bulk-zip: unexpected failure for %s: %s", doc.bates_begin, e)
+                skipped.append(doc.bates_begin)
+
+        if skipped:
+            zf.writestr(
+                "SKIPPED.txt",
+                "The following documents could not be included:\n\n"
+                + "\n".join(skipped),
+            )
+
+    await log_action(
+        db, user, "bulk_download", "document",
+        details={"requested": len(body.document_ids), "included": len(docs) - len(skipped), "skipped": len(skipped)},
+    )
+    await db.commit()
+
+    zip_bytes = zip_buf.getvalue()
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="vigilist_documents.zip"'},
     )
 
 

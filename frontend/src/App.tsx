@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { bulkTag, exportDocsCsv, exportSearchCsv, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AIReviewPage from './components/AIReviewPage';
@@ -15,7 +15,7 @@ import Dashboard from './components/Dashboard';
 import SearchBar from './components/SearchBar';
 import SearchResults from './components/SearchResults';
 import TopicGroups from './components/TopicGroups';
-import { ToastContainer } from './components/Toast';
+import { ToastContainer, showToast } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import UserAvatar from './components/UserAvatar';
@@ -72,9 +72,9 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
 
   useEffect(() => {
     loadDocuments();
-    getTags().then(setAllTags).catch(() => {});
-    getMyBatches(production.id).then(setMyBatches).catch(() => {});
-    getClusters(production.id).then(setClusters).catch(() => {});
+    getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
+    getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
+    getClusters(production.id).then(setClusters).catch(e => console.warn('getClusters failed:', e));
   }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId]);
 
   const loadDocuments = async (page = 1) => {
@@ -84,6 +84,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
+    } catch (e: any) {
+      showToast(`Could not load documents: ${e?.message || 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -108,6 +110,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, undefined, mode);
       setSearchResults(res.results);
       setSearchTotal(res.total);
+    } catch (e: any) {
+      showToast(`Search failed: ${e?.message || 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -130,13 +134,65 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     });
   }, []);
 
+  const [newTagName, setNewTagName] = useState('');
+  const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [bulkTagging, setBulkTagging] = useState(false);
+
   const handleBulkTag = async (tagId: number) => {
-    if (selectedIds.size === 0) return;
-    await bulkTag(Array.from(selectedIds), [tagId]);
-    setSelectedIds(new Set());
-    setShowBulkTagPicker(false);
-    if (hasSearched) handleSearch(searchQuery);
-    else loadDocuments(docPage);
+    if (selectedIds.size === 0 || bulkTagging) return;
+    setBulkTagging(true);
+    try {
+      await bulkTag(Array.from(selectedIds), [tagId]);
+      setSelectedIds(new Set());
+      setShowBulkTagPicker(false);
+      showToast(`Tagged ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
+      if (hasSearched) handleSearch(searchQuery);
+      else loadDocuments(docPage);
+    } catch (e: any) {
+      showToast(`Could not apply tag: ${e?.message || 'unknown error'}`, 'error');
+    } finally {
+      setBulkTagging(false);
+    }
+  };
+
+  const handleBulkCreateTag = async () => {
+    const name = newTagName.trim();
+    if (!name || bulkTagging) return;
+    setBulkTagging(true);
+    try {
+      const tag = await createTag({ name, category: 'custom', color: 'blue' });
+      setAllTags(prev => [...prev, tag]);
+      await bulkTag(Array.from(selectedIds), [tag.id]);
+      setSelectedIds(new Set());
+      setShowBulkTagPicker(false);
+      setNewTagName('');
+      showToast(`Created tag "${name}" and applied to ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
+      if (hasSearched) handleSearch(searchQuery);
+      else loadDocuments(docPage);
+    } catch (e: any) {
+      showToast(`Could not create tag: ${e?.message || 'unknown error'}`, 'error');
+    } finally {
+      setBulkTagging(false);
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    if (selectedIds.size === 0 || bulkDownloading) return;
+    setBulkDownloading(true);
+    try {
+      const blob = await fetchBulkZip(Array.from(selectedIds));
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'vigilist_documents.zip';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast(`Downloaded ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
+    } catch (e: any) {
+      showToast(`Could not build download: ${e?.message || 'unknown error'}`, 'error');
+    } finally {
+      setBulkDownloading(false);
+    }
   };
 
   // AI Review full-screen mode
@@ -157,7 +213,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         onClose={() => setActiveBatchId(null)}
         onComplete={() => {
           setActiveBatchId(null);
-          getMyBatches(production.id).then(setMyBatches).catch(() => {});
+          getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
         }}
       />
     );
@@ -240,7 +296,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 const { getRandomDocument } = await import('./api/client');
                 const { id } = await getRandomDocument(production.id);
                 setViewDocId(id);
-              } catch {}
+              } catch (e: any) {
+                showToast(
+                  e?.message?.includes('404')
+                    ? 'No documents in this production yet.'
+                    : `Could not pick a random document: ${e?.message || 'unknown error'}`,
+                  'error',
+                );
+              }
             }}
             style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
           >
@@ -283,7 +346,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         {loading && (
           <div className="loading-center">
             <span className="spinner spinner-md" />
-            <span>Loading...</span>
+            <span>{hasSearched ? 'Searching…' : 'Loading documents…'}</span>
           </div>
         )}
 
@@ -332,7 +395,9 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 <span className="section-count">{docTotal}</span>
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                <label htmlFor="filter-tag" className="visually-hidden">Filter by tag</label>
                 <select
+                  id="filter-tag"
                   className="input input-sm"
                   style={{ width: 'auto', minWidth: 120 }}
                   value={filterTagId ?? ''}
@@ -343,7 +408,9 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                     <option key={t.id} value={t.id}>{t.category}: {t.name}</option>
                   ))}
                 </select>
+                <label htmlFor="filter-type" className="visually-hidden">Filter by file type</label>
                 <select
+                  id="filter-type"
                   className="input input-sm"
                   style={{ width: 'auto', minWidth: 120 }}
                   value={filterFileType}
@@ -359,7 +426,9 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                   <option value="image">Image (PNG/JPG)</option>
                   <option value="native">All native files</option>
                 </select>
+                <label htmlFor="sort-by" className="visually-hidden">Sort order</label>
                 <select
+                  id="sort-by"
                   className="input input-sm"
                   style={{ width: 'auto', minWidth: 100 }}
                   value={sortBy}
@@ -620,33 +689,75 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       {/* Floating bulk action bar */}
       {selectedIds.size > 0 && (
         <div className="floating-bar">
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{selectedIds.size} selected</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
+            {selectedIds.size} selected
+          </span>
           <div className="divider" style={{ background: 'rgba(255,255,255,0.15)', height: 20 }} />
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={handleBulkDownload}
+            disabled={bulkDownloading}
+          >
+            {bulkDownloading ? 'Preparing…' : 'Download'}
+          </button>
           <div style={{ position: 'relative' }}>
             <button
               className="btn btn-sm btn-secondary"
               onClick={() => setShowBulkTagPicker(!showBulkTagPicker)}
+              disabled={bulkTagging}
             >
               Tag
             </button>
             {showBulkTagPicker && (
-              <div className="dropdown" style={{ bottom: '100%', left: 0, marginBottom: 8, minWidth: 220 }}>
-                {allTags.map(tag => (
-                  <div
-                    key={tag.id}
-                    className="dropdown-item"
-                    onClick={() => handleBulkTag(tag.id)}
+              <div className="dropdown" style={{ bottom: '100%', left: 0, marginBottom: 8, minWidth: 260, maxHeight: 320, overflowY: 'auto' }}>
+                <div style={{ padding: 'var(--space-2)', borderBottom: '1px solid var(--color-neutral-100)' }}>
+                  <form
+                    onSubmit={(e) => { e.preventDefault(); handleBulkCreateTag(); }}
+                    style={{ display: 'flex', gap: 'var(--space-1)' }}
                   >
-                    <span className={`badge ${COLOR_MAP[tag.color] || 'badge-gray'}`}>{tag.name}</span>
+                    <label htmlFor="bulk-new-tag" className="visually-hidden">New tag name</label>
+                    <input
+                      id="bulk-new-tag"
+                      className="input input-sm"
+                      placeholder="+ New tag…"
+                      value={newTagName}
+                      onChange={e => setNewTagName(e.target.value)}
+                      style={{ flex: 1 }}
+                      disabled={bulkTagging}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary btn-xs"
+                      disabled={!newTagName.trim() || bulkTagging}
+                    >
+                      Add
+                    </button>
+                  </form>
+                </div>
+                {allTags.length === 0 ? (
+                  <div className="empty-state" style={{ padding: 'var(--space-3)', fontSize: 'var(--text-xs)' }}>
+                    No tags yet — type above to create one.
                   </div>
-                ))}
+                ) : (
+                  allTags.map(tag => (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      className="dropdown-item"
+                      onClick={() => handleBulkTag(tag.id)}
+                      disabled={bulkTagging}
+                      style={{ background: 'transparent', border: 'none', width: '100%', textAlign: 'left', cursor: 'pointer', font: 'inherit' }}
+                    >
+                      <span className={`badge ${COLOR_MAP[tag.color] || 'badge-gray'}`}>{tag.name}</span>
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>
           <button
             className="btn btn-sm btn-ghost"
-            style={{ color: 'var(--color-neutral-300)' }}
-            onClick={() => { setSelectedIds(new Set()); setShowBulkTagPicker(false); }}
+            onClick={() => { setSelectedIds(new Set()); setShowBulkTagPicker(false); setNewTagName(''); }}
           >
             Clear
           </button>
@@ -670,8 +781,11 @@ function AppRouter() {
       setProductions(prods);
       if (prods.length === 1) setActiveProduction(prods[0]);
       else if (prods.length === 0) setActiveProduction(null);
-    } catch {}
-    setProdLoading(false);
+    } catch (e: any) {
+      showToast(`Could not load productions: ${e?.message || 'unknown error'}`, 'error');
+    } finally {
+      setProdLoading(false);
+    }
   };
 
   useEffect(() => { loadProductions(); }, []);
@@ -682,7 +796,7 @@ function AppRouter() {
   };
 
   if (prodLoading) {
-    return <div className="loading-center"><span className="spinner spinner-md" /> Loading...</div>;
+    return <div className="loading-center"><span className="spinner spinner-md" /> Loading productions…</div>;
   }
 
   if (productions.length === 0) {
@@ -757,7 +871,7 @@ function AppContent() {
     );
   }
 
-  if (loading) return <div className="loading-center"><span className="spinner spinner-md" /> Loading...</div>;
+  if (loading) return <div className="loading-center"><span className="spinner spinner-md" /> Signing you in…</div>;
   if (!user) return <AuthPage />;
   return <AppRouter />;
 }
