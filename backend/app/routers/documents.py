@@ -10,6 +10,14 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Annotation, Document, DocumentTag, Note, User
+
+# Pin colors used by both the viewer overlay and the burned-in PDF pins.
+PDF_PIN_COLORS: dict[str, tuple[int, int, int]] = {
+    "red": (229, 62, 62),
+    "yellow": (236, 201, 75),
+    "green": (72, 187, 120),
+    "blue": (66, 153, 225),
+}
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
@@ -308,10 +316,12 @@ async def get_document_pdf(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Generate a multi-page PDF from the document's page images."""
+    """Generate a multi-page PDF from the document's page images,
+    with any annotations burned in as numbered pins plus an annotation
+    index appended at the end."""
     import io
     import logging
-    from PIL import Image as PILImage, UnidentifiedImageError
+    from PIL import Image as PILImage, ImageDraw, ImageFont, UnidentifiedImageError
 
     logger = logging.getLogger(__name__)
 
@@ -344,9 +354,11 @@ async def get_document_pdf(
             logger.exception("PDF build: unexpected error loading %s: %s", raw_path, e)
             return None
 
-    images: list[PILImage.Image] = []
+    # Load pages, tracking the original 1-based page number so annotation
+    # page_num keeps pointing at the right image even if some pages fail.
+    loaded: list[tuple[int, PILImage.Image]] = []
     load_errors = 0
-    for raw in doc.image_paths:
+    for idx, raw in enumerate(doc.image_paths, start=1):
         img = load_image(raw)
         if img is None:
             load_errors += 1
@@ -354,12 +366,12 @@ async def get_document_pdf(
         try:
             if img.mode != "RGB":
                 img = img.convert("RGB")
-            images.append(img)
+            loaded.append((idx, img))
         except Exception as e:
             logger.exception("PDF build: failed to convert image %s: %s", raw, e)
             load_errors += 1
 
-    if not images:
+    if not loaded:
         logger.error(
             "PDF build: no readable pages for doc %s (paths=%d, failures=%d)",
             doc.id, len(doc.image_paths), load_errors,
@@ -369,9 +381,181 @@ async def get_document_pdf(
             detail="Could not build PDF: none of the page images could be read.",
         )
 
+    # Load annotations and resolve author display names once.
+    ann_result = await db.execute(
+        select(Annotation)
+        .where(Annotation.document_id == doc.id)
+        .order_by(Annotation.page_num, Annotation.created_at)
+    )
+    annotations = list(ann_result.scalars().all())
+
+    by_page: dict[int, list[Annotation]] = {}
+    for a in annotations:
+        by_page.setdefault(a.page_num, []).append(a)
+
+    author_names: dict[str, str] = {}
+    if annotations:
+        unique_ids = {a.created_by for a in annotations}
+        for uid in unique_ids:
+            u = await db.get(User, uid)
+            if u:
+                author_names[uid] = u.display_name or u.email or uid
+            else:
+                author_names[uid] = uid
+
+    # Fonts — DejaVu is installed in the Dockerfile; fall back to PIL's
+    # built-in bitmap font if it's missing (dev without the TTF installed).
+    def _load_font(path: str, size: int) -> ImageFont.ImageFont:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    DEJAVU = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    DEJAVU_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+    # Burn pins into each page image, sized relative to the page so they
+    # stay readable across both small and large-format scans.
+    try:
+        for page_num, img in loaded:
+            page_anns = by_page.get(page_num)
+            if not page_anns:
+                continue
+            draw = ImageDraw.Draw(img)
+            pin_radius = max(14, min(img.width, img.height) // 60)
+            pin_font = _load_font(DEJAVU_BOLD, max(12, pin_radius))
+            for i, a in enumerate(page_anns, start=1):
+                cx = a.x_pct / 100.0 * img.width
+                cy = a.y_pct / 100.0 * img.height
+                color = PDF_PIN_COLORS.get(a.color, PDF_PIN_COLORS["blue"])
+                draw.ellipse(
+                    (cx - pin_radius, cy - pin_radius, cx + pin_radius, cy + pin_radius),
+                    fill=color,
+                    outline="white",
+                    width=max(2, pin_radius // 6),
+                )
+                draw.text((cx, cy), str(i), fill="white", anchor="mm", font=pin_font)
+    except Exception as e:
+        logger.exception("PDF build: failed to draw annotation pins: %s", e)
+        # Keep going — we'd rather ship a plain PDF than fail the download.
+
+    # Build the annotation index pages (appended after the document).
+    def _wrap(text: str, font, max_width: int, draw: ImageDraw.ImageDraw) -> list[str]:
+        lines: list[str] = []
+        for paragraph in text.splitlines() or [""]:
+            words = paragraph.split()
+            if not words:
+                lines.append("")
+                continue
+            cur = ""
+            for w in words:
+                trial = f"{cur} {w}".strip()
+                bbox = draw.textbbox((0, 0), trial, font=font)
+                if bbox[2] - bbox[0] <= max_width:
+                    cur = trial
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = w
+            if cur:
+                lines.append(cur)
+        return lines
+
+    def _build_index_pages() -> list[PILImage.Image]:
+        if not annotations:
+            return []
+        page_w, page_h = 1240, 1754  # A4 @ ~150 DPI
+        margin = 80
+        title_font = _load_font(DEJAVU_BOLD, 36)
+        head_font = _load_font(DEJAVU_BOLD, 22)
+        body_font = _load_font(DEJAVU, 16)
+        meta_font = _load_font(DEJAVU, 13)
+        line_h = 22
+        meta_line_h = 18
+        pin_r = 14
+
+        pages: list[PILImage.Image] = []
+
+        def new_page(first: bool) -> tuple[PILImage.Image, ImageDraw.ImageDraw, int]:
+            img = PILImage.new("RGB", (page_w, page_h), "white")
+            d = ImageDraw.Draw(img)
+            y_pos = margin
+            if first:
+                d.text((margin, y_pos), "Annotations", fill="black", font=title_font)
+                y_pos += 52
+                d.text(
+                    (margin, y_pos),
+                    f"{doc.bates_begin} · {len(annotations)} annotation"
+                    f"{'' if len(annotations) == 1 else 's'}",
+                    fill=(100, 100, 100),
+                    font=meta_font,
+                )
+                y_pos += 28
+                d.line([(margin, y_pos), (page_w - margin, y_pos)], fill=(200, 200, 200), width=1)
+                y_pos += 20
+            return img, d, y_pos
+
+        img, draw, y = new_page(first=True)
+
+        def ensure_space(needed: int) -> None:
+            nonlocal img, draw, y
+            if y + needed > page_h - margin:
+                pages.append(img)
+                img, draw, y = new_page(first=False)
+
+        text_indent = margin + 40  # leaves room for the pin indicator
+        text_width = page_w - text_indent - margin
+
+        for page_num in sorted(by_page.keys()):
+            ensure_space(40)
+            draw.text((margin, y), f"Page {page_num}", fill="black", font=head_font)
+            y += 34
+
+            for i, a in enumerate(by_page[page_num], start=1):
+                content = (a.content or "").strip() or "(no content)"
+                wrapped = _wrap(content, body_font, text_width, draw)
+                block_height = max(pin_r * 2 + 4, len(wrapped) * line_h + meta_line_h + 10)
+                ensure_space(block_height)
+
+                # Pin indicator with matching number
+                pin_cx = margin + pin_r
+                pin_cy = y + pin_r
+                color = PDF_PIN_COLORS.get(a.color, PDF_PIN_COLORS["blue"])
+                draw.ellipse(
+                    (pin_cx - pin_r, pin_cy - pin_r, pin_cx + pin_r, pin_cy + pin_r),
+                    fill=color,
+                    outline=(60, 60, 60),
+                    width=1,
+                )
+                draw.text((pin_cx, pin_cy), str(i), fill="white", anchor="mm", font=meta_font)
+
+                line_y = y
+                for line in wrapped:
+                    draw.text((text_indent, line_y), line, fill="black", font=body_font)
+                    line_y += line_h
+
+                author = author_names.get(a.created_by, a.created_by)
+                date_str = a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else ""
+                meta = f"— {author}" + (f", {date_str}" if date_str else "")
+                draw.text((text_indent, line_y + 2), meta, fill=(110, 110, 110), font=meta_font)
+                y = line_y + meta_line_h + 14
+
+            y += 12  # spacing between page groups
+
+        pages.append(img)
+        return pages
+
+    index_pages: list[PILImage.Image] = []
+    try:
+        index_pages = _build_index_pages()
+    except Exception as e:
+        logger.exception("PDF build: failed to build annotation index pages: %s", e)
+
+    all_pages: list[PILImage.Image] = [img for _, img in loaded] + index_pages
+
     try:
         buf = io.BytesIO()
-        first, rest = images[0], images[1:]
+        first, rest = all_pages[0], all_pages[1:]
         first.save(buf, format="PDF", save_all=True, append_images=rest, resolution=150.0)
         pdf_bytes = buf.getvalue()
     except Exception as e:

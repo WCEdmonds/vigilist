@@ -2,10 +2,11 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install system deps for Pillow
+# Install system deps for Pillow and DejaVu fonts for PDF annotation index pages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg62-turbo-dev \
     zlib1g-dev \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
