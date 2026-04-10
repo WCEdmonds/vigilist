@@ -211,10 +211,6 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
             <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
             Smart Review
           </button>
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setShowCorpusAnalysis(true)}>
-            <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
-            Analyze
-          </button>
           <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowQueueManager(true)}>Review Queues</button>
           <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowDashboard(true)}>Dashboard</button>
         </div>
@@ -252,7 +248,12 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
           </button>
         </div>
 
-        <TopicGroups clusters={clusters} activeClusterId={filterClusterId} onSelect={setFilterClusterId} />
+        <TopicGroups
+          clusters={clusters}
+          activeClusterId={filterClusterId}
+          onSelect={setFilterClusterId}
+          onOpenAnalysis={() => setShowCorpusAnalysis(true)}
+        />
 
         {/* My Review Batches */}
         {myBatches.length > 0 && (
