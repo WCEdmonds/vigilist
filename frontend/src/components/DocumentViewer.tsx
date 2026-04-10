@@ -84,8 +84,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         const a = document.createElement('a');
         a.href = url; a.download = `${doc.bates_begin}.pdf`; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } else {
+        window.alert('Nothing to download — this document has no native file or page images.');
       }
-    } catch {}
+    } catch (e: any) {
+      window.alert(`Download failed: ${e?.message || 'unknown error'}`);
+    }
   };
 
   const handleAutoAdvance = useCallback(() => {
