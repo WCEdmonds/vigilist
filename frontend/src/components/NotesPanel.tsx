@@ -62,7 +62,7 @@ export default function NotesPanel({ docId, mediaTime: _mediaTime, onSeek: _onSe
         {notes.map(note => (
           <div key={note.id} className="note-item">
             <div className="note-meta">
-              <span>{note.created_by}</span>
+              <span>{note.created_by_display_name || note.created_by_email || note.created_by}</span>
               <span>·</span>
               <span>{formatDate(note.created_at)}</span>
               <div className="note-actions">
