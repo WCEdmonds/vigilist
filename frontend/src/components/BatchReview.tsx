@@ -17,7 +17,8 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
   const [actionLoading, setActionLoading] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadBatch = () => {
+    setNotification(null);
     setLoading(true);
     Promise.all([getBatch(batchId), listBatchDocuments(batchId)])
       .then(([b, d]) => {
@@ -28,8 +29,17 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
         if (firstPending) setViewDocId(firstPending.document_id);
         else if (d.length > 0) setViewDocId(d[0].document_id);
       })
-      .catch(() => setNotification('Failed to load batch — please close and try again.'))
+      .catch((e: any) => {
+        setBatch(null);
+        setDocs([]);
+        setNotification(`Failed to load batch: ${e?.message || 'unknown error'}`);
+      })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadBatch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
 
   const reviewedCount = docs.filter(d => d.reviewed !== 'pending').length;
@@ -87,7 +97,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
   const allDone = docs.length > 0 && docs.every(d => d.reviewed !== 'pending');
 
   const statusColor = (reviewed: string) => {
-    if (reviewed === 'reviewed') return 'var(--color-green-600, #16a34a)';
+    if (reviewed === 'reviewed') return 'var(--color-success-600)';
     if (reviewed === 'skipped') return 'var(--color-neutral-400)';
     return 'var(--color-primary-300)';
   };
@@ -102,7 +112,25 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
     return (
       <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-neutral-50)' }}>
         <span className="spinner spinner-md" />
-        <span style={{ marginLeft: 'var(--space-2)' }}>Loading batch...</span>
+        <span style={{ marginLeft: 'var(--space-2)' }}>Loading batch…</span>
+      </div>
+    );
+  }
+
+  // Load failed — show an error screen with Retry rather than an empty sidebar.
+  if (!batch && notification) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--color-neutral-50)', gap: 'var(--space-4)', padding: 'var(--space-6)' }}>
+        <div style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-serif)', color: 'var(--color-ink)' }}>
+          Could not load batch
+        </div>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', textAlign: 'center', maxWidth: 480 }}>
+          {notification}
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <button className="btn btn-secondary" onClick={onClose}>Back to Batches</button>
+          <button className="btn btn-primary" onClick={loadBatch}>Retry</button>
+        </div>
       </div>
     );
   }
@@ -128,7 +156,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
 
       {/* Notification banner */}
       {notification && (
-        <div style={{ background: 'var(--color-primary-700, #1d4ed8)', color: 'white', padding: 'var(--space-2) var(--space-4)', fontSize: 'var(--text-sm)', textAlign: 'center', flexShrink: 0 }}>
+        <div style={{ background: 'var(--color-primary-700)', color: 'var(--color-card)', padding: 'var(--space-2) var(--space-4)', fontSize: 'var(--text-sm)', textAlign: 'center', flexShrink: 0 }}>
           {notification}
         </div>
       )}
@@ -141,19 +169,27 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
             Documents
           </div>
           {docs.map((doc, idx) => (
-            <div
+            <button
               key={doc.id}
+              type="button"
               onClick={() => setViewDocId(doc.document_id)}
               style={{
                 padding: 'var(--space-2) var(--space-2)',
-                borderRadius: 'var(--radius-md, 6px)',
+                borderRadius: 'var(--radius-md)',
                 cursor: 'pointer',
-                background: viewDocId === doc.document_id ? 'var(--color-primary-50, #eff6ff)' : 'transparent',
-                borderLeft: viewDocId === doc.document_id ? '3px solid var(--color-primary-600, #2563eb)' : '3px solid transparent',
+                background: viewDocId === doc.document_id ? 'var(--color-primary-50)' : 'transparent',
+                borderTop: 'none',
+                borderRight: 'none',
+                borderBottom: 'none',
+                borderLeft: viewDocId === doc.document_id ? '3px solid var(--color-primary-600)' : '3px solid transparent',
                 marginBottom: 2,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'var(--space-2)',
+                width: '100%',
+                textAlign: 'left',
+                font: 'inherit',
+                color: 'inherit',
               }}
             >
               <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(doc.reviewed), width: 14, textAlign: 'center', flexShrink: 0 }}>
@@ -170,7 +206,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
                 )}
                 <div style={{ fontSize: 10, color: 'var(--color-neutral-400)' }}>#{idx + 1}</div>
               </div>
-            </div>
+            </button>
           ))}
         </div>
 

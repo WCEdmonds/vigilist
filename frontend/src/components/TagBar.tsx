@@ -72,7 +72,14 @@ export default function TagBar({ docId, tags, onTagsChanged, onAutoAdvance }: Pr
       {tags.map(dt => (
         <span key={dt.id} className={`badge ${COLOR_MAP[dt.tag.color] || 'badge-gray'}`}>
           {dt.tag.name}
-          <span className="badge-remove" onClick={() => toggleTag(dt.tag.id)}>×</span>
+          <button
+            type="button"
+            className="badge-remove"
+            aria-label={`Remove ${dt.tag.name} tag`}
+            onClick={() => toggleTag(dt.tag.id)}
+          >
+            ×
+          </button>
         </span>
       ))}
 

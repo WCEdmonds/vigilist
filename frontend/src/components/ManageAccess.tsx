@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getProductionAccess, getProductionInvites, inviteUser, revokeAccess } from '../api/client';
 import type { ProductionAccessEntry, PendingInviteEntry } from '../types';
+import { showToast } from './Toast';
 
 interface Props {
   productionId: number;
@@ -16,14 +17,19 @@ export default function ManageAccess({ productionId, productionName: _production
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const load = async () => {
-    const [a, i] = await Promise.all([
-      getProductionAccess(productionId),
-      getProductionInvites(productionId),
-    ]);
-    setAccess(a);
-    setInvites(i);
+    try {
+      const [a, i] = await Promise.all([
+        getProductionAccess(productionId),
+        getProductionInvites(productionId),
+      ]);
+      setAccess(a);
+      setInvites(i);
+    } catch (e: any) {
+      showToast(`Could not load access list: ${e?.message || 'unknown error'}`, 'error');
+    }
   };
 
   useEffect(() => { load(); }, [productionId]);
@@ -45,12 +51,18 @@ export default function ManageAccess({ productionId, productionName: _production
     }
   };
 
-  const handleRevoke = async (userId: string) => {
+  const handleRevoke = async (userId: string, displayName: string) => {
+    if (revokingId) return;
+    if (!window.confirm(`Revoke access for ${displayName}? They will immediately lose access to this production.`)) return;
+    setError('');
+    setRevokingId(userId);
     try {
       await revokeAccess(productionId, userId);
       await load();
     } catch (e: any) {
       setError(e.message || 'Failed to revoke');
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -59,13 +71,15 @@ export default function ManageAccess({ productionId, productionName: _production
       <div className="modal-panel" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h3 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Manage Access</h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>Close</button>
+          <button className="modal-close-btn" aria-label="Close" onClick={onClose}>&times;</button>
         </div>
 
         {/* Invite form */}
         <div style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-neutral-200)' }}>
           <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <label htmlFor="invite-email" className="visually-hidden">Email address</label>
             <input
+              id="invite-email"
               type="email"
               className="input input-sm"
               placeholder="Email address"
@@ -73,19 +87,23 @@ export default function ManageAccess({ productionId, productionName: _production
               onChange={e => setEmail(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleInvite()}
               style={{ flex: 1 }}
+              disabled={loading}
             />
+            <label htmlFor="invite-role" className="visually-hidden">Role</label>
             <select
+              id="invite-role"
               className="input input-sm"
               value={inviteRole}
               onChange={e => setInviteRole(e.target.value)}
+              disabled={loading}
             >
               <option value="reviewer">Reviewer</option>
               <option value="readonly">Read Only</option>
               <option value="manager">Manager</option>
               <option value="admin">Admin</option>
             </select>
-            <button className="btn btn-primary btn-sm" onClick={handleInvite} disabled={loading}>
-              {loading ? 'Sending...' : 'Invite'}
+            <button className="btn btn-primary btn-sm" onClick={handleInvite} disabled={loading || !email.trim()}>
+              {loading ? 'Sending…' : 'Invite'}
             </button>
           </div>
           {message && <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-success-700)' }}>{message}</div>}
@@ -106,8 +124,13 @@ export default function ManageAccess({ productionId, productionName: _production
                 {a.user_display_name && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)' }}>{a.user_email}</div>}
               </div>
               <span className="badge badge-blue" style={{ textTransform: 'capitalize' }}>{a.role}</span>
-              <button className="btn btn-ghost btn-xs" style={{ color: 'var(--color-danger-600)' }} onClick={() => handleRevoke(a.user_id)}>
-                Remove
+              <button
+                className="btn btn-ghost btn-xs"
+                style={{ color: 'var(--color-danger-600)' }}
+                onClick={() => handleRevoke(a.user_id, a.user_display_name || a.user_email)}
+                disabled={revokingId === a.user_id}
+              >
+                {revokingId === a.user_id ? 'Removing…' : 'Remove'}
               </button>
             </div>
           ))}

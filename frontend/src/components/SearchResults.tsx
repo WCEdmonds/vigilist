@@ -1,4 +1,5 @@
 import type { SearchResult, Tag } from '../types';
+import { renderHighlightedSnippet } from '../utils/sanitize';
 
 interface Props {
   results: SearchResult[];
@@ -47,7 +48,7 @@ export default function SearchResults({ results, total, onSelect, selectedIds, o
           {r.title && (
             <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)' }}>{r.title}</div>
           )}
-          <div className="result-snippet" dangerouslySetInnerHTML={{ __html: r.snippet }} />
+          <div className="result-snippet">{renderHighlightedSnippet(r.snippet)}</div>
         </div>
       ))}
     </div>
