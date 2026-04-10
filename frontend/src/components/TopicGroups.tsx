@@ -5,12 +5,13 @@ interface Props {
   clusters: ClusterInfo[];
   activeClusterId: number | null;
   onSelect: (clusterId: number | null) => void;
+  onOpenAnalysis?: () => void;
 }
 
-export default function TopicGroups({ clusters, activeClusterId, onSelect }: Props) {
+export default function TopicGroups({ clusters, activeClusterId, onSelect, onOpenAnalysis }: Props) {
   const [expanded, setExpanded] = useState(false);
 
-  if (clusters.length === 0) return null;
+  if (clusters.length === 0 && !onOpenAnalysis) return null;
 
   const activeLabel = activeClusterId !== null
     ? clusters.find(c => c.id === activeClusterId)?.label || 'Unknown'
@@ -40,7 +41,27 @@ export default function TopicGroups({ clusters, activeClusterId, onSelect }: Pro
       </button>
 
       {expanded && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginTop: 'var(--space-2)', alignItems: 'center' }}>
+          {onOpenAnalysis && (
+            <button
+              onClick={onOpenAnalysis}
+              className="badge"
+              style={{
+                cursor: 'pointer',
+                border: '1px solid rgba(44,62,107,0.15)',
+                background: 'var(--color-card)',
+                color: 'var(--color-ink)',
+                padding: '4px 10px',
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
+              Production Analysis
+            </button>
+          )}
           {activeClusterId !== null && (
             <button className="btn btn-ghost btn-xs" onClick={() => onSelect(null)} style={{ fontSize: 11 }}>
               Clear filter
