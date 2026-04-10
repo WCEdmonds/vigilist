@@ -52,6 +52,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
           </div>
         </div>
 
+        <div className="modal-body">
         {loading && (
           <div className="loading-center">
             <span className="spinner spinner-md" />
@@ -255,6 +256,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
 
           </div>
         )}
+        </div>
       </div>
     </div>
   );
