@@ -365,9 +365,9 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                   value={sortBy}
                   onChange={e => { setSortBy(e.target.value); setDocPage(1); }}
                 >
-                  <option value="bates">Bates #</option>
-                  <option value="recent">Recent</option>
-                  <option value="size">Size</option>
+                  <option value="bates">Sort: Bates #</option>
+                  <option value="recent">Sort: Recent</option>
+                  <option value="size">Sort: Size</option>
                 </select>
                 {(filterTagId || filterFileType) && (
                   <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setDocPage(1); }}>
