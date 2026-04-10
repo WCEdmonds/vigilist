@@ -22,6 +22,23 @@ _signing_credentials = None
 _signing_sa_email: str | None = None
 
 
+def _fetch_metadata_sa_email() -> str | None:
+    """Ask the GCE/Cloud Run metadata server for the current runtime
+    service account email. Returns None if the metadata server is not
+    reachable (e.g. running locally)."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
+            headers={"Metadata-Flavor": "Google"},
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            email = resp.read().decode("utf-8").strip()
+            return email or None
+    except Exception:
+        return None
+
+
 def _get_signing_context() -> tuple[object | None, str | None]:
     global _signing_credentials, _signing_sa_email
     if _signing_credentials is None:
@@ -29,7 +46,18 @@ def _get_signing_context() -> tuple[object | None, str | None]:
             from google.auth import default as google_auth_default
             creds, _project = google_auth_default()
             _signing_credentials = creds
-            _signing_sa_email = getattr(creds, "service_account_email", None)
+            # compute_engine.Credentials initializes service_account_email to
+            # the literal string "default", which the IAM signBlob API then
+            # rejects. Prefer the VIGILIST_SIGNING_SA_EMAIL override if set,
+            # otherwise ask the metadata server for the real email.
+            email = os.environ.get("VIGILIST_SIGNING_SA_EMAIL")
+            if not email:
+                attr = getattr(creds, "service_account_email", None)
+                if attr and attr != "default":
+                    email = attr
+            if not email:
+                email = _fetch_metadata_sa_email()
+            _signing_sa_email = email
         except Exception:
             logger.exception("Failed to load default credentials for URL signing")
             _signing_credentials = None
