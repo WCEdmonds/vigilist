@@ -302,6 +302,65 @@ async def get_image(
         return FileResponse(str(path), media_type="image/jpeg")
 
 
+@router.get("/{doc_id}/pdf")
+async def get_document_pdf(
+    doc_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Generate a multi-page PDF from the document's page images."""
+    import io
+    from PIL import Image as PILImage
+
+    accessible = await get_accessible_production_ids(db, user)
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not doc.image_paths:
+        raise HTTPException(status_code=404, detail="No page images for this document")
+
+    def load_image(raw_path: str) -> PILImage.Image | None:
+        if not raw_path:
+            return None
+        if raw_path.startswith("productions/"):
+            from app.services.storage import get_download_bytes
+            try:
+                data = get_download_bytes(raw_path)
+            except Exception:
+                return None
+            return PILImage.open(io.BytesIO(data))
+        path = Path(raw_path.replace("\\", "/")).resolve()
+        if not path.exists():
+            return None
+        return PILImage.open(str(path))
+
+    images: list[PILImage.Image] = []
+    for raw in doc.image_paths:
+        img = load_image(raw)
+        if img is None:
+            continue
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        images.append(img)
+
+    if not images:
+        raise HTTPException(status_code=404, detail="No readable page images")
+
+    buf = io.BytesIO()
+    first, rest = images[0], images[1:]
+    first.save(buf, format="PDF", save_all=True, append_images=rest, resolution=150.0)
+    pdf_bytes = buf.getvalue()
+
+    filename = f"{doc.bates_begin}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/{doc_id}/native")
 async def get_native(
     doc_id: UUID,
