@@ -46,6 +46,7 @@ export default function AuditLog({ productionId, onClose }: Props) {
           <button onClick={onClose}>&times;</button>
         </div>
 
+        <div className="modal-body">
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
           <select value={actionFilter} onChange={e => { setActionFilter(e.target.value); setPage(1); }}>
             <option value="">All actions</option>
@@ -101,6 +102,7 @@ export default function AuditLog({ productionId, onClose }: Props) {
             <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
