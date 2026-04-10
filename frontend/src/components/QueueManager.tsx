@@ -202,7 +202,7 @@ export default function QueueManager({ productionId, onClose }: Props) {
     <>
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal-content"
+        className="modal-panel"
         onClick={e => e.stopPropagation()}
         style={{ maxWidth: 780, width: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
       >
@@ -482,7 +482,7 @@ export default function QueueManager({ productionId, onClose }: Props) {
       {showQcConfig && (
         <div className="modal-overlay" onClick={() => { setShowQcConfig(false); setQcError(''); }}>
           <div
-            className="modal-content"
+            className="modal-panel"
             onClick={e => e.stopPropagation()}
             style={{ maxWidth: 360, width: '90vw' }}
           >
