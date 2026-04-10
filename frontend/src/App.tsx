@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
@@ -20,6 +20,7 @@ import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import UserAvatar from './components/UserAvatar';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
 import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
@@ -37,15 +38,16 @@ interface HomeProps {
 
 function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const { user, logout } = useAuth();
-  const [viewDocId, setViewDocId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const initialUrl = useMemo(() => getInitialUrlState(), []);
+  const [viewDocId, setViewDocId] = useState<string | null>(initialUrl.doc ?? null);
+  const [searchQuery, setSearchQuery] = useState(initialUrl.q ?? '');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [docTotal, setDocTotal] = useState(0);
   const [docPage, setDocPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [hasSearched, setHasSearched] = useState(!!initialUrl.q);
   const [lastSearchMode, setLastSearchMode] = useState<'fulltext' | 'semantic'>('fulltext');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -60,10 +62,30 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [showIngestWizard, setShowIngestWizard] = useState(false);
   const [showQueueManager, setShowQueueManager] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(
+    initialUrl.batch ? Number(initialUrl.batch) : null,
+  );
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
-  const [showAIReview, setShowAIReview] = useState(false);
-  const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(false);
+  const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
+  const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(initialUrl.view === 'analysis');
+
+  // Mirror the key bits of state back into the URL so a refresh lands
+  // the user on the same page (doc viewer, batch review, search, etc.).
+  useSyncUrl({
+    prod: String(production.id),
+    doc: viewDocId ?? undefined,
+    q: hasSearched ? searchQuery || undefined : undefined,
+    batch: activeBatchId ? String(activeBatchId) : undefined,
+    view: showAIReview ? 'ai' : showCorpusAnalysis ? 'analysis' : undefined,
+  });
+
+  // If a search query was in the URL on mount, run the search once.
+  useEffect(() => {
+    if (initialUrl.q && !searchResults.length) {
+      handleSearch(initialUrl.q);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [clusters, setClusters] = useState<ClusterInfo[]>([]);
   const [filterClusterId, setFilterClusterId] = useState<number | null>(null);
@@ -107,7 +129,10 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     setLastSearchMode(mode);
 
     try {
-      const res = await searchDocuments(query, 1, perPage, 'relevance', production.id, undefined, undefined, mode);
+      const res = await searchDocuments(
+        query, 1, perPage, 'relevance', production.id,
+        undefined, undefined, mode, filterFileType || undefined,
+      );
       setSearchResults(res.results);
       setSearchTotal(res.total);
     } catch (e: any) {
@@ -116,6 +141,12 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       setLoading(false);
     }
   };
+
+  // Re-run the active search whenever the file-type filter changes.
+  useEffect(() => {
+    if (hasSearched) handleSearch(searchQuery, undefined, lastSearchMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterFileType]);
 
   const clearSearch = () => {
     setHasSearched(false);
@@ -353,26 +384,47 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         {/* Search results */}
         {hasSearched && !loading && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
-              <button className="btn btn-ghost btn-sm" onClick={clearSearch}>
-                ← All documents
-              </button>
-              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-mono)' }}>
-                {searchTotal} result{searchTotal !== 1 ? 's' : ''}
-              </span>
-              <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44,62,107,0.4)', padding: '2px 8px', background: 'rgba(44,62,107,0.04)', borderRadius: 'var(--radius-sm)' }}>
-                {lastSearchMode === 'semantic' ? 'Semantic' : 'Full-text'}
-              </span>
-              <button
-                className="btn btn-ghost btn-xs"
-                onClick={() => handleSearch(searchQuery, undefined, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic')}
-                style={{ fontSize: 'var(--text-xs)' }}
-              >
-                Try {lastSearchMode === 'semantic' ? 'full-text' : 'semantic'} search
-              </button>
-              <button className="btn btn-ghost btn-sm desktop-only" style={{ marginLeft: 'auto' }} onClick={() => exportSearchCsv(searchQuery, production.id)}>
-                Export CSV
-              </button>
+            <div className="section-header">
+              <h2 className="section-title">
+                <button className="btn btn-ghost btn-sm" onClick={clearSearch} style={{ marginRight: 'var(--space-2)' }}>
+                  ←
+                </button>
+                Search results
+                <span className="section-count">{searchTotal}</span>
+              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44,62,107,0.5)', padding: '2px 8px', background: 'rgba(44,62,107,0.04)', borderRadius: 'var(--radius-sm)' }}>
+                  {lastSearchMode === 'semantic' ? 'Semantic' : 'Full-text'}
+                </span>
+                <button
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => handleSearch(searchQuery, undefined, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic')}
+                  style={{ fontSize: 'var(--text-xs)' }}
+                >
+                  Try {lastSearchMode === 'semantic' ? 'full-text' : 'semantic'}
+                </button>
+                <label htmlFor="search-filter-type" className="visually-hidden">Filter by file type</label>
+                <select
+                  id="search-filter-type"
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 140 }}
+                  value={filterFileType}
+                  onChange={e => setFilterFileType(e.target.value)}
+                >
+                  <option value="">All types</option>
+                  <option value="images_only">Documents (images)</option>
+                  <option value="video">Video</option>
+                  <option value="audio">Audio</option>
+                  <option value="pdf">PDF</option>
+                  <option value="office">Office (Word/Excel/PPT)</option>
+                  <option value="email">Email (.msg/.eml)</option>
+                  <option value="image">Image (PNG/JPG)</option>
+                  <option value="native">All native files</option>
+                </select>
+                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportSearchCsv(searchQuery, production.id)}>
+                  Export CSV
+                </button>
+              </div>
             </div>
             <div className="card">
               <SearchResults
@@ -779,7 +831,13 @@ function AppRouter() {
     try {
       const prods = await listProductions();
       setProductions(prods);
-      if (prods.length === 1) setActiveProduction(prods[0]);
+      // Restore the active production from the URL if one was set
+      // (so refresh lands you back on the same production), otherwise
+      // auto-select when there's only one.
+      const urlProd = getInitialUrlState().prod;
+      const fromUrl = urlProd ? prods.find(p => String(p.id) === urlProd) : undefined;
+      if (fromUrl) setActiveProduction(fromUrl);
+      else if (prods.length === 1) setActiveProduction(prods[0]);
       else if (prods.length === 0) setActiveProduction(null);
     } catch (e: any) {
       showToast(`Could not load productions: ${e?.message || 'unknown error'}`, 'error');
