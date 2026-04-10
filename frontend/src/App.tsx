@@ -796,7 +796,12 @@ function AppRouter() {
   };
 
   if (prodLoading) {
-    return <div className="loading-center"><span className="spinner spinner-md" /> Loading productions…</div>;
+    return (
+      <div className="loading-fullscreen">
+        <span className="spinner" />
+        <div>Loading productions…</div>
+      </div>
+    );
   }
 
   if (productions.length === 0) {
@@ -871,7 +876,13 @@ function AppContent() {
     );
   }
 
-  if (loading) return <div className="loading-center"><span className="spinner spinner-md" /> Signing you in…</div>;
+  if (loading) return (
+    <div className="loading-fullscreen">
+      <span className="spinner" />
+      <div>Signing you in…</div>
+      <div className="loading-sub">Verifying your Vigilist session</div>
+    </div>
+  );
   if (!user) return <AuthPage />;
   return <AppRouter />;
 }
