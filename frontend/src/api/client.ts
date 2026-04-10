@@ -173,6 +173,7 @@ export async function searchDocuments(
   tagIds?: number[],
   metadata?: Record<string, string>,
   mode?: 'fulltext' | 'semantic',
+  fileType?: string,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -181,6 +182,7 @@ export async function searchDocuments(
     params.set('metadata', JSON.stringify(metadata));
   }
   if (mode) params.set('mode', mode);
+  if (fileType) params.set('file_type', fileType);
   return request<SearchResponse>(`/api/search?${params}`);
 }
 

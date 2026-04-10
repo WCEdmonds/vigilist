@@ -58,6 +58,16 @@ def build_tsquery(user_query: str) -> str:
     return " ".join(result)
 
 
+FILE_TYPE_EXTENSIONS = {
+    "video": [".mp4", ".mov", ".avi", ".webm"],
+    "audio": [".wav", ".mp3"],
+    "pdf": [".pdf"],
+    "office": [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
+    "image": [".png", ".jpg", ".jpeg", ".gif", ".bmp"],
+    "email": [".msg", ".eml"],
+}
+
+
 async def search_documents(
     db: AsyncSession,
     query: str,
@@ -67,12 +77,13 @@ async def search_documents(
     sort: str = "relevance",
     accessible_production_ids: list[int] | None = None,
     metadata_filters: dict[str, str] | None = None,
+    file_type: str | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     tsquery_str = build_tsquery(query) if query else ""
     has_text_query = bool(tsquery_str)
 
-    if not has_text_query and not metadata_filters:
+    if not has_text_query and not metadata_filters and not file_type:
         return [], 0
 
     conditions = []
@@ -89,6 +100,15 @@ async def search_documents(
                 from fastapi import HTTPException
                 raise HTTPException(status_code=400, detail=f"Invalid metadata key: {key}")
             conditions.append(Document.metadata_[key].astext.ilike(f"%{value}%"))
+    if file_type:
+        from sqlalchemy import or_
+        if file_type == "native":
+            conditions.append(Document.native_path.isnot(None))
+        elif file_type == "images_only":
+            conditions.append(Document.native_path.is_(None))
+        elif file_type in FILE_TYPE_EXTENSIONS:
+            exts = FILE_TYPE_EXTENSIONS[file_type]
+            conditions.append(or_(*[func.lower(Document.native_path).like(f"%{ext}") for ext in exts]))
 
     if has_text_query:
         rank = func.ts_rank(Document.text_search_vector, tsquery).label("rank")
