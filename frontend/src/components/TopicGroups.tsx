@@ -19,26 +19,37 @@ export default function TopicGroups({ clusters, activeClusterId, onSelect, onOpe
 
   return (
     <div style={{ marginBottom: 'var(--space-3)' }}>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-          background: 'none', border: 'none', cursor: 'pointer', padding: 0, width: '100%',
-        }}
-      >
-        <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'rgba(44,62,107,0.5)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Clusters <span style={{ textTransform: 'none', fontWeight: 400, opacity: 0.6 }}>(beta)</span>
-        </span>
-        <span style={{ fontSize: 10, color: 'rgba(44,62,107,0.3)', transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0)' }}>
-          ▶
-        </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+          }}
+        >
+          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'rgba(44,62,107,0.5)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Clusters <span style={{ textTransform: 'none', fontWeight: 400, opacity: 0.6 }}>(beta)</span>
+          </span>
+          <span style={{ fontSize: 10, color: 'rgba(44,62,107,0.3)', transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0)' }}>
+            ▶
+          </span>
+        </button>
         {activeLabel && !expanded && (
           <span className="badge" style={{ fontSize: 11, border: '2px solid var(--color-ink)', background: 'rgba(44,62,107,0.08)', color: 'var(--color-ink)', fontWeight: 700, padding: '2px 8px' }}>
             {activeLabel}
-            <span onClick={(e) => { e.stopPropagation(); onSelect(null); }} style={{ marginLeft: 4, cursor: 'pointer', opacity: 0.5 }}>&times;</span>
+            <button
+              type="button"
+              className="badge-remove"
+              aria-label="Clear cluster filter"
+              onClick={() => onSelect(null)}
+            >
+              &times;
+            </button>
           </span>
         )}
-      </button>
+      </div>
 
       {expanded && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginTop: 'var(--space-2)', alignItems: 'center' }}>

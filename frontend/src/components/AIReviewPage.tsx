@@ -256,7 +256,7 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
 
               {/* Results list */}
               {loading ? (
-                <div className="loading-center"><span className="spinner spinner-md" /></div>
+                <div className="loading-center"><span className="spinner spinner-md" /> Running AI review…</div>
               ) : results?.results.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-neutral-400)' }}>
                   {isProcessing ? 'Processing documents...' : 'No results yet'}

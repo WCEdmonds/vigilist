@@ -60,9 +60,9 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       setDoc(d);
       if (d.summary) setSummary(d.summary);
     }).catch(e => setError(e.message));
-    getDocumentNav(docId).then(nav => setNextId(nav.next_id));
-    listAnnotations(docId).then(setAnnotations).catch(() => {});
-    getDocumentDuplicates(docId).then(setDuplicates).catch(() => {});
+    getDocumentNav(docId).then(nav => setNextId(nav.next_id)).catch(e => console.warn('getDocumentNav failed:', e));
+    listAnnotations(docId).then(setAnnotations).catch(e => console.warn('listAnnotations failed:', e));
+    getDocumentDuplicates(docId).then(setDuplicates).catch(e => console.warn('getDocumentDuplicates failed:', e));
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {

@@ -256,7 +256,7 @@ export default function QueueManager({ productionId, onClose }: Props) {
           {loading && (
             <div className="loading-center" style={{ padding: 'var(--space-8)' }}>
               <span className="spinner spinner-md" />
-              <span>Loading...</span>
+              <span>Loading queues…</span>
             </div>
           )}
 

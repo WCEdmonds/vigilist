@@ -138,6 +138,30 @@ export async function fetchDocumentPdf(docId: string): Promise<Blob> {
 export const streamUrl = (docId: string) =>
   `/api/documents/${docId}/stream`;
 
+export async function fetchBulkZip(docIds: string[]): Promise<Blob> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch('/api/documents/bulk-zip', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ document_ids: docIds }),
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return res.blob();
+}
+
+
 // ── Search ──
 
 export async function searchDocuments(
