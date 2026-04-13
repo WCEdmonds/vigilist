@@ -284,6 +284,9 @@ export const findSimilar = (docId: string) =>
 export const listProductions = () =>
   request<ProductionInfo[]>('/api/productions');
 
+export const deleteProduction = (productionId: number) =>
+  request<{ ok: boolean }>(`/api/productions/${productionId}`, { method: 'DELETE' });
+
 export const getProductionAccess = (productionId: number) =>
   request<ProductionAccessEntry[]>(`/api/productions/${productionId}/access`);
 

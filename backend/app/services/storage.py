@@ -156,3 +156,20 @@ def file_exists(remote_path: str) -> bool:
     bucket = get_bucket()
     blob = bucket.blob(remote_path)
     return blob.exists()
+
+
+def delete_prefix(prefix: str) -> int:
+    """Delete all files under a prefix in Firebase Storage.
+
+    Used to clean up a production's storage when the production is
+    deleted. Returns the number of blobs deleted.
+    """
+    bucket = get_bucket()
+    deleted = 0
+    for blob in bucket.list_blobs(prefix=prefix):
+        try:
+            blob.delete()
+            deleted += 1
+        except Exception:
+            pass
+    return deleted
