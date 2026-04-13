@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { deleteProduction } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import type { ProductionInfo } from '../types';
 
@@ -5,10 +7,26 @@ interface Props {
   productions: ProductionInfo[];
   onSelect: (production: ProductionInfo) => void;
   onIngest: () => void;
+  onDeleted?: () => void;
 }
 
-export default function ProductionPicker({ productions, onSelect, onIngest }: Props) {
+export default function ProductionPicker({ productions, onSelect, onIngest, onDeleted }: Props) {
   const { user, logout } = useAuth();
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+
+  const handleDelete = async (p: ProductionInfo) => {
+    setDeletingId(p.id);
+    try {
+      await deleteProduction(p.id);
+      onDeleted?.();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setDeletingId(null);
+      setConfirmId(null);
+    }
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
@@ -28,16 +46,82 @@ export default function ProductionPicker({ productions, onSelect, onIngest }: Pr
 
         <div className="production-grid">
           {productions.map(p => (
-            <div key={p.id} className="production-card card" onClick={() => onSelect(p)}>
-              <div className="production-card-name">{p.name}</div>
-              {p.description && <div className="production-card-desc">{p.description}</div>}
-              <div className="production-card-meta">
-                {p.is_owner ? (
-                  <span className="badge badge-blue">Owner</span>
-                ) : (
-                  <span className="badge badge-gray">Shared</span>
-                )}
+            <div key={p.id} className="production-card card" style={{ position: 'relative' }}>
+              <div onClick={() => onSelect(p)} style={{ cursor: 'pointer' }}>
+                <div className="production-card-name">{p.name}</div>
+                {p.description && <div className="production-card-desc">{p.description}</div>}
+                <div className="production-card-meta">
+                  {p.is_owner ? (
+                    <span className="badge badge-blue">Owner</span>
+                  ) : (
+                    <span className="badge badge-gray">Shared</span>
+                  )}
+                </div>
               </div>
+
+              {p.is_owner && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmId(p.id); }}
+                  title="Delete production"
+                  aria-label="Delete production"
+                  style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'rgba(44,62,107,0.35)',
+                    cursor: 'pointer',
+                    fontSize: 16,
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              )}
+
+              {confirmId === p.id && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(255,255,255,0.96)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: 'var(--space-4)',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink)', textAlign: 'center' }}>
+                    Delete "{p.name}"?
+                  </div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', textAlign: 'center' }}>
+                    This permanently removes all documents, tags, notes, and uploaded files. Cannot be undone.
+                  </div>
+                  <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setConfirmId(null)}
+                      disabled={deletingId === p.id}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() => handleDelete(p)}
+                      disabled={deletingId === p.id}
+                    >
+                      {deletingId === p.id ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
