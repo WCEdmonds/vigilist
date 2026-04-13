@@ -49,6 +49,63 @@ async def list_productions(
     ]
 
 
+@router.delete("/{production_id}")
+async def delete_production(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a production. Owner only.
+
+    Cascades to all related rows (documents, access, queues, annotations,
+    etc.) via ondelete=CASCADE, and also wipes the production's files
+    from Firebase Storage (both raw uploads and converted images).
+    Finally re-syncs custom claims for the owner and anyone who had
+    shared access.
+    """
+    from app.services.storage import delete_prefix
+
+    prod = await db.get(Production, production_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Production not found")
+    if prod.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the owner can delete a production")
+
+    production_name = prod.name
+
+    # Collect users who had access so we can re-sync their claims after
+    access_result = await db.execute(
+        select(ProductionAccess.user_id).where(ProductionAccess.production_id == production_id)
+    )
+    affected_user_ids = [row[0] for row in access_result.all()]
+
+    # Delete all storage files first (raw uploads + converted images).
+    # Swallow errors here — we still want the DB delete to proceed
+    # even if storage cleanup is partial.
+    try:
+        delete_prefix(f"productions/{production_id}/")
+    except Exception:
+        pass
+
+    await log_action(
+        db, user, "production_deleted", "production", str(production_id),
+        production_id=production_id,
+        details={"name": production_name},
+    )
+
+    await db.delete(prod)
+    await db.commit()
+
+    # Re-sync claims for the owner and anyone who had access
+    await sync_user_claims(db, user)
+    for uid in affected_user_ids:
+        affected_user = await db.get(User, uid)
+        if affected_user:
+            await sync_user_claims(db, affected_user)
+
+    return {"ok": True}
+
+
 @router.get("/{production_id}/access", response_model=list[ProductionAccessOut])
 async def list_access(
     production_id: int,

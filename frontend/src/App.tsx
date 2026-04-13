@@ -703,6 +703,7 @@ function AppRouter() {
           productions={productions}
           onSelect={setActiveProduction}
           onIngest={() => setShowIngestWizard(true)}
+          onDeleted={loadProductions}
         />
         {showIngestWizard && (
           <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
