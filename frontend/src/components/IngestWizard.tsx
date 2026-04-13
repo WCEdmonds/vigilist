@@ -159,7 +159,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const progressPercent = stage === 'uploading' && uploadProgress.totalBytes > 0
     ? Math.round((uploadProgress.bytesUploaded / uploadProgress.totalBytes) * 100)
     : job && job.total_files > 0
-    ? Math.round((job.processed_files / job.total_files) * 100)
+    ? Math.round(((job.processed_files + (job.skipped_files || 0)) / job.total_files) * 100)
     : 0;
 
   const isActive = stage === 'uploading' || stage === 'processing';
@@ -176,7 +176,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const statusLine = stage === 'uploading'
     ? `${fmt(uploadProgress.bytesUploaded)} / ${fmt(uploadProgress.totalBytes)}${speedLabel ? ` · ${speedLabel}${etaSeconds > 1 ? ` · ${formatEta(etaSeconds)} remaining` : ''}` : ''}`
     : stage === 'processing'
-    ? job ? `Processing · ${job.processed_files} / ${job.total_files} documents` : 'Processing…'
+    ? job ? `Processing · ${job.processed_files} ingested${job.skipped_files ? ` · ${job.skipped_files} skipped` : ''} · ${job.processed_files + (job.skipped_files || 0)} / ${job.total_files} total` : 'Processing…'
     : stage === 'complete'
     ? `Done · ${job?.processed_files ?? 0} documents`
     : error;
@@ -325,8 +325,9 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                   Ingest Complete
                 </div>
                 <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-4)' }}>
-                  {job?.processed_files} documents processed
-                  {job?.errors && job.errors.length > 0 && ` (${job.errors.length} warnings)`}
+                  {job?.processed_files} documents ingested
+                  {job?.skipped_files ? ` · ${job.skipped_files} skipped` : ''}
+                  {job?.errors && job.errors.length > 0 && ` · ${job.errors.length} warnings`}
                 </div>
                 <button className="btn btn-primary" onClick={() => { onComplete(); onClose(); }}>
                   View Production

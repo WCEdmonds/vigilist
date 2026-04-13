@@ -124,6 +124,7 @@ export interface IngestJob {
   status: 'pending' | 'processing' | 'complete' | 'failed';
   total_files: number;
   processed_files: number;
+  skipped_files: number;
   errors: string[];
   created_at: string;
   completed_at: string | null;

@@ -280,6 +280,7 @@ class IngestJobOut(BaseModel):
     status: str
     total_files: int
     processed_files: int
+    skipped_files: int = 0
     errors: list[str]
     created_at: datetime
     completed_at: datetime | None

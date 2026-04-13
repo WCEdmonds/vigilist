@@ -64,8 +64,19 @@ jobs:
             --role="roles/iam.serviceAccountTokenCreator" \
             --project=$PROJECT_ID --quiet
 
+      - name: Get existing service URL (stable across deploys)
+        id: url
+        run: |
+          URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --project=$PROJECT_ID --format='value(status.url)' 2>/dev/null || echo "")
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
       - name: Deploy to Cloud Run
         run: |
+          SERVICE_URL="${{ steps.url.outputs.url }}"
+          # On first deploy the URL won't exist yet; fall back to convention
+          if [ -z "$SERVICE_URL" ]; then
+            SERVICE_URL="https://${SERVICE_NAME}-$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')-uc.a.run.app"
+          fi
           gcloud run deploy $SERVICE_NAME \
             --source backend \
             --region $REGION \
@@ -74,13 +85,8 @@ jobs:
             --allow-unauthenticated \
             --timeout 3600 \
             --memory 1Gi \
+            --update-env-vars="VIGILIST_CLOUD_RUN_SERVICE_URL=${SERVICE_URL},VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT=${{ steps.meta.outputs.compute_sa }},VIGILIST_GCP_PROJECT_ID=$PROJECT_ID,VIGILIST_GCP_LOCATION=$REGION,VIGILIST_CLOUD_TASKS_QUEUE=$TASKS_QUEUE" \
             --quiet
-
-      - name: Get service URL
-        id: url
-        run: |
-          URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --project=$PROJECT_ID --format='value(status.url)')
-          echo "url=$URL" >> $GITHUB_OUTPUT
 
       - name: Grant compute SA run.invoker on the service
         run: |
@@ -88,10 +94,3 @@ jobs:
             --member="serviceAccount:${{ steps.meta.outputs.compute_sa }}" \
             --role="roles/run.invoker" \
             --region=$REGION --project=$PROJECT_ID --quiet
-
-      - name: Update env vars with Cloud Tasks config
-        run: |
-          gcloud run services update $SERVICE_NAME \
-            --region=$REGION --project=$PROJECT_ID \
-            --update-env-vars="VIGILIST_CLOUD_RUN_SERVICE_URL=${{ steps.url.outputs.url }},VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT=${{ steps.meta.outputs.compute_sa }},VIGILIST_GCP_PROJECT_ID=$PROJECT_ID,VIGILIST_GCP_LOCATION=$REGION,VIGILIST_CLOUD_TASKS_QUEUE=$TASKS_QUEUE" \
-            --quiet
