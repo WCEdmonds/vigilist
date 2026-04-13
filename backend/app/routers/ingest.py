@@ -225,6 +225,7 @@ async def get_ingest_status(
         status=job.status,
         total_files=job.total_files,
         processed_files=job.processed_files,
+        skipped_files=job.skipped_files,
         errors=job.errors or [],
         created_at=job.created_at,
         completed_at=job.completed_at,

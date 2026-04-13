@@ -724,6 +724,8 @@
 }
 
 .production-card {
+  display: block;
+  width: 100%;
   padding: var(--space-5);
   cursor: pointer;
   background: var(--color-card);
