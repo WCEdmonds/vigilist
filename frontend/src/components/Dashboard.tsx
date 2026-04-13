@@ -41,21 +41,22 @@ export default function Dashboard({ productionId, onClose }: Props) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content modal-large" onClick={e => e.stopPropagation()}>
+      <div className="modal-panel modal-large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Review Dashboard</h2>
+          <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Review Dashboard</h2>
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
             <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={loading}>
-              Refresh
+              {loading ? 'Refreshing…' : 'Refresh'}
             </button>
-            <button onClick={onClose}>&times;</button>
+            <button className="modal-close-btn" aria-label="Close" onClick={onClose}>&times;</button>
           </div>
         </div>
 
+        <div className="modal-body">
         {loading && (
           <div className="loading-center">
             <span className="spinner spinner-md" />
-            <span>Loading...</span>
+            <span>Loading review stats…</span>
           </div>
         )}
 
@@ -255,6 +256,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
 
           </div>
         )}
+        </div>
       </div>
     </div>
   );

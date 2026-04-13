@@ -40,12 +40,13 @@ export default function AuditLog({ productionId, onClose }: Props) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content modal-large" onClick={e => e.stopPropagation()}>
+      <div className="modal-panel modal-large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Audit Log</h2>
-          <button onClick={onClose}>&times;</button>
+          <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Audit Log</h2>
+          <button className="modal-close-btn" aria-label="Close" onClick={onClose}>&times;</button>
         </div>
 
+        <div className="modal-body">
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
           <select value={actionFilter} onChange={e => { setActionFilter(e.target.value); setPage(1); }}>
             <option value="">All actions</option>
@@ -101,6 +102,7 @@ export default function AuditLog({ productionId, onClose }: Props) {
             <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

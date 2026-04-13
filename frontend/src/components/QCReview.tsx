@@ -186,7 +186,7 @@ export default function QCReview({ sampleIds, productionId: _productionId, onClo
           {contextLoading && (
             <div className="loading-center" style={{ padding: 'var(--space-6)' }}>
               <span className="spinner spinner-md" />
-              <span style={{ marginLeft: 'var(--space-2)' }}>Loading...</span>
+              <span style={{ marginLeft: 'var(--space-2)' }}>Loading QC context…</span>
             </div>
           )}
 

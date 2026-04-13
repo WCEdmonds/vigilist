@@ -39,8 +39,25 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     uid = decoded["uid"]
-    email = decoded.get("email", "")
-    display_name = decoded.get("name", "")
+    email = decoded.get("email") or ""
+    display_name = decoded.get("name") or ""
+
+    # If the ID token didn't carry an email/name (common for anonymous sign-in
+    # or custom tokens), try to pull them from the Firebase user record.
+    if not email or not display_name:
+        try:
+            fb_user = firebase_auth.get_user(uid)
+            if not email and fb_user.email:
+                email = fb_user.email
+            if not display_name and fb_user.display_name:
+                display_name = fb_user.display_name
+        except Exception:
+            pass
+
+    # If we still have no email, synthesize a unique placeholder so the
+    # users.email unique constraint doesn't collide across anonymous users.
+    if not email:
+        email = f"noemail-{uid}@vigilist.local"
 
     # Upsert user
     result = await db.execute(select(User).where(User.id == uid))
@@ -51,10 +68,11 @@ async def get_current_user(
         db.add(user)
         await db.flush()
     else:
-        # Update email/name if changed in Firebase
-        if user.email != email and email:
+        # Update email/name if changed in Firebase. Also heal any legacy
+        # rows whose stored email is empty (pre-fix anonymous users).
+        if email and user.email != email:
             user.email = email
-        if user.display_name != display_name and display_name:
+        if display_name and user.display_name != display_name:
             user.display_name = display_name
         await db.flush()
 
