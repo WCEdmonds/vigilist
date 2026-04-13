@@ -37,4 +37,8 @@ jobs:
             --project ediscover \
             --platform managed \
             --allow-unauthenticated \
+            --min-instances 1 \
+            --no-cpu-throttling \
+            --timeout 3600 \
+            --memory 2Gi \
             --quiet
