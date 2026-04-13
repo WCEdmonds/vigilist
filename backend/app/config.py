@@ -16,6 +16,16 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from_email: str = "Vigilist <noreply@qndary.com>"
     app_url: str = "https://ediscover.web.app"
+    # Cloud Tasks / GCP — used to fan out ingest work across separate
+    # Cloud Run invocations so long-running ingests can't be killed by
+    # container scale-down. When these are unset, ingest falls back to
+    # an in-process BackgroundTask (fine for local dev, unreliable on
+    # Cloud Run for long jobs).
+    gcp_project_id: str = ""
+    gcp_location: str = "us-central1"
+    cloud_tasks_queue: str = "vigilist-ingest"
+    cloud_run_service_url: str = ""
+    cloud_tasks_service_account: str = ""
 
     model_config = {"env_prefix": "VIGILIST_", "env_file": ".env", "env_file_encoding": "utf-8"}
 

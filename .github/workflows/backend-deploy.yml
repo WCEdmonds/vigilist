@@ -16,6 +16,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      PROJECT_ID: ediscover
+      REGION: us-central1
+      SERVICE_NAME: vigilist-api
+      TASKS_QUEUE: vigilist-ingest
     steps:
       - uses: actions/checkout@v4
 
@@ -27,18 +32,75 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ediscover
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Enable required APIs
+        run: |
+          gcloud services enable \
+            cloudtasks.googleapis.com \
+            run.googleapis.com \
+            cloudbuild.googleapis.com \
+            iamcredentials.googleapis.com \
+            --project=$PROJECT_ID
+
+      - name: Compute project metadata
+        id: meta
+        run: |
+          PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+          COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+          TASKS_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+          echo "project_number=$PROJECT_NUMBER" >> $GITHUB_OUTPUT
+          echo "compute_sa=$COMPUTE_SA" >> $GITHUB_OUTPUT
+          echo "tasks_agent=$TASKS_AGENT" >> $GITHUB_OUTPUT
+
+      - name: Create Cloud Tasks queue (idempotent)
+        run: |
+          gcloud tasks queues describe $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID 2>/dev/null \
+            || gcloud tasks queues create $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID
+
+      - name: Grant Cloud Run compute SA cloudtasks.enqueuer
+        run: |
+          gcloud projects add-iam-policy-binding $PROJECT_ID \
+            --member="serviceAccount:${{ steps.meta.outputs.compute_sa }}" \
+            --role="roles/cloudtasks.enqueuer" \
+            --condition=None --quiet
+
+      - name: Grant Cloud Tasks service agent tokenCreator on compute SA
+        run: |
+          gcloud iam service-accounts add-iam-policy-binding \
+            ${{ steps.meta.outputs.compute_sa }} \
+            --member="serviceAccount:${{ steps.meta.outputs.tasks_agent }}" \
+            --role="roles/iam.serviceAccountTokenCreator" \
+            --project=$PROJECT_ID --quiet
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy vigilist-api \
+          gcloud run deploy $SERVICE_NAME \
             --source backend \
-            --region us-central1 \
-            --project ediscover \
+            --region $REGION \
+            --project $PROJECT_ID \
             --platform managed \
             --allow-unauthenticated \
-            --min-instances 1 \
-            --no-cpu-throttling \
             --timeout 3600 \
-            --memory 2Gi \
+            --memory 1Gi \
+            --quiet
+
+      - name: Get service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --project=$PROJECT_ID --format='value(status.url)')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Grant compute SA run.invoker on the service
+        run: |
+          gcloud run services add-iam-policy-binding $SERVICE_NAME \
+            --member="serviceAccount:${{ steps.meta.outputs.compute_sa }}" \
+            --role="roles/run.invoker" \
+            --region=$REGION --project=$PROJECT_ID --quiet
+
+      - name: Update env vars with Cloud Tasks config
+        run: |
+          gcloud run services update $SERVICE_NAME \
+            --region=$REGION --project=$PROJECT_ID \
+            --update-env-vars="VIGILIST_CLOUD_RUN_SERVICE_URL=${{ steps.url.outputs.url }},VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT=${{ steps.meta.outputs.compute_sa }},VIGILIST_GCP_PROJECT_ID=$PROJECT_ID,VIGILIST_GCP_LOCATION=$REGION,VIGILIST_CLOUD_TASKS_QUEUE=$TASKS_QUEUE" \
             --quiet
