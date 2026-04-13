@@ -327,15 +327,39 @@ async def ingest_batch(
             bates_begin = record.get("Begin Bates", "").strip()
             if not bates_begin:
                 errors.append("Row: missing Begin Bates")
+                await db.execute(
+                    text(
+                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
+                        "WHERE id = :jid"
+                    ),
+                    {"jid": job_id},
+                )
+                await db.commit()
                 continue
             if bates_begin in existing:
-                # Already committed on a previous attempt — skip
+                # Already committed on a previous attempt — count as processed
+                await db.execute(
+                    text(
+                        "UPDATE ingest_jobs SET processed_files = processed_files + 1 "
+                        "WHERE id = :jid"
+                    ),
+                    {"jid": job_id},
+                )
+                await db.commit()
                 continue
             try:
                 doc = process_ingest_record(
                     production_id, record, opt_pages, converted_tmp, errors
                 )
                 if doc is None:
+                    await db.execute(
+                        text(
+                            "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
+                            "WHERE id = :jid"
+                        ),
+                        {"jid": job_id},
+                    )
+                    await db.commit()
                     continue
                 db.add(doc)
                 await db.flush()
@@ -361,6 +385,14 @@ async def ingest_batch(
                 logger.exception("Failed to process record %s", bates_begin)
                 errors.append(f"{bates_begin}: {e}")
                 await db.rollback()
+                await db.execute(
+                    text(
+                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
+                        "WHERE id = :jid"
+                    ),
+                    {"jid": job_id},
+                )
+                await db.commit()
 
         # Persist any error messages collected in this batch
         await db.execute(
@@ -371,7 +403,7 @@ async def ingest_batch(
 
         # If this batch pushed us to completion, finalize the job
         await db.refresh(job)
-        if job.processed_files >= job.total_files and job.status == "processing":
+        if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
             # AI titles are best-effort
             if settings.anthropic_api_key:
                 try:

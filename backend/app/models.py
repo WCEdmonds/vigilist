@@ -204,6 +204,7 @@ class IngestJob(Base):
     status = Column(String(20), nullable=False, default="pending")
     total_files = Column(Integer, nullable=False, default=0)
     processed_files = Column(Integer, nullable=False, default=0)
+    skipped_files = Column(Integer, nullable=False, default=0)
     errors = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime, nullable=True)
