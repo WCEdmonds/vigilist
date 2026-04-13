@@ -18,7 +18,7 @@ export default function AuthImage({ docId, pageNum, width, alt, style, className
     let cancelled = false;
     fetchImageBlob(docId, pageNum, width)
       .then(url => { if (!cancelled) setSrc(url); })
-      .catch(() => {});
+      .catch(e => { if (!cancelled) console.warn(`AuthImage fetch failed doc=${docId} page=${pageNum}:`, e); });
     return () => { cancelled = true; };
   }, [docId, pageNum, width]);
 

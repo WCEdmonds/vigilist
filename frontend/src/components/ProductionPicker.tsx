@@ -46,8 +46,12 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
 
         <div className="production-grid">
           {productions.map(p => (
-            <div key={p.id} className="production-card card" style={{ position: 'relative' }}>
-              <div onClick={() => onSelect(p)} style={{ cursor: 'pointer' }}>
+            <div key={p.id} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="production-card card"
+                onClick={() => onSelect(p)}
+              >
                 <div className="production-card-name">{p.name}</div>
                 {p.description && <div className="production-card-desc">{p.description}</div>}
                 <div className="production-card-meta">
@@ -57,11 +61,12 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                     <span className="badge badge-gray">Shared</span>
                   )}
                 </div>
-              </div>
+              </button>
 
               {p.is_owner && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); setConfirmId(p.id); }}
+                  type="button"
+                  onClick={() => setConfirmId(p.id)}
                   title="Delete production"
                   aria-label="Delete production"
                   style={{
@@ -76,6 +81,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                     padding: '4px 8px',
                     borderRadius: 4,
                     lineHeight: 1,
+                    zIndex: 1,
                   }}
                 >
                   ×
@@ -84,7 +90,6 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
 
               {confirmId === p.id && (
                 <div
-                  onClick={(e) => e.stopPropagation()}
                   style={{
                     position: 'absolute',
                     inset: 0,
@@ -96,6 +101,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                     borderRadius: 'var(--radius-lg)',
                     padding: 'var(--space-4)',
                     gap: 'var(--space-3)',
+                    zIndex: 2,
                   }}
                 >
                   <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink)', textAlign: 'center' }}>
@@ -106,6 +112,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                   </div>
                   <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
                     <button
+                      type="button"
                       className="btn btn-secondary btn-sm"
                       onClick={() => setConfirmId(null)}
                       disabled={deletingId === p.id}
@@ -113,6 +120,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                       Cancel
                     </button>
                     <button
+                      type="button"
                       className="btn btn-danger btn-sm"
                       onClick={() => handleDelete(p)}
                       disabled={deletingId === p.id}

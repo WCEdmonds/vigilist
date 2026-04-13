@@ -60,9 +60,9 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       setDoc(d);
       if (d.summary) setSummary(d.summary);
     }).catch(e => setError(e.message));
-    getDocumentNav(docId).then(nav => setNextId(nav.next_id));
-    listAnnotations(docId).then(setAnnotations).catch(() => {});
-    getDocumentDuplicates(docId).then(setDuplicates).catch(() => {});
+    getDocumentNav(docId).then(nav => setNextId(nav.next_id)).catch(e => console.warn('getDocumentNav failed:', e));
+    listAnnotations(docId).then(setAnnotations).catch(e => console.warn('listAnnotations failed:', e));
+    getDocumentDuplicates(docId).then(setDuplicates).catch(e => console.warn('getDocumentDuplicates failed:', e));
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {
@@ -84,8 +84,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         const a = document.createElement('a');
         a.href = url; a.download = `${doc.bates_begin}.pdf`; a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } else {
+        window.alert('Nothing to download — this document has no native file or page images.');
       }
-    } catch {}
+    } catch (e: any) {
+      window.alert(`Download failed: ${e?.message || 'unknown error'}`);
+    }
   };
 
   const handleAutoAdvance = useCallback(() => {
@@ -201,7 +205,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   }, [docId, hasNative, hasImages]);
 
   if (error) return <div style={{ padding: 32, color: 'var(--color-danger-600)' }}>Error: {error}</div>;
-  if (!doc) return <div className="loading-center"><span className="spinner spinner-md" /> Loading document...</div>;
+  if (!doc) return (
+    <div className="loading-fullscreen">
+      <span className="spinner" />
+      <div>Loading document…</div>
+    </div>
+  );
 
   const showCenterTabs = hasNative && hasImages;
 
