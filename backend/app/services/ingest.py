@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -210,7 +210,27 @@ async def ingest_from_storage(
         converted_tmp = os.path.join(tmp_dir, "converted")
         os.makedirs(converted_tmp, exist_ok=True)
 
-        documents = []
+        # Commit documents incrementally so partial progress survives a
+        # container restart / scale-down. Without this, accumulating all
+        # documents in memory and committing at the end means a killed
+        # background task loses every document it processed.
+        BATCH_SIZE = 25
+        pending_batch: list[Document] = []
+        all_committed_ids: list[str] = []
+
+        async def flush_batch() -> None:
+            nonlocal pending_batch
+            if not pending_batch:
+                return
+            db.add_all(pending_batch)
+            await db.flush()
+            for d in pending_batch:
+                all_committed_ids.append(str(d.id))
+            job.processed_files = len(all_committed_ids)
+            job.errors = errors.copy()
+            await db.commit()
+            pending_batch = []
+
         for i, record in enumerate(dat_records):
             bates_begin = record.get("Begin Bates", "").strip()
             bates_end = record.get("End Bates", "").strip()
@@ -276,16 +296,15 @@ async def ingest_from_storage(
                 native_path=native_storage_path,
                 image_paths=jpeg_storage_paths,
             )
-            documents.append(doc)
+            pending_batch.append(doc)
 
-            job.processed_files = i + 1
-            job.errors = errors.copy()
-            if (i + 1) % 50 == 0:
-                await db.commit()
+            if len(pending_batch) >= BATCH_SIZE:
+                await flush_batch()
 
-        db.add_all(documents)
-        await db.flush()
+        # Flush any remaining documents
+        await flush_batch()
 
+        # Update full-text search vectors for everything we just inserted
         await db.execute(
             text(
                 "UPDATE documents SET text_search_vector = to_tsvector('english', COALESCE(text_content, '')) "
@@ -293,18 +312,31 @@ async def ingest_from_storage(
             ),
             {"pid": production_id},
         )
+        await db.commit()
 
+        # Generate AI titles — wrap in try/except so title generation
+        # failures (API errors, rate limits, timeouts) don't fail the
+        # whole ingest. Documents are already saved at this point.
         if settings.anthropic_api_key:
-            texts = [(str(doc.id), doc.text_content) for doc in documents]
-            titles = await generate_titles_batch(texts)
-            for doc in documents:
-                title = titles.get(str(doc.id))
-                if title:
-                    doc.title = title
-            await db.flush()
+            try:
+                # Reload documents for title generation
+                result = await db.execute(
+                    select(Document).where(Document.production_id == production_id)
+                )
+                docs_for_titles = list(result.scalars().all())
+                texts_for_titles = [(str(d.id), d.text_content) for d in docs_for_titles]
+                titles = await generate_titles_batch(texts_for_titles)
+                for d in docs_for_titles:
+                    t = titles.get(str(d.id))
+                    if t:
+                        d.title = t
+                await db.commit()
+            except Exception as e:
+                logger.exception("AI title generation failed")
+                errors.append(f"AI title generation skipped: {e}")
 
         job.status = "complete"
-        job.processed_files = len(documents)
+        job.processed_files = len(all_committed_ids)
         job.errors = errors
         job.completed_at = datetime.now(timezone.utc)
         await db.commit()
