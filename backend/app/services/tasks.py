@@ -1,4 +1,9 @@
-"""Cloud Tasks helpers for Phase B ingest fan-out."""
+"""Cloud Tasks helpers for ingest fan-out.
+
+Ingest processes one batch of records per Cloud Task. Each task is a
+separate HTTP POST to /api/ingest/process-batch, so every batch runs in
+its own Cloud Run request and can't be killed by container scale-down.
+"""
 
 import json
 import logging
@@ -10,14 +15,27 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def enqueue_phase_b_tasks(doc_ids: list[str], production_id: int) -> int:
-    """Enqueue one Cloud Task per document for Phase B processing.
+def is_configured() -> bool:
+    """True if Cloud Tasks is fully configured."""
+    return bool(
+        settings.cloud_run_service_url
+        and settings.gcp_project_id
+        and settings.cloud_tasks_service_account
+    )
 
-    Returns the number of tasks created.
-    """
-    if not settings.cloud_run_service_url:
-        logger.warning("VIGILIST_CLOUD_RUN_SERVICE_URL not set — skipping Cloud Tasks fan-out")
-        return 0
+
+def enqueue_ingest_batch(
+    job_id: str,
+    production_id: int,
+    start_idx: int,
+    end_idx: int,
+) -> None:
+    """Enqueue a Cloud Task to process records[start_idx:end_idx] of an ingest job."""
+    if not is_configured():
+        raise RuntimeError(
+            "Cloud Tasks not configured — set VIGILIST_CLOUD_RUN_SERVICE_URL, "
+            "VIGILIST_GCP_PROJECT_ID, VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT"
+        )
 
     client = tasks_v2.CloudTasksClient()
     queue_path = client.queue_path(
@@ -26,78 +44,29 @@ def enqueue_phase_b_tasks(doc_ids: list[str], production_id: int) -> int:
         settings.cloud_tasks_queue,
     )
 
-    handler_url = f"{settings.cloud_run_service_url}/api/ingest/process-document"
-    created = 0
+    handler_url = f"{settings.cloud_run_service_url}/api/ingest/process-batch"
+    payload = json.dumps({
+        "job_id": job_id,
+        "production_id": production_id,
+        "start_idx": start_idx,
+        "end_idx": end_idx,
+    }).encode()
 
-    for doc_id in doc_ids:
-        payload = json.dumps({
-            "doc_id": doc_id,
-            "production_id": production_id,
-        }).encode()
-
-        task = tasks_v2.Task(
-            http_request=tasks_v2.HttpRequest(
-                http_method=tasks_v2.HttpMethod.POST,
-                url=handler_url,
-                headers={"Content-Type": "application/json"},
-                body=payload,
-                oidc_token=tasks_v2.OidcToken(
-                    service_account_email=f"{settings.gcp_project_id}@appspot.gserviceaccount.com",
-                    audience=settings.cloud_run_service_url,
-                ),
+    task = tasks_v2.Task(
+        http_request=tasks_v2.HttpRequest(
+            http_method=tasks_v2.HttpMethod.POST,
+            url=handler_url,
+            headers={"Content-Type": "application/json"},
+            body=payload,
+            oidc_token=tasks_v2.OidcToken(
+                service_account_email=settings.cloud_tasks_service_account,
+                audience=settings.cloud_run_service_url,
             ),
-        )
-
-        try:
-            client.create_task(parent=queue_path, task=task)
-            created += 1
-        except Exception:
-            logger.warning("Failed to enqueue task for doc %s", doc_id, exc_info=True)
-
-    logger.info("Enqueued %d Phase B tasks for production %d", created, production_id)
-    return created
-
-
-def enqueue_embed_tasks(doc_ids: list[str], production_id: int) -> int:
-    """Enqueue Cloud Tasks for embedding documents."""
-    if not settings.cloud_run_service_url:
-        logger.warning("VIGILIST_CLOUD_RUN_SERVICE_URL not set — skipping embed tasks")
-        return 0
-
-    client = tasks_v2.CloudTasksClient()
-    queue_path = client.queue_path(
-        settings.gcp_project_id,
-        settings.gcp_location,
-        settings.cloud_tasks_queue,
+        ),
     )
 
-    handler_url = f"{settings.cloud_run_service_url}/api/ingest/embed-document"
-    created = 0
-
-    for doc_id in doc_ids:
-        payload = json.dumps({
-            "doc_id": doc_id,
-            "production_id": production_id,
-        }).encode()
-
-        task = tasks_v2.Task(
-            http_request=tasks_v2.HttpRequest(
-                http_method=tasks_v2.HttpMethod.POST,
-                url=handler_url,
-                headers={"Content-Type": "application/json"},
-                body=payload,
-                oidc_token=tasks_v2.OidcToken(
-                    service_account_email=f"{settings.gcp_project_id}@appspot.gserviceaccount.com",
-                    audience=settings.cloud_run_service_url,
-                ),
-            ),
-        )
-
-        try:
-            client.create_task(parent=queue_path, task=task)
-            created += 1
-        except Exception:
-            logger.warning("Failed to enqueue embed task for doc %s", doc_id, exc_info=True)
-
-    logger.info("Enqueued %d embed tasks for production %d", created, production_id)
-    return created
+    client.create_task(parent=queue_path, task=task)
+    logger.info(
+        "Enqueued ingest batch for job %s production %d: records %d-%d",
+        job_id, production_id, start_idx, end_idx,
+    )

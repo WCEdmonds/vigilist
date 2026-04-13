@@ -1,5 +1,6 @@
-"""Ingest endpoints: start processing, check status."""
+"""Ingest endpoints: start processing, process batch, check status."""
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -10,6 +11,9 @@ from app.database import get_db
 from app.models import IngestJob, Production, User
 from app.routers.auth import get_current_user
 from app.schemas import IngestJobOut
+from app.services.oidc import verify_cloud_tasks_request
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["ingest"])
 
@@ -57,10 +61,25 @@ async def start_processing(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Phase 2: Start async backend processing after frontend upload is complete."""
-    production_id = body.get("production_id")
-    total_files = body.get("total_files", 0)
+    """Phase 2: Start processing after the frontend upload is complete.
 
+    If Cloud Tasks is configured, parses the DAT/OPT files, creates an
+    IngestJob with the correct total_files count, and enqueues one
+    Cloud Task per batch. Each task runs in its own Cloud Run request
+    so long ingests can't be killed by container scale-down.
+
+    Falls back to an inline FastAPI BackgroundTask when Cloud Tasks
+    isn't configured — fine for local dev, unreliable on Cloud Run
+    for long jobs.
+    """
+    from app.services import tasks as task_service
+    from app.services.ingest import (
+        INGEST_BATCH_SIZE,
+        bootstrap_ingest_source,
+        ingest_from_storage,
+    )
+
+    production_id = body.get("production_id")
     if not production_id:
         raise HTTPException(status_code=400, detail="production_id is required")
 
@@ -70,6 +89,60 @@ async def start_processing(
     if production.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    if task_service.is_configured():
+        # Parse DAT/OPT once to get an accurate total_files, then enqueue tasks
+        try:
+            records, _ = bootstrap_ingest_source(production.id)
+        except Exception as e:
+            logger.exception("Failed to parse ingest source")
+            raise HTTPException(status_code=400, detail=f"Failed to parse production files: {e}")
+
+        job = IngestJob(
+            production_id=production.id,
+            user_id=user.id,
+            status="processing",
+            total_files=len(records),
+        )
+        db.add(job)
+        await db.commit()
+        await db.refresh(job)
+
+        enqueued = 0
+        enqueue_errors: list[str] = []
+        for start in range(0, len(records), INGEST_BATCH_SIZE):
+            end = start + INGEST_BATCH_SIZE
+            try:
+                task_service.enqueue_ingest_batch(
+                    job_id=str(job.id),
+                    production_id=production.id,
+                    start_idx=start,
+                    end_idx=end,
+                )
+                enqueued += 1
+            except Exception as e:
+                logger.exception("Failed to enqueue batch %d-%d", start, end)
+                enqueue_errors.append(f"Enqueue failed for batch {start}-{end}: {e}")
+
+        if enqueue_errors:
+            job.errors = enqueue_errors
+            await db.commit()
+
+        logger.info("Enqueued %d batches for job %s", enqueued, job.id)
+
+        return IngestJobOut(
+            id=job.id,
+            production_id=production.id,
+            production_name=production.name,
+            status=job.status,
+            total_files=job.total_files,
+            processed_files=0,
+            errors=job.errors or [],
+            created_at=job.created_at,
+            completed_at=None,
+        )
+
+    # Fallback: inline BackgroundTask
+    total_files = body.get("total_files", 0)
     job = IngestJob(
         production_id=production.id,
         user_id=user.id,
@@ -98,6 +171,36 @@ async def start_processing(
         created_at=job.created_at,
         completed_at=None,
     )
+
+
+@router.post("/ingest/process-batch")
+async def process_batch_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker endpoint — processes one batch of ingest records.
+
+    Protected by OIDC token verification. Cloud Tasks will retry on
+    non-2xx responses, so the batch processor is idempotent.
+    """
+    from app.services.ingest import ingest_batch
+
+    job_id = body.get("job_id")
+    production_id = body.get("production_id")
+    start_idx = body.get("start_idx")
+    end_idx = body.get("end_idx")
+
+    if job_id is None or production_id is None or start_idx is None or end_idx is None:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    try:
+        await ingest_batch(db, job_id, int(production_id), int(start_idx), int(end_idx))
+    except Exception as e:
+        logger.exception("Ingest batch failed")
+        raise HTTPException(status_code=500, detail=f"Ingest batch failed: {e}")
+
+    return {"ok": True}
 
 
 @router.get("/ingest/{job_id}/status", response_model=IngestJobOut)
@@ -129,16 +232,15 @@ async def get_ingest_status(
 
 
 async def run_ingest_job(job_id: str, production_id: int, production_name: str):
-    """Background task that processes uploaded files from Firebase Storage."""
+    """Background task for the fallback ingest path."""
     from app.database import async_session_factory
     from app.services.ingest import ingest_from_storage
-    import logging
 
     async with async_session_factory() as db:
         try:
             await ingest_from_storage(db, job_id, production_id, production_name)
         except Exception as e:
-            logging.getLogger(__name__).exception("Ingest job failed")
+            logger.exception("Ingest job failed")
             job = await db.get(IngestJob, job_id)
             if job:
                 job.status = "failed"
