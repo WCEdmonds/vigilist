@@ -34,15 +34,6 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Enable required APIs
-        run: |
-          gcloud services enable \
-            cloudtasks.googleapis.com \
-            run.googleapis.com \
-            cloudbuild.googleapis.com \
-            iamcredentials.googleapis.com \
-            --project=$PROJECT_ID
-
       - name: Compute project metadata
         id: meta
         run: |
