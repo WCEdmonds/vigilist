@@ -726,11 +726,18 @@
 .production-card {
   padding: var(--space-5);
   cursor: pointer;
+  background: var(--color-card);
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
   transition: box-shadow var(--transition-slow), transform var(--transition-slow);
 }
-.production-card:hover {
+.production-card:hover,
+.production-card:focus-visible {
   box-shadow: var(--shadow-lg);
   transform: translateY(-2px);
+  outline: none;
 }
 
 .production-card-name {

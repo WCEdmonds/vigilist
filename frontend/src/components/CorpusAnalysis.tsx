@@ -65,7 +65,25 @@ function BarChart({ data, colors, onClickBar }: { data: { label: string; value: 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {data.map((d, i) => (
-        <div key={d.id} onClick={() => onClickBar(d.id)} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer' }}>
+        <button
+          key={d.id}
+          type="button"
+          onClick={() => onClickBar(d.id)}
+          aria-label={`${d.label}: ${d.value} documents`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+            cursor: 'pointer',
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            textAlign: 'left',
+            font: 'inherit',
+            color: 'inherit',
+            width: '100%',
+          }}
+        >
           <div style={{ width: 160, fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right', flexShrink: 0 }}>
             {d.label}
           </div>
@@ -77,14 +95,14 @@ function BarChart({ data, colors, onClickBar }: { data: { label: string; value: 
               display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 6,
             }}>
               {d.value > maxVal * 0.15 && (
-                <span style={{ fontSize: 10, color: '#fff', fontWeight: 600 }}>{d.value}</span>
+                <span style={{ fontSize: 10, color: 'var(--color-card)', fontWeight: 600 }}>{d.value}</span>
               )}
             </div>
           </div>
           {d.value <= maxVal * 0.15 && (
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', width: 24, flexShrink: 0 }}>{d.value}</span>
           )}
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -143,7 +161,7 @@ export default function CorpusAnalysis({ productionId, onViewDocument, onFilterC
 
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-5)' }}>
         {loading && (
-          <div className="loading-center"><span className="spinner spinner-md" /></div>
+          <div className="loading-center"><span className="spinner spinner-md" /> Loading analysis…</div>
         )}
 
         {!loading && clusters.length === 0 && !running && (
@@ -264,14 +282,27 @@ export default function CorpusAnalysis({ productionId, onViewDocument, onFilterC
                         ({cluster.page_count} pp.)
                       </span>
                     )}
-                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => onFilterCluster(cluster.id)}>
+                    <button
+                      type="button"
+                      onClick={() => onFilterCluster(cluster.id)}
+                      style={{
+                        flex: 1,
+                        cursor: 'pointer',
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 0,
+                        textAlign: 'left',
+                        font: 'inherit',
+                        color: 'inherit',
+                      }}
+                    >
                       <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
                         {cluster.label || `Cluster ${cluster.cluster_index + 1}`}
                       </div>
                       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)' }}>
                         Click to filter documents
                       </div>
-                    </div>
+                    </button>
                     <button
                       className="btn btn-ghost btn-xs"
                       onClick={() => setExpandedCluster(expandedCluster === cluster.id ? null : cluster.id)}
@@ -283,18 +314,31 @@ export default function CorpusAnalysis({ productionId, onViewDocument, onFilterC
                   {expandedCluster === cluster.id && cluster.key_documents && (
                     <div style={{ padding: '0 var(--space-4) var(--space-3)', borderTop: '1px solid var(--color-neutral-100)' }}>
                       {cluster.key_documents.map(d => (
-                        <div key={d.id} onClick={() => onViewDocument(d.id)} style={{
-                          padding: 'var(--space-1-5) 0', cursor: 'pointer',
-                          borderBottom: '1px solid var(--color-neutral-50)',
-                          display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-                        }}>
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => onViewDocument(d.id)}
+                          style={{
+                            padding: 'var(--space-1-5) 0', cursor: 'pointer',
+                            borderTop: 'none',
+                            borderLeft: 'none',
+                            borderRight: 'none',
+                            borderBottom: '1px solid var(--color-neutral-50)',
+                            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+                            background: 'transparent',
+                            width: '100%',
+                            textAlign: 'left',
+                            font: 'inherit',
+                            color: 'inherit',
+                          }}
+                        >
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>{d.title || d.bates_begin}</div>
                             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)' }}>
                               {d.bates_begin} · {d.page_count} pg{d.page_count !== 1 ? 's' : ''}
                             </div>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}
