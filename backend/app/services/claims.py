@@ -22,11 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 async def sync_user_claims(db: AsyncSession, user: User) -> None:
-    """Update Firebase custom claims with the user's accessible production IDs."""
+    """Update Firebase custom claims with the user's accessible production IDs.
+
+    The Firebase Storage rule checks `productionId in request.auth.token.prods`
+    where productionId is a string from the storage path. The claim values
+    must therefore be strings too — `"2" in [2]` is false in Firebase rules.
+    """
     try:
         prod_ids = await get_accessible_production_ids(db, user)
         firebase_auth.set_custom_user_claims(user.id, {
-            "production_ids": prod_ids,
+            "prods": [str(pid) for pid in prod_ids],
         })
         logger.info("Synced claims for user %s: %d productions", user.email, len(prod_ids))
     except Exception:
