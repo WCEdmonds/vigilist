@@ -24,6 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -63,6 +68,19 @@ jobs:
             --member="serviceAccount:${{ steps.meta.outputs.tasks_agent }}" \
             --role="roles/iam.serviceAccountTokenCreator" \
             --project=$PROJECT_ID --quiet
+
+      - name: Run Alembic migrations against Neon
+        run: |
+          DB_URL=$(gcloud run services describe $SERVICE_NAME \
+            --region=$REGION --project=$PROJECT_ID \
+            --format='value(spec.template.spec.containers[0].env.filter(name=VIGILIST_DATABASE_URL).value)' 2>/dev/null || echo "")
+          if [ -n "$DB_URL" ]; then
+            cd backend
+            pip install -q sqlalchemy[asyncio] asyncpg alembic pgvector
+            VIGILIST_DATABASE_URL="$DB_URL" alembic upgrade head
+          else
+            echo "::warning::Could not fetch DATABASE_URL from Cloud Run — skipping migrations"
+          fi
 
       - name: Get existing service URL (stable across deploys)
         id: url
