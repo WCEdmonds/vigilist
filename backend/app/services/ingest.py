@@ -1,5 +1,6 @@
 """Production ingest pipeline."""
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -337,15 +338,7 @@ async def ingest_batch(
                 await db.commit()
                 continue
             if bates_begin in existing:
-                # Already committed on a previous attempt — count as processed
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET processed_files = processed_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                # Already committed on a previous attempt — already counted
                 continue
             try:
                 doc = process_ingest_record(
@@ -396,8 +389,8 @@ async def ingest_batch(
 
         # Persist any error messages collected in this batch
         await db.execute(
-            text("UPDATE ingest_jobs SET errors = :errs WHERE id = :jid"),
-            {"errs": errors, "jid": job_id},
+            text("UPDATE ingest_jobs SET errors = :errs::jsonb WHERE id = :jid"),
+            {"errs": json.dumps(errors), "jid": job_id},
         )
         await db.commit()
 
