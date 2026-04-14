@@ -241,9 +241,12 @@ async def reocr_production(
 ):
     """Re-run Cloud Vision OCR on all documents in a production.
 
-    Updates text_content and text_search_vector for each document.
-    Runs in the background so the request returns immediately.
+    Enqueues one Cloud Task per batch so the work survives container
+    scale-down. Falls back to inline BackgroundTask if Cloud Tasks
+    isn't configured.
     """
+    from app.services import tasks as task_service
+
     production = await db.get(Production, production_id)
     if not production:
         raise HTTPException(status_code=404, detail="Production not found")
@@ -255,13 +258,75 @@ async def reocr_production(
         select(func.count()).select_from(Document).where(Document.production_id == production_id)
     )
 
+    if task_service.is_configured():
+        batch_size = 25
+        enqueued = 0
+        for offset in range(0, doc_count, batch_size):
+            task_service.enqueue_reocr_batch(production_id, offset, batch_size)
+            enqueued += 1
+        return {"message": f"Re-OCR enqueued {enqueued} batches for {doc_count} documents", "production_id": production_id}
+
     background_tasks.add_task(run_reocr, production_id=production_id)
 
     return {"message": f"Re-OCR started for {doc_count} documents", "production_id": production_id}
 
 
+@router.post("/ingest/reocr-batch")
+async def reocr_batch_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker: re-OCR a batch of documents."""
+    from app.services.ocr import ocr_image_vision_bytes
+    from app.services.storage import get_download_bytes
+
+    production_id = body.get("production_id")
+    offset = body.get("offset", 0)
+    limit = body.get("limit", 25)
+
+    result = await db.execute(
+        select(Document)
+        .where(Document.production_id == production_id)
+        .order_by(Document.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    docs = list(result.scalars().all())
+    logger.info("Re-OCR batch: production %d, offset %d, %d docs", production_id, offset, len(docs))
+
+    for doc in docs:
+        try:
+            if not doc.image_paths:
+                continue
+            text_parts = []
+            for img_path in doc.image_paths:
+                if not img_path:
+                    continue
+                img_bytes = get_download_bytes(img_path)
+                page_text = ocr_image_vision_bytes(img_bytes)
+                if page_text:
+                    text_parts.append(page_text)
+            if text_parts:
+                doc.text_content = "\n\n".join(text_parts)
+                await db.execute(
+                    text(
+                        "UPDATE documents SET text_search_vector = "
+                        "to_tsvector('english', COALESCE(:txt, '')) "
+                        "WHERE id = :id"
+                    ),
+                    {"txt": doc.text_content, "id": doc.id},
+                )
+                await db.commit()
+        except Exception:
+            logger.exception("Re-OCR failed for doc %s", doc.bates_begin)
+            await db.rollback()
+
+    return {"ok": True, "processed": len(docs)}
+
+
 async def run_reocr(production_id: int):
-    """Background task: re-OCR all documents in a production using Cloud Vision."""
+    """Background task fallback: re-OCR all documents in a production using Cloud Vision."""
     from app.database import async_session_factory
     from app.services.ocr import ocr_image_vision_bytes
     from app.services.storage import get_download_bytes
