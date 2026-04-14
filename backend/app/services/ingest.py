@@ -253,6 +253,23 @@ def process_ingest_record(
             errors.append(f"{bates_begin}: image conversion failed: {rel_path}: {e}")
             jpeg_storage_paths.append("")
 
+    # Run Cloud Vision OCR on converted images for higher-quality text
+    vision_text_parts: list[str] = []
+    for jpeg_path in jpeg_storage_paths:
+        if not jpeg_path:
+            continue
+        try:
+            jpeg_bytes = get_download_bytes(jpeg_path)
+            from app.services.ocr import ocr_image_vision_bytes
+            page_text = ocr_image_vision_bytes(jpeg_bytes)
+            if page_text:
+                vision_text_parts.append(page_text)
+        except Exception as e:
+            errors.append(f"{bates_begin}: Vision OCR failed for {jpeg_path}: {e}")
+
+    if vision_text_parts:
+        text_content = "\n\n".join(vision_text_parts)
+
     native_storage_path = None
     if native_link:
         native_storage_path = f"{prefix}{native_link.replace(chr(92), '/')}"
