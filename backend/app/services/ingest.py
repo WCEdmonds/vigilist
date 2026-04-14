@@ -338,7 +338,15 @@ async def ingest_batch(
                 await db.commit()
                 continue
             if bates_begin in existing:
-                # Already committed on a previous attempt — already counted
+                # Already committed on a previous attempt — count as skipped
+                await db.execute(
+                    text(
+                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
+                        "WHERE id = :jid"
+                    ),
+                    {"jid": job_id},
+                )
+                await db.commit()
                 continue
             try:
                 doc = process_ingest_record(
