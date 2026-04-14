@@ -364,11 +364,12 @@ async def ingest_batch(
                     continue
                 db.add(doc)
                 await db.flush()
-                # Update tsvector for the newly inserted doc
+                # Update tsvector and mark as complete
                 await db.execute(
                     text(
                         "UPDATE documents SET text_search_vector = "
-                        "to_tsvector('english', COALESCE(text_content, '')) "
+                        "to_tsvector('english', COALESCE(text_content, '')), "
+                        "processing_status = 'complete' "
                         "WHERE id = :id"
                     ),
                     {"id": doc.id},
