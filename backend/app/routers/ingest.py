@@ -4,11 +4,11 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import IngestJob, Production, User
+from app.models import Document, IngestJob, Production, User
 from app.routers.auth import get_current_user
 from app.schemas import IngestJobOut
 from app.services.oidc import verify_cloud_tasks_request
@@ -230,6 +230,79 @@ async def get_ingest_status(
         created_at=job.created_at,
         completed_at=job.completed_at,
     )
+
+
+@router.post("/ingest/reocr/{production_id}")
+async def reocr_production(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Re-run Cloud Vision OCR on all documents in a production.
+
+    Updates text_content and text_search_vector for each document.
+    Runs in the background so the request returns immediately.
+    """
+    production = await db.get(Production, production_id)
+    if not production:
+        raise HTTPException(status_code=404, detail="Production not found")
+    if production.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from sqlalchemy import func
+    doc_count = await db.scalar(
+        select(func.count()).select_from(Document).where(Document.production_id == production_id)
+    )
+
+    background_tasks.add_task(run_reocr, production_id=production_id)
+
+    return {"message": f"Re-OCR started for {doc_count} documents", "production_id": production_id}
+
+
+async def run_reocr(production_id: int):
+    """Background task: re-OCR all documents in a production using Cloud Vision."""
+    from app.database import async_session_factory
+    from app.services.ocr import ocr_image_vision_bytes
+    from app.services.storage import get_download_bytes
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Document).where(Document.production_id == production_id)
+        )
+        docs = list(result.scalars().all())
+        logger.info("Re-OCR: processing %d documents for production %d", len(docs), production_id)
+
+        for i, doc in enumerate(docs):
+            try:
+                if not doc.image_paths:
+                    continue
+                text_parts = []
+                for img_path in doc.image_paths:
+                    if not img_path:
+                        continue
+                    img_bytes = get_download_bytes(img_path)
+                    page_text = ocr_image_vision_bytes(img_bytes)
+                    if page_text:
+                        text_parts.append(page_text)
+                if text_parts:
+                    doc.text_content = "\n\n".join(text_parts)
+                    await db.execute(
+                        text(
+                            "UPDATE documents SET text_search_vector = "
+                            "to_tsvector('english', COALESCE(:txt, '')) "
+                            "WHERE id = :id"
+                        ),
+                        {"txt": doc.text_content, "id": doc.id},
+                    )
+                    await db.commit()
+                if (i + 1) % 25 == 0:
+                    logger.info("Re-OCR: %d/%d done", i + 1, len(docs))
+            except Exception:
+                logger.exception("Re-OCR failed for doc %s", doc.bates_begin)
+                await db.rollback()
+
+        logger.info("Re-OCR complete for production %d", production_id)
 
 
 async def run_ingest_job(job_id: str, production_id: int, production_name: str):
