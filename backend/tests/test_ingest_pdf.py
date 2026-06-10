@@ -74,3 +74,73 @@ def test_pages_rendered_for_every_page():
         _blank_two_page_pdf(), ocr_fn=lambda b: ""
     )
     assert page_count == len(pages) == 2
+
+
+from app.services import ingest_pdf as pdf_mod
+from app.services.ingest_pdf import list_pdf_sources, process_pdf_record
+
+
+def test_list_pdf_sources_sorts_and_keeps_relative_path(monkeypatch):
+    raw = [
+        "productions/7/raw/B/second.pdf",
+        "productions/7/raw/A/first.PDF",
+        "productions/7/raw/notes.txt",
+        "productions/7/raw/A/skip.opt",
+    ]
+    monkeypatch.setattr(pdf_mod, "list_files", lambda prefix: raw)
+
+    items = list_pdf_sources(7)
+
+    # Only PDFs, case-insensitive, sorted by storage path
+    assert [i["storage_path"] for i in items] == [
+        "productions/7/raw/A/first.PDF",
+        "productions/7/raw/B/second.pdf",
+    ]
+    assert items[0]["relative_path"] == "A/first.PDF"
+    assert items[0]["filename"] == "first.PDF"
+
+
+def test_process_pdf_record_assembles_document(monkeypatch):
+    item = {
+        "storage_path": "productions/7/raw/A/first.pdf",
+        "relative_path": "A/first.pdf",
+        "filename": "first.pdf",
+    }
+
+    monkeypatch.setattr(pdf_mod, "get_download_bytes", lambda path: b"%PDF-fake")
+    monkeypatch.setattr(
+        pdf_mod,
+        "render_and_extract_pdf",
+        lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: (
+            [b"\xff\xd8jpeg1", b"\xff\xd8jpeg2"],
+            "extracted text",
+            2,
+        ),
+    )
+    uploaded = []
+    monkeypatch.setattr(
+        pdf_mod,
+        "upload_bytes",
+        lambda data, remote, content_type=None: uploaded.append(remote) or remote,
+    )
+
+    errors: list[str] = []
+    doc = process_pdf_record(
+        production_id=7,
+        item=item,
+        global_index=0,
+        prefix="SMITH",
+        errors=errors,
+    )
+
+    assert doc.bates_begin == "SMITH 000001"
+    assert doc.bates_end == "SMITH 000001"
+    assert doc.page_count == 2
+    assert doc.title == "first"
+    assert doc.text_content == "extracted text"
+    assert doc.metadata_["File Name"] == "first.pdf"
+    assert doc.metadata_["Folder"] == "A"
+    assert doc.native_path == "productions/7/raw/A/first.pdf"
+    assert len(doc.image_paths) == 2
+    assert len(uploaded) == 2
+    assert errors == []
