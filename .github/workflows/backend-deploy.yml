@@ -71,16 +71,22 @@ jobs:
 
       - name: Run Alembic migrations against Neon
         run: |
+          # Resolve the live DB URL from the running service, parsing JSON with jq.
+          # The previous gcloud `--format` projection filter silently returned empty
+          # and SKIPPED migrations while still deploying new code — shipping code that
+          # referenced a not-yet-created column and 500ing prod (incident 2026-06-10).
+          # Now: a missing URL or a failed migration FAILS the deploy, so incompatible
+          # code can never ship ahead of its schema.
           DB_URL=$(gcloud run services describe $SERVICE_NAME \
-            --region=$REGION --project=$PROJECT_ID \
-            --format='value(spec.template.spec.containers[0].env.filter(name=VIGILIST_DATABASE_URL).value)' 2>/dev/null || echo "")
-          if [ -n "$DB_URL" ]; then
-            cd backend
-            pip install -q sqlalchemy[asyncio] asyncpg alembic pgvector
-            VIGILIST_DATABASE_URL="$DB_URL" alembic upgrade head
-          else
-            echo "::warning::Could not fetch DATABASE_URL from Cloud Run — skipping migrations"
+            --region=$REGION --project=$PROJECT_ID --format=json 2>/dev/null \
+            | jq -r '.spec.template.spec.containers[0].env[]? | select(.name=="VIGILIST_DATABASE_URL") | .value // empty')
+          if [ -z "$DB_URL" ]; then
+            echo "::error::Could not resolve VIGILIST_DATABASE_URL from Cloud Run service '$SERVICE_NAME'. Refusing to deploy without running migrations."
+            exit 1
           fi
+          cd backend
+          pip install -q sqlalchemy[asyncio] asyncpg alembic pgvector
+          VIGILIST_DATABASE_URL="$DB_URL" alembic upgrade head
 
       - name: Get existing service URL (stable across deploys)
         id: url
