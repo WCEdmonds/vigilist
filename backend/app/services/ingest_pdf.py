@@ -37,6 +37,18 @@ def derive_bates_prefix(production_name: str) -> str:
     return tokens[0][:12]
 
 
+# A filename stem that is just a control/Bates number (e.g. "SI001291",
+# "ABC-000123", "0001234") carries no meaning as a title, so we let OCR-based
+# smart renaming replace it. A stem with real words (spaces) is preserved.
+_BATES_STUB_RE = re.compile(r"[A-Za-z]{0,8}[\s_.-]?\d{3,}[A-Za-z]?")
+
+
+def looks_like_bates_stub(name: str) -> bool:
+    """True if a filename stem looks like a Bates/control stub rather than a
+    human-meaningful title (short alpha prefix + a run of digits, no words)."""
+    return bool(_BATES_STUB_RE.fullmatch((name or "").strip()))
+
+
 def render_and_extract_pdf(
     pdf_bytes: bytes,
     ocr_fn: Callable[[bytes], str],
@@ -160,13 +172,18 @@ def process_pdf_record(
     if folder:
         metadata["Folder"] = folder
 
+    # Meaningful filenames become the title directly; bare control/Bates-number
+    # filenames are left untitled so the finalize pass can smart-rename them
+    # from OCR text (with the filename kept as a fallback when no text exists).
+    title = None if looks_like_bates_stub(stem) else stem[:200]
+
     return Document(
         production_id=production_id,
         bates_begin=control_number,
         bates_end=control_number,
         page_count=page_count or 1,
         metadata_=metadata,
-        title=stem[:200],
+        title=title,
         text_content=text_content or None,
         native_path=storage_path,
         image_paths=image_paths,
