@@ -58,6 +58,10 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
 
   const chooseMode = (next: 'relativity' | 'generic_pdf') => {
     setMode(next);
+    if (files.length === 0) {
+      setModeWarning('');
+      return;
+    }
     const hasDat = files.some(f => {
       const path = f.webkitRelativePath.toUpperCase();
       return path.includes('/DATA/') && path.endsWith('.DAT');
