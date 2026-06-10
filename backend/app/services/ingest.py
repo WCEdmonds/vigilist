@@ -462,6 +462,9 @@ async def ingest_pdf_batch(
     if not job:
         return
     production = await db.get(Production, production_id)
+    # Prefix is derived deterministically from the production name. All batch
+    # workers for a job must see the same name — control numbers would diverge
+    # if a production were renamed mid-ingest (not a supported workflow).
     prefix = derive_bates_prefix(production.name if production else "")
 
     items = list_pdf_sources(production_id)
