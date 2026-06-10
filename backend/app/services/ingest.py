@@ -291,6 +291,72 @@ def process_ingest_record(
     )
 
 
+async def _incr_skipped(db: AsyncSession, job_id: str) -> None:
+    """Count one record as skipped."""
+    await db.execute(
+        text("UPDATE ingest_jobs SET skipped_files = skipped_files + 1 WHERE id = :jid"),
+        {"jid": job_id},
+    )
+    await db.commit()
+
+
+async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> None:
+    """Persist a freshly built Document: flush, set tsvector + status, bump progress."""
+    db.add(doc)
+    await db.flush()
+    await db.execute(
+        text(
+            "UPDATE documents SET text_search_vector = "
+            "to_tsvector('english', COALESCE(text_content, '')), "
+            "processing_status = 'complete' "
+            "WHERE id = :id"
+        ),
+        {"id": doc.id},
+    )
+    await db.execute(
+        text("UPDATE ingest_jobs SET processed_files = processed_files + 1 WHERE id = :jid"),
+        {"jid": job_id},
+    )
+    await db.commit()
+
+
+async def _finalize_job_if_done(
+    db: AsyncSession,
+    job: "IngestJob",
+    production_id: int,
+    errors: list[str],
+) -> None:
+    """Finalize the job (AI titles + mark complete) once all files are accounted for."""
+    from datetime import datetime, timezone
+
+    await db.refresh(job)
+    if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
+        if settings.anthropic_api_key:
+            try:
+                result = await db.execute(
+                    select(Document).where(
+                        Document.production_id == production_id,
+                        Document.title.is_(None),
+                    )
+                )
+                docs_for_titles = list(result.scalars().all())
+                texts_for_titles = [(str(d.id), d.text_content) for d in docs_for_titles]
+                titles = await generate_titles_batch(texts_for_titles)
+                for d in docs_for_titles:
+                    t = titles.get(str(d.id))
+                    if t:
+                        d.title = t
+                await db.commit()
+            except Exception as e:
+                logger.exception("AI title generation failed")
+                errors.append(f"AI title generation skipped: {e}")
+
+        job.status = "complete"
+        job.errors = errors
+        job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+
 async def ingest_batch(
     db: AsyncSession,
     job_id: str,
@@ -306,9 +372,6 @@ async def ingest_batch(
     """
     import shutil
     import tempfile
-    from datetime import datetime, timezone
-
-    from sqlalchemy import func
 
     from app.models import IngestJob
 
@@ -345,73 +408,24 @@ async def ingest_batch(
             bates_begin = record.get("Begin Bates", "").strip()
             if not bates_begin:
                 errors.append("Row: missing Begin Bates")
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _incr_skipped(db, job_id)
                 continue
             if bates_begin in existing:
-                # Already committed on a previous attempt — count as skipped
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _incr_skipped(db, job_id)
                 continue
             try:
                 doc = process_ingest_record(
                     production_id, record, opt_pages, converted_tmp, errors
                 )
                 if doc is None:
-                    await db.execute(
-                        text(
-                            "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                            "WHERE id = :jid"
-                        ),
-                        {"jid": job_id},
-                    )
-                    await db.commit()
+                    await _incr_skipped(db, job_id)
                     continue
-                db.add(doc)
-                await db.flush()
-                # Update tsvector and mark as complete
-                await db.execute(
-                    text(
-                        "UPDATE documents SET text_search_vector = "
-                        "to_tsvector('english', COALESCE(text_content, '')), "
-                        "processing_status = 'complete' "
-                        "WHERE id = :id"
-                    ),
-                    {"id": doc.id},
-                )
-                # Increment progress atomically so parallel batches don't clobber
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET processed_files = processed_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _persist_document(db, job_id, doc)
             except Exception as e:
                 logger.exception("Failed to process record %s", bates_begin)
                 errors.append(f"{bates_begin}: {e}")
                 await db.rollback()
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _incr_skipped(db, job_id)
 
         # Persist any error messages collected in this batch
         await db.execute(
@@ -420,36 +434,7 @@ async def ingest_batch(
         )
         await db.commit()
 
-        # If this batch pushed us to completion, finalize the job
-        await db.refresh(job)
-        if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
-            # AI titles are best-effort
-            if settings.anthropic_api_key:
-                try:
-                    result = await db.execute(
-                        select(Document).where(
-                            Document.production_id == production_id,
-                            Document.title.is_(None),
-                        )
-                    )
-                    docs_for_titles = list(result.scalars().all())
-                    texts_for_titles = [
-                        (str(d.id), d.text_content) for d in docs_for_titles
-                    ]
-                    titles = await generate_titles_batch(texts_for_titles)
-                    for d in docs_for_titles:
-                        t = titles.get(str(d.id))
-                        if t:
-                            d.title = t
-                    await db.commit()
-                except Exception as e:
-                    logger.exception("AI title generation failed")
-                    errors.append(f"AI title generation skipped: {e}")
-
-            job.status = "complete"
-            job.errors = errors
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
+        await _finalize_job_if_done(db, job, production_id, errors)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
