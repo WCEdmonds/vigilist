@@ -15,6 +15,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [mode, setMode] = useState<'relativity' | 'generic_pdf'>('relativity');
+  const [modeWarning, setModeWarning] = useState('');
   const [stage, setStage] = useState<Stage>('setup');
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
   const [job, setJob] = useState<IngestJob | null>(null);
@@ -34,27 +36,59 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     if (!fileList) return;
     const selected = Array.from(fileList);
 
-    // Validate: check for DATA/ directory with a .dat file
     const hasDat = selected.some(f => {
       const path = f.webkitRelativePath.toUpperCase();
       return path.includes('/DATA/') && path.endsWith('.DAT');
     });
+    const pdfCount = selected.filter(f => f.name.toLowerCase().endsWith('.pdf')).length;
 
-    if (!hasDat) {
-      setError('Selected folder must contain a DATA/ directory with a .dat file');
+    if (!hasDat && pdfCount === 0) {
+      setError('Folder must contain either a DATA/*.dat file (Relativity) or at least one PDF.');
+      setFiles([]);
       return;
     }
 
+    // Auto-detect and pre-select the most likely mode
+    const detected: 'relativity' | 'generic_pdf' = hasDat ? 'relativity' : 'generic_pdf';
+    setMode(detected);
     setFiles(selected);
     setError('');
+    setModeWarning('');
+  };
+
+  const chooseMode = (next: 'relativity' | 'generic_pdf') => {
+    setMode(next);
+    const hasDat = files.some(f => {
+      const path = f.webkitRelativePath.toUpperCase();
+      return path.includes('/DATA/') && path.endsWith('.DAT');
+    });
+    const pdfCount = files.filter(f => f.name.toLowerCase().endsWith('.pdf')).length;
+    if (next === 'relativity' && !hasDat) {
+      setModeWarning('No DATA/*.dat file found in this folder — Relativity ingest will fail.');
+    } else if (next === 'generic_pdf' && pdfCount === 0) {
+      setModeWarning('No PDF files found in this folder.');
+    } else {
+      setModeWarning('');
+    }
   };
 
   const handleStart = async () => {
     if (!name.trim() || files.length === 0) return;
     setError('');
+
+    // In PDF mode, only upload the PDFs (skip everything else in the folder)
+    const uploadList = mode === 'generic_pdf'
+      ? files.filter(f => f.name.toLowerCase().endsWith('.pdf'))
+      : files;
+
+    if (uploadList.length === 0) {
+      setError(mode === 'generic_pdf' ? 'No PDF files to upload.' : 'No files to upload.');
+      return;
+    }
+
     setStage('uploading');
-    const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
-    setUploadProgress({ uploaded: 0, total: files.length, bytesUploaded: 0, totalBytes, startTime: Date.now() });
+    const totalBytes = uploadList.reduce((sum, f) => sum + f.size, 0);
+    setUploadProgress({ uploaded: 0, total: uploadList.length, bytesUploaded: 0, totalBytes, startTime: Date.now() });
 
     try {
       // Phase 1: Create production in backend to get real production_id
@@ -100,13 +134,13 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         });
 
       const batchSize = 50;
-      for (let i = 0; i < files.length; i += batchSize) {
-        await Promise.all(files.slice(i, i + batchSize).map(uploadFile));
+      for (let i = 0; i < uploadList.length; i += batchSize) {
+        await Promise.all(uploadList.slice(i, i + batchSize).map(uploadFile));
       }
 
       // Phase 3: Start backend processing
       setStage('processing');
-      const ingestJob = await startProcessing(production_id, files.length);
+      const ingestJob = await startProcessing(production_id, uploadList.length, mode);
       setJob(ingestJob);
 
       // Poll for status
@@ -265,6 +299,32 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     Description (optional)
                   </label>
                   <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief description" />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Upload Type
+                  </label>
+                  <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                    <button
+                      type="button"
+                      className={mode === 'relativity' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                      onClick={() => chooseMode('relativity')}
+                    >
+                      Relativity production
+                    </button>
+                    <button
+                      type="button"
+                      className={mode === 'generic_pdf' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                      onClick={() => chooseMode('generic_pdf')}
+                    >
+                      Folder of files (PDFs)
+                    </button>
+                  </div>
+                  {modeWarning && (
+                    <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-warning-700, #92400e)' }}>
+                      {modeWarning}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
