@@ -100,6 +100,28 @@ def test_list_pdf_sources_sorts_and_keeps_relative_path(monkeypatch):
     assert items[0]["filename"] == "first.PDF"
 
 
+def test_job_errors_update_sql_binds_both_params():
+    """Regression: the errors UPDATE must bind both :errs and :jid.
+
+    The old ``errors = :errs::jsonb`` form was mis-parsed by SQLAlchemy —
+    the ``::jsonb`` cast swallowed the ``:errs`` bind, so a literal ``:errs``
+    reached asyncpg and every batch died with ``PostgresSyntaxError: syntax
+    error at or near ":"``. Cloud Tasks then retried each batch up to 100×,
+    inflating skipped_files and stalling the job forever.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.dialects import postgresql
+
+    from app.services.ingest import _UPDATE_JOB_ERRORS_SQL
+
+    compiled = str(text(_UPDATE_JOB_ERRORS_SQL).compile(dialect=postgresql.asyncpg.dialect()))
+
+    # Both named params must be converted to positional asyncpg placeholders;
+    # no literal ":errs"/":jid" may survive into the SQL sent to Postgres.
+    assert ":errs" not in compiled
+    assert ":jid" not in compiled
+
+
 def test_process_pdf_record_assembles_document(monkeypatch):
     item = {
         "storage_path": "productions/7/raw/A/first.pdf",
