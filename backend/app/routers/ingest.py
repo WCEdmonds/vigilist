@@ -89,19 +89,31 @@ async def start_processing(
     if production.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    source_format = body.get("source_format", "relativity")
+    batch_size = 10 if source_format == "generic_pdf" else INGEST_BATCH_SIZE
+
     if task_service.is_configured():
-        # Parse DAT/OPT once to get an accurate total_files, then enqueue tasks
+        # Count source items to set an accurate total_files, then enqueue tasks
         try:
-            records, _ = bootstrap_ingest_source(production.id)
+            if source_format == "generic_pdf":
+                from app.services.ingest_pdf import list_pdf_sources
+                total_files = len(list_pdf_sources(production.id))
+            else:
+                records, _ = bootstrap_ingest_source(production.id)
+                total_files = len(records)
         except Exception as e:
             logger.exception("Failed to parse ingest source")
             raise HTTPException(status_code=400, detail=f"Failed to parse production files: {e}")
+
+        if total_files == 0:
+            raise HTTPException(status_code=400, detail="No ingestable files found in upload")
 
         job = IngestJob(
             production_id=production.id,
             user_id=user.id,
             status="processing",
-            total_files=len(records),
+            source_format=source_format,
+            total_files=total_files,
         )
         db.add(job)
         await db.commit()
@@ -109,8 +121,8 @@ async def start_processing(
 
         enqueued = 0
         enqueue_errors: list[str] = []
-        for start in range(0, len(records), INGEST_BATCH_SIZE):
-            end = start + INGEST_BATCH_SIZE
+        for start in range(0, total_files, batch_size):
+            end = start + batch_size
             try:
                 task_service.enqueue_ingest_batch(
                     job_id=str(job.id),
@@ -147,6 +159,7 @@ async def start_processing(
         production_id=production.id,
         user_id=user.id,
         status="processing",
+        source_format=source_format,
         total_files=total_files,
     )
     db.add(job)
