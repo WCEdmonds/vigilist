@@ -55,7 +55,7 @@ def render_and_extract_pdf(
             jpeg_pages.append(jpeg)
 
             embedded = page.get_text().strip()
-            if len(embedded.replace(" ", "").replace("\n", "")) >= MIN_TEXT_CHARS:
+            if sum(1 for c in embedded if not c.isspace()) >= MIN_TEXT_CHARS:
                 text_parts.append(embedded)
             else:
                 ocr_text = ocr_fn(jpeg) or ""
