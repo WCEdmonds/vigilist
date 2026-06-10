@@ -439,37 +439,124 @@ async def ingest_batch(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+async def ingest_pdf_batch(
+    db: AsyncSession,
+    job_id: str,
+    production_id: int,
+    start_idx: int,
+    end_idx: int,
+) -> None:
+    """Process PDFs[start_idx:end_idx] for a generic-PDF ingest job.
+
+    Idempotent: documents already present (by production_id + control
+    number) are skipped, so retried batches are safe.
+    """
+    from app.models import IngestJob, Production
+    from app.services.ingest_pdf import (
+        derive_bates_prefix,
+        list_pdf_sources,
+        process_pdf_record,
+    )
+
+    job = await db.get(IngestJob, job_id)
+    if not job:
+        return
+    production = await db.get(Production, production_id)
+    prefix = derive_bates_prefix(production.name if production else "")
+
+    items = list_pdf_sources(production_id)
+    errors: list[str] = list(job.errors or [])
+
+    # Control numbers for this slice, by global index
+    slice_pairs = [
+        (idx, items[idx]) for idx in range(start_idx, min(end_idx, len(items)))
+    ]
+    control_numbers = [f"{prefix} {idx + 1:06d}" for idx, _ in slice_pairs]
+
+    existing: set[str] = set()
+    if control_numbers:
+        result = await db.execute(
+            select(Document.bates_begin).where(
+                Document.production_id == production_id,
+                Document.bates_begin.in_(control_numbers),
+            )
+        )
+        existing = {row[0] for row in result.all()}
+
+    for global_index, item in slice_pairs:
+        control_number = f"{prefix} {global_index + 1:06d}"
+        if control_number in existing:
+            await _incr_skipped(db, job_id)
+            continue
+        try:
+            doc = process_pdf_record(
+                production_id, item, global_index, prefix, errors
+            )
+            if doc is None:
+                await _incr_skipped(db, job_id)
+                continue
+            await _persist_document(db, job_id, doc)
+        except Exception as e:
+            logger.exception("Failed to process PDF %s", item.get("relative_path"))
+            errors.append(f"{control_number}: {e}")
+            await db.rollback()
+            await _incr_skipped(db, job_id)
+
+    await db.execute(
+        text("UPDATE ingest_jobs SET errors = :errs::jsonb WHERE id = :jid"),
+        {"errs": json.dumps(errors), "jid": job_id},
+    )
+    await db.commit()
+
+    await _finalize_job_if_done(db, job, production_id, errors)
+
+
+async def run_ingest_batch(
+    db: AsyncSession,
+    job_id: str,
+    production_id: int,
+    start_idx: int,
+    end_idx: int,
+) -> None:
+    """Dispatch one batch to the right processor based on job.source_format."""
+    from app.models import IngestJob
+
+    job = await db.get(IngestJob, job_id)
+    if job and job.source_format == "generic_pdf":
+        await ingest_pdf_batch(db, job_id, production_id, start_idx, end_idx)
+    else:
+        await ingest_batch(db, job_id, production_id, start_idx, end_idx)
+
+
 async def ingest_from_storage(
     db: AsyncSession,
     job_id: str,
     production_id: int,
     production_name: str,
 ) -> None:
-    """In-process fallback ingest used when Cloud Tasks isn't configured.
-
-    Runs the entire ingest inline as one long operation. Fine for local
-    dev but unreliable on Cloud Run for long ingests because BackgroundTasks
-    can be killed by container scale-down.
-    """
+    """In-process fallback ingest used when Cloud Tasks isn't configured."""
     from datetime import datetime, timezone
 
     from app.models import IngestJob
+    from app.services.ingest_pdf import list_pdf_sources
 
     job = await db.get(IngestJob, job_id)
     if not job:
         return
 
     try:
-        records, _ = bootstrap_ingest_source(production_id)
-        job.total_files = len(records)
+        if job.source_format == "generic_pdf":
+            total = len(list_pdf_sources(production_id))
+        else:
+            records, _ = bootstrap_ingest_source(production_id)
+            total = len(records)
+        job.total_files = total
         await db.commit()
 
-        for start in range(0, len(records), INGEST_BATCH_SIZE):
-            await ingest_batch(
+        for start in range(0, total, INGEST_BATCH_SIZE):
+            await run_ingest_batch(
                 db, job_id, production_id, start, start + INGEST_BATCH_SIZE
             )
-
-        # ingest_batch auto-finalizes when processed_files >= total_files
     except Exception as e:
         logger.exception("Inline ingest failed")
         job = await db.get(IngestJob, job_id)
