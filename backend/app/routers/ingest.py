@@ -184,7 +184,7 @@ async def process_batch_handler(
     Protected by OIDC token verification. Cloud Tasks will retry on
     non-2xx responses, so the batch processor is idempotent.
     """
-    from app.services.ingest import ingest_batch
+    from app.services.ingest import run_ingest_batch
 
     job_id = body.get("job_id")
     production_id = body.get("production_id")
@@ -195,7 +195,7 @@ async def process_batch_handler(
         raise HTTPException(status_code=400, detail="Missing required fields")
 
     try:
-        await ingest_batch(db, job_id, int(production_id), int(start_idx), int(end_idx))
+        await run_ingest_batch(db, job_id, int(production_id), int(start_idx), int(end_idx))
     except Exception as e:
         logger.exception("Ingest batch failed")
         raise HTTPException(status_code=500, detail=f"Ingest batch failed: {e}")
