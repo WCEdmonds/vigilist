@@ -291,6 +291,72 @@ def process_ingest_record(
     )
 
 
+async def _incr_skipped(db: AsyncSession, job_id: str) -> None:
+    """Count one record as skipped."""
+    await db.execute(
+        text("UPDATE ingest_jobs SET skipped_files = skipped_files + 1 WHERE id = :jid"),
+        {"jid": job_id},
+    )
+    await db.commit()
+
+
+async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> None:
+    """Persist a freshly built Document: flush, set tsvector + status, bump progress."""
+    db.add(doc)
+    await db.flush()
+    await db.execute(
+        text(
+            "UPDATE documents SET text_search_vector = "
+            "to_tsvector('english', COALESCE(text_content, '')), "
+            "processing_status = 'complete' "
+            "WHERE id = :id"
+        ),
+        {"id": doc.id},
+    )
+    await db.execute(
+        text("UPDATE ingest_jobs SET processed_files = processed_files + 1 WHERE id = :jid"),
+        {"jid": job_id},
+    )
+    await db.commit()
+
+
+async def _finalize_job_if_done(
+    db: AsyncSession,
+    job: "IngestJob",
+    production_id: int,
+    errors: list[str],
+) -> None:
+    """Finalize the job (AI titles + mark complete) once all files are accounted for."""
+    from datetime import datetime, timezone
+
+    await db.refresh(job)
+    if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
+        if settings.anthropic_api_key:
+            try:
+                result = await db.execute(
+                    select(Document).where(
+                        Document.production_id == production_id,
+                        Document.title.is_(None),
+                    )
+                )
+                docs_for_titles = list(result.scalars().all())
+                texts_for_titles = [(str(d.id), d.text_content) for d in docs_for_titles]
+                titles = await generate_titles_batch(texts_for_titles)
+                for d in docs_for_titles:
+                    t = titles.get(str(d.id))
+                    if t:
+                        d.title = t
+                await db.commit()
+            except Exception as e:
+                logger.exception("AI title generation failed")
+                errors.append(f"AI title generation skipped: {e}")
+
+        job.status = "complete"
+        job.errors = errors
+        job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+
 async def ingest_batch(
     db: AsyncSession,
     job_id: str,
@@ -306,9 +372,6 @@ async def ingest_batch(
     """
     import shutil
     import tempfile
-    from datetime import datetime, timezone
-
-    from sqlalchemy import func
 
     from app.models import IngestJob
 
@@ -345,73 +408,24 @@ async def ingest_batch(
             bates_begin = record.get("Begin Bates", "").strip()
             if not bates_begin:
                 errors.append("Row: missing Begin Bates")
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _incr_skipped(db, job_id)
                 continue
             if bates_begin in existing:
-                # Already committed on a previous attempt — count as skipped
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _incr_skipped(db, job_id)
                 continue
             try:
                 doc = process_ingest_record(
                     production_id, record, opt_pages, converted_tmp, errors
                 )
                 if doc is None:
-                    await db.execute(
-                        text(
-                            "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                            "WHERE id = :jid"
-                        ),
-                        {"jid": job_id},
-                    )
-                    await db.commit()
+                    await _incr_skipped(db, job_id)
                     continue
-                db.add(doc)
-                await db.flush()
-                # Update tsvector and mark as complete
-                await db.execute(
-                    text(
-                        "UPDATE documents SET text_search_vector = "
-                        "to_tsvector('english', COALESCE(text_content, '')), "
-                        "processing_status = 'complete' "
-                        "WHERE id = :id"
-                    ),
-                    {"id": doc.id},
-                )
-                # Increment progress atomically so parallel batches don't clobber
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET processed_files = processed_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _persist_document(db, job_id, doc)
             except Exception as e:
                 logger.exception("Failed to process record %s", bates_begin)
                 errors.append(f"{bates_begin}: {e}")
                 await db.rollback()
-                await db.execute(
-                    text(
-                        "UPDATE ingest_jobs SET skipped_files = skipped_files + 1 "
-                        "WHERE id = :jid"
-                    ),
-                    {"jid": job_id},
-                )
-                await db.commit()
+                await _incr_skipped(db, job_id)
 
         # Persist any error messages collected in this batch
         await db.execute(
@@ -420,38 +434,101 @@ async def ingest_batch(
         )
         await db.commit()
 
-        # If this batch pushed us to completion, finalize the job
-        await db.refresh(job)
-        if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
-            # AI titles are best-effort
-            if settings.anthropic_api_key:
-                try:
-                    result = await db.execute(
-                        select(Document).where(
-                            Document.production_id == production_id,
-                            Document.title.is_(None),
-                        )
-                    )
-                    docs_for_titles = list(result.scalars().all())
-                    texts_for_titles = [
-                        (str(d.id), d.text_content) for d in docs_for_titles
-                    ]
-                    titles = await generate_titles_batch(texts_for_titles)
-                    for d in docs_for_titles:
-                        t = titles.get(str(d.id))
-                        if t:
-                            d.title = t
-                    await db.commit()
-                except Exception as e:
-                    logger.exception("AI title generation failed")
-                    errors.append(f"AI title generation skipped: {e}")
-
-            job.status = "complete"
-            job.errors = errors
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
+        await _finalize_job_if_done(db, job, production_id, errors)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def ingest_pdf_batch(
+    db: AsyncSession,
+    job_id: str,
+    production_id: int,
+    start_idx: int,
+    end_idx: int,
+) -> None:
+    """Process PDFs[start_idx:end_idx] for a generic-PDF ingest job.
+
+    Idempotent: documents already present (by production_id + control
+    number) are skipped, so retried batches are safe.
+    """
+    from app.models import IngestJob, Production
+    from app.services.ingest_pdf import (
+        derive_bates_prefix,
+        list_pdf_sources,
+        process_pdf_record,
+    )
+
+    job = await db.get(IngestJob, job_id)
+    if not job:
+        return
+    production = await db.get(Production, production_id)
+    # Prefix is derived deterministically from the production name. All batch
+    # workers for a job must see the same name — control numbers would diverge
+    # if a production were renamed mid-ingest (not a supported workflow).
+    prefix = derive_bates_prefix(production.name if production else "")
+
+    items = list_pdf_sources(production_id)
+    errors: list[str] = list(job.errors or [])
+
+    # Control numbers for this slice, by global index
+    slice_pairs = [
+        (idx, items[idx]) for idx in range(start_idx, min(end_idx, len(items)))
+    ]
+    control_numbers = [f"{prefix} {idx + 1:06d}" for idx, _ in slice_pairs]
+
+    existing: set[str] = set()
+    if control_numbers:
+        result = await db.execute(
+            select(Document.bates_begin).where(
+                Document.production_id == production_id,
+                Document.bates_begin.in_(control_numbers),
+            )
+        )
+        existing = {row[0] for row in result.all()}
+
+    for global_index, item in slice_pairs:
+        control_number = f"{prefix} {global_index + 1:06d}"
+        if control_number in existing:
+            await _incr_skipped(db, job_id)
+            continue
+        try:
+            doc = process_pdf_record(
+                production_id, item, global_index, prefix, errors
+            )
+            if doc is None:
+                await _incr_skipped(db, job_id)
+                continue
+            await _persist_document(db, job_id, doc)
+        except Exception as e:
+            logger.exception("Failed to process PDF %s", item.get("relative_path"))
+            errors.append(f"{control_number}: {e}")
+            await db.rollback()
+            await _incr_skipped(db, job_id)
+
+    await db.execute(
+        text("UPDATE ingest_jobs SET errors = :errs::jsonb WHERE id = :jid"),
+        {"errs": json.dumps(errors), "jid": job_id},
+    )
+    await db.commit()
+
+    await _finalize_job_if_done(db, job, production_id, errors)
+
+
+async def run_ingest_batch(
+    db: AsyncSession,
+    job_id: str,
+    production_id: int,
+    start_idx: int,
+    end_idx: int,
+) -> None:
+    """Dispatch one batch to the right processor based on job.source_format."""
+    from app.models import IngestJob
+
+    job = await db.get(IngestJob, job_id)
+    if job and job.source_format == "generic_pdf":
+        await ingest_pdf_batch(db, job_id, production_id, start_idx, end_idx)
+    else:
+        await ingest_batch(db, job_id, production_id, start_idx, end_idx)
 
 
 async def ingest_from_storage(
@@ -460,31 +537,29 @@ async def ingest_from_storage(
     production_id: int,
     production_name: str,
 ) -> None:
-    """In-process fallback ingest used when Cloud Tasks isn't configured.
-
-    Runs the entire ingest inline as one long operation. Fine for local
-    dev but unreliable on Cloud Run for long ingests because BackgroundTasks
-    can be killed by container scale-down.
-    """
+    """In-process fallback ingest used when Cloud Tasks isn't configured."""
     from datetime import datetime, timezone
 
     from app.models import IngestJob
+    from app.services.ingest_pdf import list_pdf_sources
 
     job = await db.get(IngestJob, job_id)
     if not job:
         return
 
     try:
-        records, _ = bootstrap_ingest_source(production_id)
-        job.total_files = len(records)
+        if job.source_format == "generic_pdf":
+            total = len(list_pdf_sources(production_id))
+        else:
+            records, _ = bootstrap_ingest_source(production_id)
+            total = len(records)
+        job.total_files = total
         await db.commit()
 
-        for start in range(0, len(records), INGEST_BATCH_SIZE):
-            await ingest_batch(
+        for start in range(0, total, INGEST_BATCH_SIZE):
+            await run_ingest_batch(
                 db, job_id, production_id, start, start + INGEST_BATCH_SIZE
             )
-
-        # ingest_batch auto-finalizes when processed_files >= total_files
     except Exception as e:
         logger.exception("Inline ingest failed")
         job = await db.get(IngestJob, job_id)

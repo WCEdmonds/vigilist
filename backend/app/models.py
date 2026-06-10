@@ -202,6 +202,7 @@ class IngestJob(Base):
     production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(String(128), ForeignKey("users.id"), nullable=False)
     status = Column(String(20), nullable=False, default="pending")
+    source_format = Column(String(20), nullable=False, server_default="relativity")
     total_files = Column(Integer, nullable=False, default=0)
     processed_files = Column(Integer, nullable=False, default=0)
     skipped_files = Column(Integer, nullable=False, default=0)

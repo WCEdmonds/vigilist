@@ -97,6 +97,14 @@ def upload_file(local_path: str, remote_path: str, content_type: str | None = No
     return remote_path
 
 
+def upload_bytes(data: bytes, remote_path: str, content_type: str | None = None) -> str:
+    """Upload raw bytes to Firebase Storage. Returns the remote path."""
+    bucket = get_bucket()
+    blob = bucket.blob(remote_path)
+    blob.upload_from_string(data, content_type=content_type)
+    return remote_path
+
+
 def list_files(prefix: str) -> list[str]:
     """List all file paths under a prefix in Firebase Storage."""
     bucket = get_bucket()
