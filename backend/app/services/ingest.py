@@ -300,6 +300,21 @@ async def _incr_skipped(db: AsyncSession, job_id: str) -> None:
     await db.commit()
 
 
+# Use cast(:errs as jsonb), NOT ":errs::jsonb" — SQLAlchemy's bind parser lets
+# the ``::jsonb`` cast swallow the ``:errs`` parameter, so a literal ``:errs``
+# reaches asyncpg and Postgres raises ``syntax error at or near ":"``.
+_UPDATE_JOB_ERRORS_SQL = "UPDATE ingest_jobs SET errors = cast(:errs as jsonb) WHERE id = :jid"
+
+
+async def _persist_job_errors(db: AsyncSession, job_id: str, errors: list[str]) -> None:
+    """Persist the batch's collected error messages onto the job (JSONB column)."""
+    await db.execute(
+        text(_UPDATE_JOB_ERRORS_SQL),
+        {"errs": json.dumps(errors), "jid": job_id},
+    )
+    await db.commit()
+
+
 async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> None:
     """Persist a freshly built Document: flush, set tsvector + status, bump progress."""
     db.add(doc)
@@ -428,11 +443,7 @@ async def ingest_batch(
                 await _incr_skipped(db, job_id)
 
         # Persist any error messages collected in this batch
-        await db.execute(
-            text("UPDATE ingest_jobs SET errors = :errs::jsonb WHERE id = :jid"),
-            {"errs": json.dumps(errors), "jid": job_id},
-        )
-        await db.commit()
+        await _persist_job_errors(db, job_id, errors)
 
         await _finalize_job_if_done(db, job, production_id, errors)
     finally:
@@ -505,11 +516,7 @@ async def ingest_pdf_batch(
             await db.rollback()
             await _incr_skipped(db, job_id)
 
-    await db.execute(
-        text("UPDATE ingest_jobs SET errors = :errs::jsonb WHERE id = :jid"),
-        {"errs": json.dumps(errors), "jid": job_id},
-    )
-    await db.commit()
+    await _persist_job_errors(db, job_id, errors)
 
     await _finalize_job_if_done(db, job, production_id, errors)
 
