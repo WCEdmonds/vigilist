@@ -346,25 +346,34 @@ async def _finalize_job_if_done(
 
     await db.refresh(job)
     if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
-        if settings.anthropic_api_key:
+        result = await db.execute(
+            select(Document).where(
+                Document.production_id == production_id,
+                Document.title.is_(None),
+            )
+        )
+        untitled_docs = list(result.scalars().all())
+
+        if settings.anthropic_api_key and untitled_docs:
             try:
-                result = await db.execute(
-                    select(Document).where(
-                        Document.production_id == production_id,
-                        Document.title.is_(None),
-                    )
-                )
-                docs_for_titles = list(result.scalars().all())
-                texts_for_titles = [(str(d.id), d.text_content) for d in docs_for_titles]
+                texts_for_titles = [(str(d.id), d.text_content) for d in untitled_docs]
                 titles = await generate_titles_batch(texts_for_titles)
-                for d in docs_for_titles:
+                for d in untitled_docs:
                     t = titles.get(str(d.id))
                     if t:
                         d.title = t
-                await db.commit()
             except Exception as e:
                 logger.exception("AI title generation failed")
                 errors.append(f"AI title generation skipped: {e}")
+
+        # Fallback: any doc still untitled (sparse/blank text, or no API key)
+        # keeps its original filename so it is never left blank. Scoped to docs
+        # that carry a "File Name" (the generic-PDF path); Relativity docs have
+        # none and stay NULL exactly as before.
+        for d in untitled_docs:
+            if not d.title and isinstance(d.metadata_, dict) and d.metadata_.get("File Name"):
+                d.title = os.path.splitext(d.metadata_["File Name"])[0][:200]
+        await db.commit()
 
         job.status = "complete"
         job.errors = errors

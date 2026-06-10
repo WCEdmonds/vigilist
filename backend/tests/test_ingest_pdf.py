@@ -20,6 +20,26 @@ def test_prefix_falls_back_to_doc_when_empty():
     assert derive_bates_prefix("") == "DOC"
 
 
+def test_bates_stub_detection():
+    from app.services.ingest_pdf import looks_like_bates_stub
+
+    # Non-descriptive control/Bates stubs → eligible for AI retitling
+    assert looks_like_bates_stub("SI001291")
+    assert looks_like_bates_stub("SI001292")
+    assert looks_like_bates_stub("ABC-000123")
+    assert looks_like_bates_stub("0001234")
+    assert looks_like_bates_stub("PROD_004567")
+
+    # Human-meaningful filenames → preserved as-is
+    assert not looks_like_bates_stub(
+        "Jackson v. Bunch SI Responses to Discovery Requests (2024-10-04)"
+    )
+    assert not looks_like_bates_stub("10-16-24 JACKSON DEPO")
+    assert not looks_like_bates_stub("Milton Jackson Interrogatory Responses")
+    assert not looks_like_bates_stub("Complaint and Jury Demand")
+    assert not looks_like_bates_stub("")
+
+
 def _born_digital_pdf(text: str) -> bytes:
     doc = fitz.open()
     page = doc.new_page()
