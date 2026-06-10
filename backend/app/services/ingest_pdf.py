@@ -8,6 +8,9 @@ in place of a Bates number.
 
 import logging
 import re
+from typing import Callable
+
+import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
@@ -28,3 +31,39 @@ def derive_bates_prefix(production_name: str) -> str:
     if not tokens:
         return "DOC"
     return tokens[0][:12]
+
+
+def render_and_extract_pdf(
+    pdf_bytes: bytes,
+    ocr_fn: Callable[[bytes], str],
+    dpi: int = RENDER_DPI,
+) -> tuple[list[bytes], str, int]:
+    """Render every page to a JPEG and extract its text.
+
+    Returns (jpeg_bytes_per_page, combined_text, page_count). Uses the
+    embedded text layer when present; calls ocr_fn(jpeg_bytes) for pages
+    whose embedded text is empty/sparse (scanned pages).
+    """
+    jpeg_pages: list[bytes] = []
+    text_parts: list[str] = []
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for page in doc:
+            pix = page.get_pixmap(dpi=dpi, alpha=False)
+            jpeg = pix.tobytes("jpeg")
+            jpeg_pages.append(jpeg)
+
+            embedded = page.get_text().strip()
+            if len(embedded.replace(" ", "").replace("\n", "")) >= MIN_TEXT_CHARS:
+                text_parts.append(embedded)
+            else:
+                ocr_text = ocr_fn(jpeg) or ""
+                if ocr_text.strip():
+                    text_parts.append(ocr_text.strip())
+
+        page_count = doc.page_count
+    finally:
+        doc.close()
+
+    return jpeg_pages, "\n\n".join(text_parts), page_count
