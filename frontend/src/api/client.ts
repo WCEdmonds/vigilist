@@ -325,8 +325,12 @@ export async function getAuditLogs(
 export const createProductionForIngest = (productionName: string, description: string) =>
   request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description }));
 
-export const startProcessing = (productionId: number, totalFiles: number) =>
-  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles }));
+export const startProcessing = (
+  productionId: number,
+  totalFiles: number,
+  sourceFormat: 'relativity' | 'generic_pdf' = 'relativity',
+) =>
+  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat }));
 
 export const reprocessProduction = (productionId: number) =>
   request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: 0 }));
