@@ -2,8 +2,6 @@
 
 import logging
 
-import anthropic
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -37,6 +35,8 @@ async def generate_title(text: str) -> str | None:
         return None
 
     try:
+        import anthropic  # lazy: keep the SDK off the startup path
+
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-haiku-4-5",
