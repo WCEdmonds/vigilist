@@ -1,16 +1,20 @@
 """AI-powered features using Claude API."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
-
-import anthropic
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _get_client() -> anthropic.AsyncAnthropic | None:
+def _get_client() -> "anthropic.AsyncAnthropic | None":
+    # Imported lazily so the anthropic SDK isn't loaded at server startup —
+    # it only matters for AI endpoints, not the cold-start/login path.
+    import anthropic
+
     if not settings.anthropic_api_key:
         return None
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
