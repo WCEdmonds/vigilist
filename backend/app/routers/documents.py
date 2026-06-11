@@ -775,10 +775,16 @@ async def get_native(
 @router.get("/{doc_id}/native-url")
 async def get_native_url(
     doc_id: UUID,
+    download: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Return a signed URL for the native file (for browser-based viewing)."""
+    """Return a signed URL for the native file (for browser-based viewing or download).
+
+    Pass ?download=true to get a URL whose response will carry
+    Content-Disposition: attachment, forcing a save-file dialog instead of
+    inline playback (needed for video/audio on cross-origin signed URLs).
+    """
     accessible = await get_accessible_production_ids(db, user)
     doc = await db.get(Document, doc_id)
     if not doc:
@@ -790,11 +796,14 @@ async def get_native_url(
 
     if doc.native_path.startswith("productions/"):
         from app.services.storage import get_signed_url
-        url = get_signed_url(doc.native_path, expiration_minutes=60)
+        filename = doc.native_path.rsplit("/", 1)[-1]
         suffix = doc.native_path.rsplit(".", 1)[-1].lower() if "." in doc.native_path else ""
-        return {"url": url, "extension": suffix, "filename": doc.native_path.rsplit("/", 1)[-1]}
+        response_disposition = f'attachment; filename="{filename}"' if download else None
+        url = get_signed_url(doc.native_path, expiration_minutes=60, response_disposition=response_disposition)
+        return {"url": url, "extension": suffix, "filename": filename}
 
     # Local dev: return the regular endpoint URL (auth handled by cookie/session)
+    # The /native endpoint already sends Content-Disposition: attachment.
     return {"url": f"/api/documents/{doc_id}/native", "extension": doc.native_path.rsplit(".", 1)[-1].lower(), "filename": doc.native_path.rsplit("/", 1)[-1]}
 
 
