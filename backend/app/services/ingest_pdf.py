@@ -9,7 +9,7 @@ in place of a Bates number.
 import logging
 import os
 import re
-from typing import Callable
+from typing import Callable, Iterator
 
 import fitz  # PyMuPDF
 
@@ -49,40 +49,36 @@ def looks_like_bates_stub(name: str) -> bool:
     return bool(_BATES_STUB_RE.fullmatch((name or "").strip()))
 
 
-def render_and_extract_pdf(
+def iter_pdf_pages(
     pdf_bytes: bytes,
     ocr_fn: Callable[[bytes], str],
     dpi: int = RENDER_DPI,
-) -> tuple[list[bytes], str, int]:
-    """Render every page to a JPEG and extract its text.
+) -> Iterator[tuple[int, bytes, str]]:
+    """Yield (page_number, jpeg_bytes, page_text) one page at a time.
 
-    Returns (jpeg_bytes_per_page, combined_text, page_count). Uses the
-    embedded text layer when present; calls ocr_fn(jpeg_bytes) for pages
-    whose embedded text is empty/sparse (scanned pages).
+    Rendering one page at a time and letting the caller upload and drop each
+    JPEG keeps peak memory bounded to a single page. Holding every rendered
+    page in a list (the previous design) OOM-killed the worker on large PDFs.
+
+    Uses the embedded text layer when present; calls ocr_fn(jpeg_bytes) for
+    pages whose embedded text is empty/sparse (scanned pages).
     """
-    jpeg_pages: list[bytes] = []
-    text_parts: list[str] = []
-
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
-        for page in doc:
+        for page_number, page in enumerate(doc, start=1):
             pix = page.get_pixmap(dpi=dpi, alpha=False)
             jpeg = pix.tobytes("jpeg")
-            jpeg_pages.append(jpeg)
+            pix = None  # release the raw pixmap before OCR/yield
 
             embedded = page.get_text().strip()
             if sum(1 for c in embedded if not c.isspace()) >= MIN_TEXT_CHARS:
-                text_parts.append(embedded)
+                page_text = embedded
             else:
-                ocr_text = ocr_fn(jpeg) or ""
-                if ocr_text.strip():
-                    text_parts.append(ocr_text.strip())
+                page_text = (ocr_fn(jpeg) or "").strip()
 
-        page_count = doc.page_count
+            yield page_number, jpeg, page_text
     finally:
         doc.close()
-
-    return jpeg_pages, "\n\n".join(text_parts), page_count
 
 
 def list_pdf_sources(production_id: int) -> list[dict]:
@@ -145,27 +141,32 @@ def process_pdf_record(
         errors.append(f"{control_number}: could not download {relative_path}: {e}")
         return None
 
+    # Render + upload one page at a time so memory stays bounded to a single
+    # page; only small strings (text + remote paths) accumulate across pages.
+    image_paths: list[str] = []
+    text_parts: list[str] = []
+    page_count = 0
+    stem = os.path.splitext(filename)[0]
     try:
-        jpeg_pages, text_content, page_count = render_and_extract_pdf(
-            pdf_bytes, ocr_fn=_ocr_jpeg
-        )
+        for page_num, jpeg, page_text in iter_pdf_pages(pdf_bytes, ocr_fn=_ocr_jpeg):
+            page_count = page_num
+            if page_text:
+                text_parts.append(page_text)
+            remote = (
+                f"productions/{production_id}/converted/"
+                f"{control_number.replace(' ', '_')}_{page_num:04d}.jpg"
+            )
+            try:
+                upload_bytes(jpeg, remote, content_type="image/jpeg")
+                image_paths.append(remote)
+            except Exception as e:
+                errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
+                image_paths.append("")
     except Exception as e:
         errors.append(f"{control_number}: failed to render {relative_path}: {e}")
         return None
 
-    image_paths: list[str] = []
-    stem = os.path.splitext(filename)[0]
-    for page_num, jpeg in enumerate(jpeg_pages, start=1):
-        remote = (
-            f"productions/{production_id}/converted/"
-            f"{control_number.replace(' ', '_')}_{page_num:04d}.jpg"
-        )
-        try:
-            upload_bytes(jpeg, remote, content_type="image/jpeg")
-            image_paths.append(remote)
-        except Exception as e:
-            errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
-            image_paths.append("")
+    text_content = "\n\n".join(text_parts)
 
     folder = os.path.dirname(relative_path)
     metadata = {"File Name": filename}

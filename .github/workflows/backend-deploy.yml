@@ -108,7 +108,7 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --timeout 3600 \
-            --memory 1Gi \
+            --memory 2Gi \
             --update-env-vars="VIGILIST_CLOUD_RUN_SERVICE_URL=${SERVICE_URL},VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT=${{ steps.meta.outputs.compute_sa }},VIGILIST_GCP_PROJECT_ID=$PROJECT_ID,VIGILIST_GCP_LOCATION=$REGION,VIGILIST_CLOUD_TASKS_QUEUE=$TASKS_QUEUE" \
             --quiet
 
