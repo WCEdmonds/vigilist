@@ -112,8 +112,9 @@ export function updateDocTitle(docId: string, title: string): Promise<{ ok: bool
   return request(`/api/documents/${docId}/title`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
 }
 
-export function getNativeUrl(docId: string): Promise<{ url: string; extension: string; filename: string }> {
-  return request(`/api/documents/${docId}/native-url`);
+export function getNativeUrl(docId: string, download = false): Promise<{ url: string; extension: string; filename: string }> {
+  const qs = download ? '?download=true' : '';
+  return request(`/api/documents/${docId}/native-url${qs}`);
 }
 
 export async function fetchDocumentPdf(docId: string): Promise<Blob> {

@@ -119,19 +119,30 @@ def get_download_bytes(remote_path: str) -> bytes:
     return blob.download_as_bytes()
 
 
-def get_signed_url(remote_path: str, expiration_minutes: int = 60) -> str:
+def get_signed_url(
+    remote_path: str,
+    expiration_minutes: int = 60,
+    response_disposition: str | None = None,
+) -> str:
     """Generate a signed URL for a file in Firebase Storage.
 
     On Cloud Run the default credentials are metadata-server access tokens,
     which `blob.generate_signed_url` cannot sign locally. We detect that
     case and delegate signing to the IAM signBlob API by passing the service
-    account email + access token."""
+    account email + access token.
+
+    Pass `response_disposition` to override the Content-Disposition header in
+    the signed URL response (e.g. 'attachment; filename="foo.mp4"').
+    """
     bucket = get_bucket()
     blob = bucket.blob(remote_path)
     expiration = datetime.timedelta(minutes=expiration_minutes)
+    extra: dict = {}
+    if response_disposition:
+        extra["response_disposition"] = response_disposition
 
     try:
-        return blob.generate_signed_url(expiration=expiration, method="GET")
+        return blob.generate_signed_url(expiration=expiration, method="GET", **extra)
     except AttributeError:
         # "you need a private key to sign credentials" — fall back to IAM
         # signBlob using the current runtime credentials.
@@ -156,6 +167,7 @@ def get_signed_url(remote_path: str, expiration_minutes: int = 60) -> str:
         method="GET",
         service_account_email=sa_email,
         access_token=creds.token,
+        **extra,
     )
 
 
