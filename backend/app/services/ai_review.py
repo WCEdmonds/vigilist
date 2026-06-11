@@ -3,8 +3,6 @@
 import json
 import logging
 
-import anthropic
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -94,6 +92,8 @@ async def classify_document(
         return parse_classification_response("{}"), 0
 
     cats = categories or DEFAULT_CATEGORIES
+    import anthropic  # lazy: keep the SDK off the startup path
+
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     prompt = build_classification_prompt(review_criteria, document_text, cats)
 
