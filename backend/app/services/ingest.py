@@ -378,7 +378,9 @@ async def _finalize_job_if_done(
 
         job.status = "complete"
         job.errors = errors
-        job.completed_at = datetime.now(timezone.utc)
+        # Store naive UTC to match the tz-naive completed_at column (asyncpg
+        # rejects an aware datetime against a TIMESTAMP WITHOUT TIME ZONE).
+        job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
 
 
@@ -592,5 +594,6 @@ async def ingest_from_storage(
         if job:
             job.status = "failed"
             job.errors = (job.errors or []) + [str(e)]
-            job.completed_at = datetime.now(timezone.utc)
+            # naive UTC to match the tz-naive completed_at column
+            job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
