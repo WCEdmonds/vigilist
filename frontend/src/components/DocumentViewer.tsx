@@ -74,7 +74,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     try {
       if (doc.native_path) {
         const { getNativeUrl } = await import('../api/client');
-        const { url, filename } = await getNativeUrl(doc.id);
+        const { url, filename } = await getNativeUrl(doc.id, true);
         const a = document.createElement('a');
         a.href = url; a.download = filename; a.click();
       } else if (doc.image_paths.length > 0) {
