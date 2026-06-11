@@ -1,5 +1,6 @@
 """Production ingest pipeline."""
 
+import asyncio
 import json
 import logging
 import os
@@ -438,8 +439,12 @@ async def ingest_batch(
                 await _incr_skipped(db, job_id)
                 continue
             try:
-                doc = process_ingest_record(
-                    production_id, record, opt_pages, converted_tmp, errors
+                # Run the CPU/IO-bound conversion in a thread so it can't block
+                # the event loop (a long render starves asyncpg and corrupts its
+                # connection — "another operation is in progress").
+                doc = await asyncio.to_thread(
+                    process_ingest_record,
+                    production_id, record, opt_pages, converted_tmp, errors,
                 )
                 if doc is None:
                     await _incr_skipped(db, job_id)
@@ -514,8 +519,11 @@ async def ingest_pdf_batch(
             await _incr_skipped(db, job_id)
             continue
         try:
-            doc = process_pdf_record(
-                production_id, item, global_index, prefix, errors
+            # Offload rendering/OCR/upload to a thread; a large PDF rendered
+            # inline would block the event loop and break the DB connection.
+            doc = await asyncio.to_thread(
+                process_pdf_record,
+                production_id, item, global_index, prefix, errors,
             )
             if doc is None:
                 await _incr_skipped(db, job_id)
