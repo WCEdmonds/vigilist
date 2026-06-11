@@ -1,6 +1,6 @@
 import fitz  # PyMuPDF
 
-from app.services.ingest_pdf import derive_bates_prefix, render_and_extract_pdf
+from app.services.ingest_pdf import derive_bates_prefix, iter_pdf_pages
 
 
 def test_prefix_uppercases_first_token():
@@ -65,13 +65,12 @@ def test_born_digital_uses_embedded_text_and_skips_ocr():
         ocr_calls.append(jpeg_bytes)
         return "SHOULD-NOT-BE-USED"
 
-    pages, text, page_count = render_and_extract_pdf(
-        _born_digital_pdf("Hello discovery"), ocr_fn=fake_ocr
-    )
+    pages = list(iter_pdf_pages(_born_digital_pdf("Hello discovery"), ocr_fn=fake_ocr))
 
-    assert page_count == 1
     assert len(pages) == 1
-    assert pages[0][:3] == b"\xff\xd8\xff"  # JPEG magic bytes
+    page_num, jpeg, text = pages[0]
+    assert page_num == 1
+    assert jpeg[:3] == b"\xff\xd8\xff"  # JPEG magic bytes
     assert "Hello discovery" in text
     assert ocr_calls == []  # OCR not invoked for born-digital text
 
@@ -80,20 +79,16 @@ def test_scanned_page_falls_back_to_ocr():
     def fake_ocr(jpeg_bytes: bytes) -> str:
         return "OCR-RECOVERED-TEXT"
 
-    pages, text, page_count = render_and_extract_pdf(
-        _blank_two_page_pdf(), ocr_fn=fake_ocr
-    )
+    pages = list(iter_pdf_pages(_blank_two_page_pdf(), ocr_fn=fake_ocr))
 
-    assert page_count == 2
     assert len(pages) == 2
-    assert text.count("OCR-RECOVERED-TEXT") == 2
+    combined = "\n\n".join(text for _, _, text in pages)
+    assert combined.count("OCR-RECOVERED-TEXT") == 2
 
 
 def test_pages_rendered_for_every_page():
-    pages, _text, page_count = render_and_extract_pdf(
-        _blank_two_page_pdf(), ocr_fn=lambda b: ""
-    )
-    assert page_count == len(pages) == 2
+    pages = list(iter_pdf_pages(_blank_two_page_pdf(), ocr_fn=lambda b: ""))
+    assert [p[0] for p in pages] == [1, 2]  # page numbers, every page yielded
 
 
 from app.services import ingest_pdf as pdf_mod
@@ -152,11 +147,12 @@ def test_process_pdf_record_assembles_document(monkeypatch):
     monkeypatch.setattr(pdf_mod, "get_download_bytes", lambda path: b"%PDF-fake")
     monkeypatch.setattr(
         pdf_mod,
-        "render_and_extract_pdf",
-        lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: (
-            [b"\xff\xd8jpeg1", b"\xff\xd8jpeg2"],
-            "extracted text",
-            2,
+        "iter_pdf_pages",
+        lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: iter(
+            [
+                (1, b"\xff\xd8jpeg1", "extracted text"),
+                (2, b"\xff\xd8jpeg2", ""),
+            ]
         ),
     )
     uploaded = []

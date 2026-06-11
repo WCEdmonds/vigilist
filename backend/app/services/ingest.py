@@ -468,8 +468,10 @@ async def ingest_pdf_batch(
 ) -> None:
     """Process PDFs[start_idx:end_idx] for a generic-PDF ingest job.
 
-    Idempotent: documents already present (by production_id + control
-    number) are skipped, so retried batches are safe.
+    Idempotent: documents already present are skipped (matched by their
+    source file path, native_path), so retried batches are safe — and it
+    stays correct even if bates_begin is later edited (e.g. real Bates
+    numbers backfilled over the synthetic control numbers).
     """
     from app.models import IngestJob, Production
     from app.services.ingest_pdf import (
@@ -490,25 +492,25 @@ async def ingest_pdf_batch(
     items = list_pdf_sources(production_id)
     errors: list[str] = list(job.errors or [])
 
-    # Control numbers for this slice, by global index
     slice_pairs = [
         (idx, items[idx]) for idx in range(start_idx, min(end_idx, len(items)))
     ]
-    control_numbers = [f"{prefix} {idx + 1:06d}" for idx, _ in slice_pairs]
-
+    # Skip PDFs already ingested, keyed on the stable source path (native_path)
+    # rather than the now-mutable control number.
+    storage_paths = [item["storage_path"] for _, item in slice_pairs]
     existing: set[str] = set()
-    if control_numbers:
+    if storage_paths:
         result = await db.execute(
-            select(Document.bates_begin).where(
+            select(Document.native_path).where(
                 Document.production_id == production_id,
-                Document.bates_begin.in_(control_numbers),
+                Document.native_path.in_(storage_paths),
             )
         )
         existing = {row[0] for row in result.all()}
 
     for global_index, item in slice_pairs:
         control_number = f"{prefix} {global_index + 1:06d}"
-        if control_number in existing:
+        if item["storage_path"] in existing:
             await _incr_skipped(db, job_id)
             continue
         try:
