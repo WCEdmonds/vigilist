@@ -32,3 +32,15 @@ backend/storage/
 # OS
 .DS_Store
 Thumbs.db
+
+# --- secrets: never commit service-account / credential files ---
+*service-account*.json
+*serviceAccount*.json
+*-credentials*.json
+firebase-adminsdk*.json
+*.pem
+*.p12
+*.key
+.env
+.env.*
+!.env.example
