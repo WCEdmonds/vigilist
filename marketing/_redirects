@@ -1,0 +1,2 @@
+# Force the apex as canonical: www.vigilist.co -> vigilist.co
+https://www.vigilist.co/* https://vigilist.co/:splat 301
