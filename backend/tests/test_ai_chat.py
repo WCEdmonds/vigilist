@@ -48,8 +48,10 @@ class _FakeStream:
 class _FakeMessages:
     def __init__(self, turns):
         self._turns = list(turns)
+        self.calls = []
 
     def stream(self, **kwargs):
+        self.calls.append(kwargs)
         return self._turns.pop(0)
 
 
@@ -114,6 +116,10 @@ def test_one_tool_round_then_answer():
     assert types[-1] == "done"
     tr = next(e for e in events if e["type"] == "tool_result")
     assert tr["ok"] is True and tr["summary"] == "3 documents found"
+    assert types.index("tool_use") < types.index("tool_result")
+    tu = next(e for e in events if e["type"] == "tool_use")
+    assert tu["name"] == "search_documents"
+    assert tu["summary"] == "calling search_documents"
 
 
 def test_max_rounds_terminates():
@@ -135,3 +141,6 @@ def test_max_rounds_terminates():
                                    max_rounds=2)
     )))
     assert events[-1]["type"] == "done"
+    # The tool-calling rounds pass tools=...; the final cap-overflow turn must omit it.
+    assert "tools" in client.messages.calls[0]
+    assert "tools" not in client.messages.calls[-1]
