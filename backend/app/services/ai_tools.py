@@ -68,6 +68,31 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "semantic_search",
+        "description": (
+            "Concept/meaning-based search over documents the user can access, using "
+            "embeddings. Unlike search_documents (which matches exact keywords), this "
+            "finds documents by meaning even when they use different words, euphemisms, "
+            "or indirect phrasing — e.g. a query about 'drinking' can surface text that "
+            "says 'had a few', 'intoxicated', or 'DUI'. Returns Bates numbers, titles, "
+            "and snippets. Prefer this for topics that may be described obliquely."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A natural-language description of what to find.",
+                },
+                "production_id": {
+                    "type": "integer",
+                    "description": "Optional: restrict to one production id.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "get_document",
         "description": (
             "Fetch the full extracted text and metadata for a single document, by its "
@@ -146,6 +171,8 @@ def tool_use_summary(name: str, tool_input: dict) -> str:
     """A short human-readable phrase describing a tool call, for the UI."""
     if name == "search_documents":
         return f'Searching documents for "{tool_input.get("query", "")}"'
+    if name == "semantic_search":
+        return f'Semantic search for "{tool_input.get("query", "")}"'
     if name == "get_document":
         return f'Reading document {tool_input.get("bates_or_id", "")}'
     if name == "list_productions":
@@ -224,6 +251,28 @@ async def _tool_search_documents(db, user, accessible_ids, tool_input) -> ToolRu
     payload = {"total": total, "returned": len(hits), "results": hits}
     plural = "document" if total == 1 else "documents"
     return ToolRun(result=json.dumps(payload), result_summary=f"{total} {plural} found")
+
+
+async def _tool_semantic_search(db, user, accessible_ids, tool_input) -> ToolRun:
+    query = (tool_input.get("query") or "").strip()
+    if not query:
+        return ToolRun(result="Error: query is required.", result_summary="No query", ok=False)
+    results, _ = await _semantic_search(
+        db, query,
+        production_id=_clamp_production(tool_input.get("production_id"), accessible_ids),
+        per_page=_TOOL_PAGE_SIZE,
+        accessible_production_ids=accessible_ids,
+    )
+    hits = [{
+        "id": str(r["id"]),
+        "bates_begin": r["bates_begin"],
+        "title": r["title"],
+        "snippet": r["snippet"],
+        "similarity": r["rank"],
+    } for r in results]
+    plural = "document" if len(hits) == 1 else "documents"
+    return ToolRun(result=json.dumps({"returned": len(hits), "results": hits}),
+                   result_summary=f"{len(hits)} {plural} found")
 
 
 async def _tool_get_document(db, user, accessible_ids, tool_input) -> ToolRun:
@@ -346,6 +395,7 @@ async def _tool_get_corpus_stats(db, user, accessible_ids, tool_input) -> ToolRu
 
 _DISPATCH = {
     "search_documents": _tool_search_documents,
+    "semantic_search": _tool_semantic_search,
     "get_document": _tool_get_document,
     "list_productions": _tool_list_productions,
     "find_similar_documents": _tool_find_similar_documents,
