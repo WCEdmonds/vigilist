@@ -886,6 +886,66 @@ mark {
   border-bottom-left-radius: var(--radius-sm);
 }
 
+/* Rendered-markdown content: reset the pre-wrap used for plain text and give
+   markdown children compact spacing that fits the chat bubble. */
+.ai-agent-markdown { white-space: normal; }
+.ai-agent-markdown > :first-child { margin-top: 0; }
+.ai-agent-markdown > :last-child { margin-bottom: 0; }
+.ai-agent-markdown p { margin: 0 0 0.5em; }
+.ai-agent-markdown h1,
+.ai-agent-markdown h2,
+.ai-agent-markdown h3,
+.ai-agent-markdown h4 {
+  margin: 0.7em 0 0.35em;
+  font-family: var(--font-serif);
+  line-height: 1.3;
+}
+.ai-agent-markdown h1 { font-size: 1.15em; }
+.ai-agent-markdown h2 { font-size: 1.08em; }
+.ai-agent-markdown h3 { font-size: 1em; }
+.ai-agent-markdown h4 { font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-neutral-500); }
+.ai-agent-markdown ul,
+.ai-agent-markdown ol { margin: 0.35em 0; padding-left: 1.3em; }
+.ai-agent-markdown li { margin: 0.15em 0; }
+.ai-agent-markdown li > p { margin: 0; }
+.ai-agent-markdown code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.88em;
+  background: rgba(44, 62, 107, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+}
+.ai-agent-markdown pre {
+  background: var(--color-ink);
+  color: #f5f5f5;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.ai-agent-markdown pre code { background: none; padding: 0; font-size: 0.85em; color: inherit; }
+.ai-agent-markdown blockquote {
+  margin: 0.5em 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid rgba(44, 62, 107, 0.2);
+  color: var(--color-neutral-500);
+}
+.ai-agent-markdown a { color: var(--color-brand-600); }
+.ai-agent-markdown table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em; }
+.ai-agent-markdown th,
+.ai-agent-markdown td { border: 1px solid rgba(44, 62, 107, 0.15); padding: 0.25em 0.5em; text-align: left; }
+
+/* In-app document citation links (href="doc:<id>"). */
+.ai-agent-doc-link {
+  color: var(--color-brand-600);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.ai-agent-doc-link:hover { text-decoration-style: solid; }
+
 .ai-agent-typing {
   display: inline-flex;
   gap: 4px;
