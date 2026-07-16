@@ -1,8 +1,9 @@
-"""AI-powered endpoints: summarize, NL search, find similar."""
+"""AI-powered endpoints: summarize, NL search, find similar, chat."""
 
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +11,7 @@ from app.database import get_db
 from app.models import Document, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
-from app.services.ai import extract_similar_terms, generate_summary, nl_to_search_query
+from app.services.ai import extract_similar_terms, generate_summary, nl_to_search_query, stream_chat
 from app.services.search import search_documents
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -110,3 +111,61 @@ async def find_similar(
         "results": results,
         "total": len(results),
     }
+
+
+MAX_CHAT_DOCS = 50
+
+
+@router.post("/chat")
+async def chat(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Stream an AI chat response grounded in a set of selected documents.
+
+    Body: {"document_ids": [uuid, ...], "messages": [{"role", "content"}, ...]}.
+    Returns a plain-text stream of the assistant's reply.
+    """
+    from app.config import settings
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=503, detail="AI service unavailable — VIGILIST_ANTHROPIC_API_KEY not set. Restart backend with this env var.")
+
+    raw_ids = body.get("document_ids") or []
+    messages = body.get("messages") or []
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages is required")
+    if not raw_ids:
+        raise HTTPException(status_code=400, detail="Select at least one document to chat about")
+    if len(raw_ids) > MAX_CHAT_DOCS:
+        raise HTTPException(status_code=400, detail=f"Too many documents selected (max {MAX_CHAT_DOCS}). Narrow your selection.")
+
+    try:
+        doc_ids = [UUID(str(i)) for i in raw_ids]
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid document id")
+
+    accessible = await get_accessible_production_ids(db, user)
+    result = await db.execute(select(Document).where(Document.id.in_(doc_ids)))
+    docs = [d for d in result.scalars().all() if d.production_id in accessible]
+    if not docs:
+        raise HTTPException(status_code=404, detail="No accessible documents found for the given ids")
+
+    # Preserve the caller's selection order for stable citations.
+    order = {str(i): n for n, i in enumerate(raw_ids)}
+    docs.sort(key=lambda d: order.get(str(d.id), 0))
+
+    documents = [
+        {"bates_begin": d.bates_begin, "title": d.title, "text_content": d.text_content}
+        for d in docs
+    ]
+
+    async def generate():
+        async for chunk in stream_chat(documents, messages):
+            yield chunk
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

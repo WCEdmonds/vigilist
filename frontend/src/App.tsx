@@ -3,6 +3,7 @@ import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getCl
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AIReviewPage from './components/AIReviewPage';
+import AIChat from './components/AIChat';
 import CorpusAnalysis from './components/CorpusAnalysis';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
@@ -68,6 +69,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
   const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(initialUrl.view === 'analysis');
+  const [showAIChat, setShowAIChat] = useState(false);
+  const [chatDocIds, setChatDocIds] = useState<string[]>([]);
 
   // Mirror the key bits of state back into the URL so a refresh lands
   // the user on the same page (doc viewer, batch review, search, etc.).
@@ -733,6 +736,24 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         <Dashboard productionId={production.id} onClose={() => setShowDashboard(false)} />
       )}
 
+      {/* AI chat assistant + floating launcher */}
+      <AIChat open={showAIChat} onClose={() => setShowAIChat(false)} docIds={chatDocIds} />
+      <button
+        onClick={() => setShowAIChat((v) => !v)}
+        title="AI Document Assistant"
+        aria-label="AI Document Assistant"
+        style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 1001,
+          width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
+          background: 'var(--color-ink, #2c3e6b)', color: 'white',
+          fontSize: 12, fontWeight: 700, letterSpacing: 0.5,
+          boxShadow: '0 6px 20px rgba(44,62,107,0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        {showAIChat ? '✕' : 'AI'}
+      </button>
+
       {/* Footer */}
       <div style={{ textAlign: 'center', padding: 'var(--space-6) 0 var(--space-4)', fontSize: 11, color: 'rgba(44,62,107,0.3)' }}>
         Built by <a href="https://qndary.com" target="_blank" rel="noopener noreferrer" style={{ color: 'rgba(44,62,107,0.45)', textDecoration: 'none', fontWeight: 600 }}>QNDARY</a>
@@ -751,6 +772,13 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
             disabled={bulkDownloading}
           >
             {bulkDownloading ? 'Preparing…' : 'Download'}
+          </button>
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={() => { setChatDocIds(Array.from(selectedIds)); setShowAIChat(true); }}
+            title="Ask the AI assistant about the selected documents"
+          >
+            Send to AI Agent
           </button>
           <div style={{ position: 'relative' }}>
             <button

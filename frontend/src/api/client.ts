@@ -139,6 +139,54 @@ export async function fetchDocumentPdf(docId: string): Promise<Blob> {
 export const streamUrl = (docId: string) =>
   `/api/documents/${docId}/stream`;
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * Stream an AI chat response about the selected documents. Calls `onChunk`
+ * with each text fragment as it arrives. Resolves when the stream ends.
+ */
+export async function streamChat(
+  documentIds: string[],
+  messages: ChatMessage[],
+  onChunk: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch('/api/ai/chat', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ document_ids: documentIds, messages }),
+    signal,
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  if (!res.body) {
+    onChunk(await res.text());
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    onChunk(decoder.decode(value, { stream: true }));
+  }
+}
+
 export async function fetchBulkZip(docIds: string[]): Promise<Blob> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const currentUser = auth.currentUser;

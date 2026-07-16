@@ -196,3 +196,95 @@ async def generate_titles_batch(texts: list[tuple[str, str | None]]) -> dict[str
     tasks = [_gen(doc_id, text) for doc_id, text in texts]
     results = await asyncio.gather(*tasks)
     return dict(results)
+
+
+# ── Document Chat (Ask the AI Agent) ──
+
+# Smart model for the interactive chat — near-Opus quality with a 1M context
+# window (so large selections of document text fit) at a fraction of Opus cost.
+# Bump to "claude-opus-4-8" if you want maximum reasoning depth.
+CHAT_MODEL = "claude-sonnet-5"
+
+# Per-document text cap and overall context cap. Sonnet 5 has a 1M context
+# window, but we stay well under it to bound latency and cost for a 2-5 user
+# team. ~50k chars ≈ ~15k tokens of document context.
+CHAT_PER_DOC_CHARS = 40000
+CHAT_TOTAL_CONTEXT_CHARS = 300000
+
+CHAT_SYSTEM_PROMPT = """You are a litigation document-review assistant for a small legal team working active Maryland litigation. The user has selected one or more documents from a discovery production and wants to ask questions about them.
+
+Ground every answer in the document text provided below. When you state a fact, cite the document it came from by its Bates number (e.g. "per SCHLEGEL_PROD001 000123"). If the documents do not contain the answer, say so plainly rather than guessing — do not invent facts, dates, parties, or quotes. You may quote short passages verbatim when helpful.
+
+Be precise and objective, in language suitable for a legal professional. This is a review aid, not legal advice.
+
+--- SELECTED DOCUMENTS ---
+{context}
+--- END DOCUMENTS ---"""
+
+
+def _build_chat_context(documents: list[dict]) -> tuple[str, int]:
+    """Assemble the document context block from selected documents.
+
+    Returns (context_text, docs_with_text_count). Documents without extracted
+    text are still listed so the model knows they were selected but have no
+    searchable content (e.g. images-only or media files)."""
+    parts: list[str] = []
+    used = 0
+    with_text = 0
+    for doc in documents:
+        bates = doc.get("bates_begin") or "(no bates)"
+        title = doc.get("title") or "(untitled)"
+        text = (doc.get("text_content") or "").strip()
+        header = f"\n### {bates} — {title}\n"
+        if not text:
+            parts.append(header + "(no extracted text — native/image-only document)\n")
+            continue
+        remaining = CHAT_TOTAL_CONTEXT_CHARS - used
+        if remaining <= 0:
+            parts.append(header + "(omitted — context limit reached)\n")
+            continue
+        snippet = text[: min(CHAT_PER_DOC_CHARS, remaining)]
+        if len(text) > len(snippet):
+            snippet += "\n…[truncated]"
+        parts.append(header + snippet + "\n")
+        used += len(snippet)
+        with_text += 1
+    return "".join(parts), with_text
+
+
+async def stream_chat(documents: list[dict], messages: list[dict]):
+    """Stream an AI chat response about the selected documents.
+
+    Yields text chunks. `messages` is the conversation history as a list of
+    {"role": "user"|"assistant", "content": str}. Grounding documents are
+    injected into the system prompt, not the message history, so they stay
+    cached across turns of the same conversation."""
+    client = _get_client()
+    if not client:
+        return
+
+    context, _ = _build_chat_context(documents)
+    system = CHAT_SYSTEM_PROMPT.format(context=context)
+
+    # Sanitize history to the two supported roles and non-empty content.
+    clean: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            clean.append({"role": role, "content": content})
+    if not clean or clean[0]["role"] != "user":
+        return
+
+    try:
+        async with client.messages.stream(
+            model=CHAT_MODEL,
+            max_tokens=4096,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=clean,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text
+    except Exception:
+        logger.warning("Chat streaming failed", exc_info=True)
+        yield "\n\n[Error: the AI service failed to complete this response.]"
