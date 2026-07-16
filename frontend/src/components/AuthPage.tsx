@@ -24,8 +24,8 @@ export default function AuthPage() {
       } else {
         await login(email, password);
       }
-    } catch (err: any) {
-      const code = err?.code || '';
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code ?? '';
       if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
         setError('Invalid email or password');
       } else if (code === 'auth/email-already-in-use') {
@@ -35,7 +35,7 @@ export default function AuthPage() {
       } else if (code === 'auth/invalid-email') {
         setError('Invalid email address');
       } else {
-        setError(err.message || 'Something went wrong');
+        setError(err instanceof Error ? err.message : 'Something went wrong');
       }
     } finally {
       setLoading(false);
@@ -47,9 +47,9 @@ export default function AuthPage() {
     setLoading(true);
     try {
       await loginWithGoogle();
-    } catch (err: any) {
-      if (err?.code !== 'auth/popup-closed-by-user') {
-        setError(err.message || 'Google sign-in failed');
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code !== 'auth/popup-closed-by-user') {
+        setError(err instanceof Error ? err.message : 'Google sign-in failed');
       }
     } finally {
       setLoading(false);
