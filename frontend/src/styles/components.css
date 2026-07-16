@@ -943,3 +943,104 @@ mark {
     right: var(--space-4);
   }
 }
+
+/* ── Onboarding guide ── */
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-top: 1px solid rgba(44, 62, 107, 0.1);
+}
+
+.onboarding-panel {
+  width: 560px;
+  max-width: 92vw;
+}
+
+.onboarding-icon {
+  font-size: 40px;
+  line-height: 1;
+  text-align: center;
+  margin-bottom: var(--space-4);
+}
+
+.onboarding-body {
+  color: var(--color-neutral-600);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  min-height: 190px;
+}
+
+.onboarding-body p {
+  margin: 0 0 var(--space-3);
+}
+
+.onboarding-body p:last-child {
+  margin-bottom: 0;
+}
+
+.onboarding-body strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.onboarding-dont-show {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.onboarding-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.onboarding-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-brand-200);
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.onboarding-dot:hover {
+  background: var(--color-brand-400);
+}
+
+.onboarding-dot.active {
+  background: var(--color-ink);
+  transform: scale(1.25);
+}
+
+.onboarding-dot:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+.onboarding-nav {
+  display: flex;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+/* The footer is crowded on a phone — stack it. */
+@media (max-width: 560px) {
+  .modal-footer {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .onboarding-body {
+    min-height: 0;
+  }
+}
