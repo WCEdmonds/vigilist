@@ -1,5 +1,6 @@
 """Unit tests for AI Agent tool definitions and pure helpers."""
 
+import asyncio
 import uuid
 
 from app.services import ai_tools
@@ -43,11 +44,6 @@ def test_parse_doc_ref_uuid_vs_bates():
     assert parsed_uuid == u and parsed_bates is None
     parsed_uuid2, parsed_bates2 = ai_tools._parse_doc_ref("ABC-000123")
     assert parsed_uuid2 is None and parsed_bates2 == "ABC-000123"
-
-
-import asyncio
-
-import pytest
 
 
 class _FakeUser:
@@ -108,3 +104,46 @@ def test_run_tool_search_forces_accessible_scope(monkeypatch):
     # production_id 999 is not accessible -> dropped, only accessible scope applies
     assert seen["production_id"] is None
     assert seen["accessible"] == [1, 2]
+
+
+class _FakeDB:
+    def __init__(self, doc=None):
+        self._doc = doc
+
+    async def get(self, model, key):
+        return self._doc
+
+    async def execute(self, *a, **k):
+        raise AssertionError("execute should not be called on the UUID path")
+
+
+class _FakeDoc:
+    def __init__(self, production_id, text="hello"):
+        self.id = uuid.uuid4()
+        self.production_id = production_id
+        self.bates_begin = "ABC-1"
+        self.bates_end = "ABC-1"
+        self.title = "T"
+        self.page_count = 1
+        self.summary = None
+        self.text_content = text
+
+
+def test_get_document_denies_out_of_scope_uuid():
+    doc = _FakeDoc(production_id=999)  # not in accessible [1, 2]
+    run = asyncio.run(ai_tools.run_tool(
+        db=_FakeDB(doc=doc), user=_FakeUser(), accessible_ids=[1, 2],
+        name="get_document", tool_input={"bates_or_id": str(doc.id)},
+    ))
+    assert run.ok is False
+    assert "no accessible" in run.result.lower()
+
+
+def test_get_document_allows_in_scope_uuid():
+    doc = _FakeDoc(production_id=1)  # in accessible [1, 2]
+    run = asyncio.run(ai_tools.run_tool(
+        db=_FakeDB(doc=doc), user=_FakeUser(), accessible_ids=[1, 2],
+        name="get_document", tool_input={"bates_or_id": str(doc.id)},
+    ))
+    assert run.ok is True
+    assert "ABC-1" in run.result_summary
