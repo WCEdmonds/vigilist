@@ -273,7 +273,7 @@ async def _tool_find_similar_documents(db, user, accessible_ids, tool_input) -> 
     hits = [{
         "id": str(r["id"]), "bates_begin": r["bates_begin"],
         "title": r["title"], "similarity": r["rank"],
-    } for r in results if str(r["id"]) != str(doc.id)]
+    } for r in results if str(r["id"]) != str(doc.id)][:_TOOL_PAGE_SIZE]
     return ToolRun(result=json.dumps({"results": hits}),
                    result_summary=f"{len(hits)} similar")
 
@@ -308,7 +308,11 @@ async def _tool_get_duplicates(db, user, accessible_ids, tool_input) -> ToolRun:
 
 
 async def _tool_get_corpus_stats(db, user, accessible_ids, tool_input) -> ToolRun:
-    pid = _clamp_production(tool_input.get("production_id"), accessible_ids)
+    raw_pid = tool_input.get("production_id")
+    if raw_pid is None:
+        return ToolRun(result="Error: production_id is required.",
+                       result_summary="Missing production_id", ok=False)
+    pid = _clamp_production(raw_pid, accessible_ids)
     if pid is None:
         return ToolRun(result="That production is not accessible.",
                        result_summary="No access", ok=False)
