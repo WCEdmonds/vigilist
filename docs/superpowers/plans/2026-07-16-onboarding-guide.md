@@ -480,12 +480,22 @@ git commit -m "feat(onboarding): guide modal component and styles"
 
 **Behavior notes for the implementer:**
 - `localStorage` and `sessionStorage` are accessed through a getter inside the `try`, not passed in as a value. Reading the `window.localStorage` property *itself* throws when cookies are blocked, so `safeGet(localStorage, ...)` would throw at the call site, before the `try` could catch it. This is the whole reason the app cannot crash on boot.
-- `shouldAutoOpen` is deliberately computed once per `uid` via `useMemo`. It reads `seen`, and the effect then writes `seen` — if it recomputed after that write, it would immediately flip to `false` and the modal would close itself.
+- The auto-open decision is computed **once per mount via a `useState` lazy initializer**, not `useMemo`. It reads `seen`, and the effect then writes `seen` — if it recomputed after that write it would flip to `false` and close the modal mid-read. `useMemo` cannot be used: React documents it as a discardable performance cache with no semantic guarantee, so an eviction causes exactly that bug. A lazy initializer is guaranteed to run exactly once per mount.
+- **A ref-based once-per-uid cache is not an option here.** This repo enables the React Compiler lint ruleset: `react-hooks/refs` (no ref access during render) and `react-hooks/set-state-in-render` are both errors. Both obvious workarounds are illegal. The lazy initializer is the only lint-legal shape that is also a real guarantee.
+- Because the decision is captured at mount, **the hook must be mounted under a component that remounts when the user changes.** `AppRouter` satisfies this — it sits behind `AppContent`'s `!user` gate and Task 4 keys it by uid. Do not move the hook above that gate.
+- `closedFor` / `forcedFor` hold a **uid**, not a boolean, so a stale flag cannot apply to a different user even within one mount.
+- Storage presence is checked with `!== null`, not truthiness, so an empty-string value counts as stored.
+
+> **Plan corrections (applied during execution):** this task originally prescribed
+> `useMemo` for the decision and plain booleans for `closed`/`forced`. A review
+> caught both. The first proposed fix (a `useRef` cache) was then rejected by
+> `react-hooks/refs` — 7 errors. The code below is the third and shipped version.
+> See the ledger's "Human decisions" section.
 
 - [ ] **Step 1: Create the hook**
 
 ```ts
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const dismissedKey = (uid: string) => `vigilist.onboarding.dismissed.${uid}`;
 const seenKey = (uid: string) => `vigilist.onboarding.seen.${uid}`;
@@ -514,19 +524,37 @@ function safeSet(getStore: () => Storage, key: string, value: string): void {
   }
 }
 
-export function useOnboarding(uid: string | undefined) {
-  // Opened by hand via the header button; ignores both storage keys.
-  const [forced, setForced] = useState(false);
-  // Closed by hand this render; separate from `seen` so closing is instant.
-  const [closed, setClosed] = useState(false);
+export interface OnboardingState {
+  open: boolean;
+  /** Close for this session only. */
+  close: () => void;
+  /** Tick "Don't show again" and close. Permanent. */
+  dismissForever: () => void;
+  /** Force open from the header button, ignoring both storage keys. */
+  reopen: () => void;
+}
 
-  // Computed once per user. Must not re-run after the effect writes `seen`.
-  const shouldAutoOpen = useMemo(() => {
-    if (!uid) return false;
-    if (safeGet(() => localStorage, dismissedKey(uid))) return false;
-    if (safeGet(() => sessionStorage, seenKey(uid))) return false;
-    return true;
-  }, [uid]);
+function computeShouldAutoOpen(uid: string | undefined): boolean {
+  if (!uid) return false;
+  if (safeGet(() => localStorage, dismissedKey(uid)) !== null) return false;
+  if (safeGet(() => sessionStorage, seenKey(uid)) !== null) return false;
+  return true;
+}
+
+/**
+ * PRECONDITION: must be mounted under a component that remounts when the
+ * signed-in user changes. `AppRouter` satisfies this — it is gated on `user`
+ * and keyed by uid. Do not move it above the `!user` gate in `AppContent`.
+ */
+export function useOnboarding(uid: string | undefined): OnboardingState {
+  // Keyed by uid rather than plain booleans, so a stale flag cannot apply to a
+  // different user.
+  const [closedFor, setClosedFor] = useState<string | undefined>(undefined);
+  const [forcedFor, setForcedFor] = useState<string | undefined>(undefined);
+
+  // Decided exactly once per mount. A lazy initializer is a React semantic
+  // guarantee; useMemo would NOT be.
+  const [shouldAutoOpen] = useState(() => computeShouldAutoOpen(uid));
 
   // Mark seen as soon as we decide to show it, so a refresh within this
   // session doesn't bring it back.
@@ -535,23 +563,25 @@ export function useOnboarding(uid: string | undefined) {
   }, [uid, shouldAutoOpen]);
 
   const close = useCallback(() => {
-    setForced(false);
-    setClosed(true);
-  }, []);
+    setForcedFor(undefined);
+    setClosedFor(uid);
+  }, [uid]);
 
   const dismissForever = useCallback(() => {
     if (uid) safeSet(() => localStorage, dismissedKey(uid), '1');
-    setForced(false);
-    setClosed(true);
+    setForcedFor(undefined);
+    setClosedFor(uid);
   }, [uid]);
 
   // Reopening does NOT clear the dismissal — asking to see it once is not
   // asking to have it thrown at you every session again.
   const reopen = useCallback(() => {
-    setClosed(false);
-    setForced(true);
-  }, []);
+    setClosedFor(undefined);
+    setForcedFor(uid);
+  }, [uid]);
 
+  const closed = uid !== undefined && closedFor === uid;
+  const forced = uid !== undefined && forcedFor === uid;
   const open = forced || (shouldAutoOpen && !closed);
 
   return { open, close, dismissForever, reopen };
