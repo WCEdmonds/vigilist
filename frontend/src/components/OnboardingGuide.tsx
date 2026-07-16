@@ -51,10 +51,7 @@ export default function OnboardingGuide({ slides, onClose, onDismissForever }: P
         tabIndex={-1}
       >
         <div className="modal-header">
-          <h2
-            id="onboarding-title"
-            style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}
-          >
+          <h2 id="onboarding-title" className="modal-title">
             {slide.title}
           </h2>
           <button className="modal-close-btn" aria-label="Close guide" onClick={finish}>
