@@ -767,6 +767,28 @@ git commit -m "feat(onboarding): mount guide in AppRouter with header reopen but
 
 ---
 
+## Known gaps shipped knowingly
+
+- **"Don't show again" is irreversible on mobile.** The header Guide button lives
+  inside `App.tsx`'s `.desktop-only` group, which `layout.css:879-884` hides at
+  `max-width: 768px`. A phone user who ticks the box has no UI path back short of
+  clearing site data. The guide auto-opens on mobile regardless. Accepted on the
+  reasoning that e-discovery review is a desktop activity, so the path is close to
+  theoretical. Slide 1's copy was reworded to stop promising a button that isn't
+  always there ("Once you are inside a production…"), so the copy is honest — but
+  the one-way door is real. **Fix by moving the Guide button out of `.desktop-only`
+  into the always-visible `user-menu` next to Sign out.**
+- **No Guide button on `WelcomePage` or `ProductionPicker`,** on any screen size,
+  though the guide auto-opens over both. Same fix shape: thread `onOpenGuide` into
+  those two headers.
+- **A slow `listProductions` can burn the session.** `useOnboarding`'s `seen` effect
+  fires at `AppRouter` mount, while `prodLoading` is still true and the early return
+  suppresses the guide. Reloading during a slow load marks the guide seen without the
+  user seeing it. Narrow, but real.
+- **No focus trap** in the dialog. `aria-modal="true"` is set and focus moves in and
+  back out, but Tab can reach the page behind. No modal in this repo has one; fix
+  app-wide with the `.modal-title` sweep rather than here alone.
+
 ## Follow-ups (not this project)
 
 - **Frontend test framework.** Deferred by decision. `useOnboarding` is the natural first target — it is pure logic with no rendering, and the storage-throws path is exactly the sort of thing nobody re-tests by hand.
