@@ -29,10 +29,10 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
         if (firstPending) setViewDocId(firstPending.document_id);
         else if (d.length > 0) setViewDocId(d[0].document_id);
       })
-      .catch((e: any) => {
+      .catch((e: unknown) => {
         setBatch(null);
         setDocs([]);
-        setNotification(`Failed to load batch: ${e?.message || 'unknown error'}`);
+        setNotification(`Failed to load batch: ${e instanceof Error ? e.message : 'unknown error'}`);
       })
       .finally(() => setLoading(false));
   };

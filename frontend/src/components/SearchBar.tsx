@@ -50,8 +50,8 @@ export default function SearchBar({ onSearch, onNlResults, initialQuery = '' }: 
       try {
         const res = await nlSearch(query.trim());
         onNlResults(res);
-      } catch (err: any) {
-        alert(`NL search error: ${err.message}`);
+      } catch (err: unknown) {
+        alert(`NL search error: ${err instanceof Error ? err.message : 'unknown error'}`);
       } finally {
         setNlLoading(false);
       }

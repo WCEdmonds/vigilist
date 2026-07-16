@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- intentional: ToastContainer co-located with its showToast helper */
 import { useEffect, useState } from 'react';
 
 export interface ToastMessage {
