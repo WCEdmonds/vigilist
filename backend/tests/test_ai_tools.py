@@ -43,3 +43,68 @@ def test_parse_doc_ref_uuid_vs_bates():
     assert parsed_uuid == u and parsed_bates is None
     parsed_uuid2, parsed_bates2 = ai_tools._parse_doc_ref("ABC-000123")
     assert parsed_uuid2 is None and parsed_bates2 == "ABC-000123"
+
+
+import asyncio
+
+import pytest
+
+
+class _FakeUser:
+    def __init__(self, uid="u1", email="a@thirulaw.com"):
+        self.id = uid
+        self.email = email
+
+
+async def _run(name, tool_input, monkeypatched):
+    """Helper: call run_tool with a dummy db/user and captured monkeypatches."""
+    return await ai_tools.run_tool(
+        db=object(), user=_FakeUser(), accessible_ids=[1, 2],
+        name=name, tool_input=tool_input,
+    )
+
+
+def test_run_tool_unknown_name_is_not_ok():
+    run = asyncio.run(_run("nope", {}, None))
+    assert run.ok is False
+    assert "unknown" in run.result.lower()
+
+
+def test_run_tool_routes_search(monkeypatch):
+    calls = {}
+
+    async def fake_search(db, query, **kwargs):
+        calls["query"] = query
+        calls["accessible"] = kwargs.get("accessible_production_ids")
+        return ([{"id": "d1", "bates_begin": "ABC-1", "bates_end": "ABC-1",
+                  "title": "T", "snippet": "snip", "page_count": 1,
+                  "production_id": 1, "rank": 0.5}], 1)
+
+    monkeypatch.setattr(ai_tools, "_search_documents", fake_search)
+    run = asyncio.run(ai_tools.run_tool(
+        db=object(), user=_FakeUser(), accessible_ids=[1, 2],
+        name="search_documents", tool_input={"query": "hello"},
+    ))
+    assert run.ok is True
+    assert calls["query"] == "hello"
+    assert calls["accessible"] == [1, 2]      # access scope always passed through
+    assert "1 document" in run.result_summary
+
+
+def test_run_tool_search_forces_accessible_scope(monkeypatch):
+    """Even if the model asks for a production it cannot see, scope wins."""
+    seen = {}
+
+    async def fake_search(db, query, **kwargs):
+        seen["production_id"] = kwargs.get("production_id")
+        seen["accessible"] = kwargs.get("accessible_production_ids")
+        return ([], 0)
+
+    monkeypatch.setattr(ai_tools, "_search_documents", fake_search)
+    asyncio.run(ai_tools.run_tool(
+        db=object(), user=_FakeUser(), accessible_ids=[1, 2],
+        name="search_documents", tool_input={"query": "x", "production_id": 999},
+    ))
+    # production_id 999 is not accessible -> dropped, only accessible scope applies
+    assert seen["production_id"] is None
+    assert seen["accessible"] == [1, 2]
