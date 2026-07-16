@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const dismissedKey = (uid: string) => `vigilist.onboarding.dismissed.${uid}`;
 const seenKey = (uid: string) => `vigilist.onboarding.seen.${uid}`;
@@ -27,19 +27,45 @@ function safeSet(getStore: () => Storage, key: string, value: string): void {
   }
 }
 
-export function useOnboarding(uid: string | undefined) {
-  // Opened by hand via the header button; ignores both storage keys.
-  const [forced, setForced] = useState(false);
-  // Closed by hand this render; separate from `seen` so closing is instant.
-  const [closed, setClosed] = useState(false);
+export interface OnboardingState {
+  open: boolean;
+  /** Close for this session only. */
+  close: () => void;
+  /** Tick "Don't show again" and close. Permanent. */
+  dismissForever: () => void;
+  /** Force open from the header button, ignoring both storage keys. */
+  reopen: () => void;
+}
 
-  // Computed once per user. Must not re-run after the effect writes `seen`.
-  const shouldAutoOpen = useMemo(() => {
-    if (!uid) return false;
-    if (safeGet(() => localStorage, dismissedKey(uid))) return false;
-    if (safeGet(() => sessionStorage, seenKey(uid))) return false;
-    return true;
-  }, [uid]);
+function computeShouldAutoOpen(uid: string | undefined): boolean {
+  if (!uid) return false;
+  if (safeGet(() => localStorage, dismissedKey(uid)) !== null) return false;
+  if (safeGet(() => sessionStorage, seenKey(uid)) !== null) return false;
+  return true;
+}
+
+/**
+ * Decides whether the onboarding guide should be showing, and owns the only
+ * two storage keys involved.
+ *
+ * PRECONDITION: this hook must be mounted under a component that remounts when
+ * the signed-in user changes. `AppRouter` satisfies this — it is gated on
+ * `user` and keyed by uid. The auto-open decision is captured once at mount by
+ * a `useState` lazy initializer; if the hook were mounted somewhere that
+ * survived a user change, a second user would inherit the first user's
+ * decision. Do not move it above the `!user` gate in `AppContent`.
+ */
+export function useOnboarding(uid: string | undefined): OnboardingState {
+  // Keyed by uid rather than plain booleans, so that even within one mount a
+  // stale flag cannot apply to a different user.
+  const [closedFor, setClosedFor] = useState<string | undefined>(undefined);
+  const [forcedFor, setForcedFor] = useState<string | undefined>(undefined);
+
+  // Decided exactly once per mount. A lazy initializer is a React semantic
+  // guarantee; useMemo would NOT be — React may discard a memo cache, and a
+  // recompute after the effect below writes `seen` would flip this to false
+  // and close the modal mid-read.
+  const [shouldAutoOpen] = useState(() => computeShouldAutoOpen(uid));
 
   // Mark seen as soon as we decide to show it, so a refresh within this
   // session doesn't bring it back.
@@ -48,23 +74,25 @@ export function useOnboarding(uid: string | undefined) {
   }, [uid, shouldAutoOpen]);
 
   const close = useCallback(() => {
-    setForced(false);
-    setClosed(true);
-  }, []);
+    setForcedFor(undefined);
+    setClosedFor(uid);
+  }, [uid]);
 
   const dismissForever = useCallback(() => {
     if (uid) safeSet(() => localStorage, dismissedKey(uid), '1');
-    setForced(false);
-    setClosed(true);
+    setForcedFor(undefined);
+    setClosedFor(uid);
   }, [uid]);
 
   // Reopening does NOT clear the dismissal — asking to see it once is not
   // asking to have it thrown at you every session again.
   const reopen = useCallback(() => {
-    setClosed(false);
-    setForced(true);
-  }, []);
+    setClosedFor(undefined);
+    setForcedFor(uid);
+  }, [uid]);
 
+  const closed = uid !== undefined && closedFor === uid;
+  const forced = uid !== undefined && forcedFor === uid;
   const open = forced || (shouldAutoOpen && !closed);
 
   return { open, close, dismissForever, reopen };
