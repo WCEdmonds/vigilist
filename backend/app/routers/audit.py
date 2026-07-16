@@ -8,7 +8,12 @@ from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_user_role_for_production, ROLE_RANK
+from app.dependencies import (
+    ROLE_RANK,
+    get_member_organizations,
+    get_org_production_ids,
+    get_user_role_for_production,
+)
 from app.models import AuditLog, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.schemas import AuditLogOut, PaginatedAuditLogs
@@ -17,14 +22,24 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 
 async def _auditable_production_ids(db: AsyncSession, user: User) -> list[int]:
-    """Productions where the user may read audit logs (owner or manager+)."""
+    """Productions where the user may read audit logs (owner, manager+ grant,
+    or member of an org that grants manager+)."""
     owned = select(Production.id).where(Production.owner_id == user.id)
     granted = select(ProductionAccess.production_id).where(
         ProductionAccess.user_id == user.id,
         ProductionAccess.role.in_(["manager", "admin"]),
     )
     result = await db.execute(union_all(owned, granted))
-    return [row[0] for row in result.all()]
+    ids = {row[0] for row in result.all()}
+
+    # Org membership that confers manager+ role
+    manager_org_ids = [
+        o.id for o in await get_member_organizations(db, user)
+        if ROLE_RANK.get(o.member_role, 0) >= ROLE_RANK["manager"]
+    ]
+    ids |= await get_org_production_ids(db, manager_org_ids)
+
+    return list(ids)
 
 
 @router.get("", response_model=PaginatedAuditLogs)
