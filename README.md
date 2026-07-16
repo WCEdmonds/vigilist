@@ -37,3 +37,24 @@ cp .env.example .env
 npm install
 npm run dev
 ```
+
+## Custom domain (vigilist.co)
+
+The marketing site (`marketing/`) serves `vigilist.co` / `www.vigilist.co` via
+Cloudflare Pages (see `marketing/README.md`). To serve the **app** on a
+`*.vigilist.co` subdomain (e.g. `app.vigilist.co`):
+
+1. **Firebase Hosting** — Console → Hosting → *Add custom domain* →
+   `app.vigilist.co`, then create the TXT/A records it shows in Cloudflare DNS
+   (set the records to **DNS only** / grey cloud so Firebase can provision TLS).
+2. **Firebase Authentication** — Console → Authentication → Settings →
+   *Authorized domains* → add `app.vigilist.co` (and any other subdomain that
+   will serve the app). Authorized domains do **not** support wildcards — each
+   subdomain must be added individually. Sign-in (Google popup and
+   email/password) fails with `auth/unauthorized-domain` until this is done.
+3. **Backend CORS** — already accepts `https://vigilist.co`,
+   `https://www.vigilist.co`, and any `https://*.vigilist.co` subdomain
+   (see `cors_origins` / `cors_origin_regex` in `backend/app/config.py`).
+   Extra origins can be added via the `VIGILIST_CORS_ORIGINS` env var.
+4. **Invite emails** — set `VIGILIST_APP_URL=https://app.vigilist.co` on the
+   Cloud Run service so emailed invite links point at the new domain.
