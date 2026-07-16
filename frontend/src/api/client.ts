@@ -242,6 +242,86 @@ export const nlSearch = (query: string) =>
     '/api/ai/nl-search', json({ query })
   );
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * Stream a chat response from the AI agent. Calls `onDelta` for each streamed
+ * text chunk and `onError` with a message on failure. Resolves when the stream
+ * completes (or errors). Pass an AbortSignal to cancel an in-flight response.
+ */
+export async function streamChat(
+  messages: ChatMessage[],
+  docIds: string[],
+  handlers: { onDelta: (text: string) => void; onError: (message: string) => void },
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  let res: Response;
+  try {
+    res = await fetch('/api/ai/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ messages, doc_ids: docIds }),
+      signal,
+    });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return;
+    handlers.onError(e?.message || 'Network error');
+    return;
+  }
+
+  if (!res.ok || !res.body) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    handlers.onError(detail);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep: number;
+      // SSE frames are separated by a blank line.
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLine = frame.split('\n').find(l => l.startsWith('data:'));
+        if (!dataLine) continue;
+        const payload = dataLine.slice(5).trim();
+        if (!payload) continue;
+        try {
+          const evt = JSON.parse(payload);
+          if (evt.type === 'delta' && typeof evt.text === 'string') handlers.onDelta(evt.text);
+          else if (evt.type === 'error') handlers.onError(evt.message || 'The AI service failed to respond.');
+        } catch {
+          // Ignore malformed frames.
+        }
+      }
+    }
+  } catch (e: any) {
+    if (e?.name !== 'AbortError') handlers.onError(e?.message || 'Stream interrupted');
+  }
+}
+
 // ── Export ──
 
 async function downloadCsv(url: string, filename: string) {
