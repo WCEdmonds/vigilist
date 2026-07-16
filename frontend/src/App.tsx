@@ -135,11 +135,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     }
   };
 
-  const handleSearch = async (query: string, _metadata?: Record<string, string>, forceMode?: 'fulltext' | 'semantic') => {
+  const [lastMetadata, setLastMetadata] = useState<Record<string, string> | undefined>(undefined);
+
+  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: 'fulltext' | 'semantic') => {
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
+    setLastMetadata(metadata);
 
     // Use forced mode if provided, otherwise auto-detect
     const mode = forceMode ?? (
@@ -153,7 +156,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     try {
       const res = await searchDocuments(
         query, 1, perPage, 'relevance', production.id,
-        undefined, undefined, mode, filterFileType || undefined,
+        metadata, mode, filterFileType || undefined,
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
@@ -166,7 +169,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
 
   // Re-run the active search whenever the file-type filter changes.
   useEffect(() => {
-    if (hasSearched) handleSearch(searchQuery, undefined, lastSearchMode);
+    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterFileType]);
 
@@ -199,7 +202,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       setSelectedIds(new Set());
       setShowBulkTagPicker(false);
       showToast(`Tagged ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
-      if (hasSearched) handleSearch(searchQuery);
+      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
       else loadDocuments(docPage);
     } catch (e: any) {
       showToast(`Could not apply tag: ${e?.message || 'unknown error'}`, 'error');
@@ -220,7 +223,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       setShowBulkTagPicker(false);
       setNewTagName('');
       showToast(`Created tag "${name}" and applied to ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
-      if (hasSearched) handleSearch(searchQuery);
+      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
       else loadDocuments(docPage);
     } catch (e: any) {
       showToast(`Could not create tag: ${e?.message || 'unknown error'}`, 'error');
@@ -420,7 +423,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 </span>
                 <button
                   className="btn btn-ghost btn-xs"
-                  onClick={() => handleSearch(searchQuery, undefined, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic')}
+                  onClick={() => handleSearch(searchQuery, lastMetadata, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic')}
                   style={{ fontSize: 'var(--text-xs)' }}
                 >
                   Try {lastSearchMode === 'semantic' ? 'full-text' : 'semantic'}

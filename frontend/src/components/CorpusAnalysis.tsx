@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { clusterProduction, getClusters } from '../api/client';
+import { clusterProduction, detectDuplicates, getClusters } from '../api/client';
 import type { ClusterInfo } from '../types';
 
 interface ClusterDetail extends ClusterInfo {
@@ -140,6 +140,14 @@ export default function CorpusAnalysis({ productionId, onViewDocument, onFilterC
         setClusters(result.clusters);
       } else {
         await loadClusters();
+      }
+      // Also refresh near-duplicate groups so the "Duplicates" panel in the
+      // document viewer has data. Same manager-level permission as clustering;
+      // failures here shouldn't fail the whole analysis run.
+      try {
+        await detectDuplicates(productionId);
+      } catch (e) {
+        console.warn('Duplicate detection failed:', e);
       }
     } catch (e: any) {
       setError(e.message);
