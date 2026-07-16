@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
+import AIAgent, { type AttachedDoc } from './components/AIAgent';
 import AIReviewPage from './components/AIReviewPage';
 import CorpusAnalysis from './components/CorpusAnalysis';
 import AuthPage from './components/AuthPage';
@@ -68,6 +69,27 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
   const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(initialUrl.view === 'analysis');
+
+  // AI Agent chat (session-only) — floating launcher + "Send to AI Agent".
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDocs, setChatDocs] = useState<AttachedDoc[]>([]);
+
+  // Attach the currently-selected documents to the AI agent and open the panel.
+  const sendSelectionToAgent = useCallback(() => {
+    const labelFor = (id: string): string => {
+      const fromSearch = searchResults.find(r => r.id === id);
+      if (fromSearch) return fromSearch.bates_begin;
+      const fromDocs = documents.find(d => d.id === id);
+      return fromDocs?.bates_begin ?? id.slice(0, 8);
+    };
+    const docs: AttachedDoc[] = Array.from(selectedIds).map(id => ({ id, label: labelFor(id) }));
+    setChatDocs(prev => {
+      // Merge with anything already attached, de-duplicating by id.
+      const seen = new Set(prev.map(d => d.id));
+      return [...prev, ...docs.filter(d => !seen.has(d.id))];
+    });
+    setChatOpen(true);
+  }, [selectedIds, searchResults, documents]);
 
   // Mirror the key bits of state back into the URL so a refresh lands
   // the user on the same page (doc viewer, batch review, search, etc.).
@@ -752,6 +774,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
           >
             {bulkDownloading ? 'Preparing…' : 'Download'}
           </button>
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={sendSelectionToAgent}
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <span className="ai-indicator" style={{ fontSize: 9, padding: '0 4px' }}>AI</span>
+            Send to AI Agent
+          </button>
           <div style={{ position: 'relative' }}>
             <button
               className="btn btn-sm btn-secondary"
@@ -815,6 +845,26 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
           </button>
         </div>
       )}
+
+      {/* Floating AI Agent launcher — hidden while the panel is open. */}
+      {!chatOpen && (
+        <button
+          className="ai-agent-fab"
+          onClick={() => setChatOpen(true)}
+          aria-label="Open AI Agent"
+          title="AI Agent"
+        >
+          <span className="ai-indicator" style={{ fontSize: 13, padding: '2px 7px', background: 'transparent', color: '#fff', boxShadow: 'none' }}>AI</span>
+        </button>
+      )}
+
+      {/* AI Agent chat panel — kept mounted so the session conversation persists across open/close. */}
+      <AIAgent
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        attachedDocs={chatDocs}
+        onRemoveDoc={(id) => setChatDocs(prev => prev.filter(d => d.id !== id))}
+      />
 
     </div>
   );

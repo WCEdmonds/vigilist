@@ -27,6 +27,60 @@ def _extract_text(response) -> str | None:
     return None
 
 
+# ── Interactive Chat (AI Agent) ──
+
+# A capable model for open-ended analysis over selected documents. Chat is
+# interactive, so thinking is left off (omitted) to keep first-token latency low.
+CHAT_MODEL = "claude-opus-4-8"
+
+CHAT_SYSTEM_PROMPT = """You are an AI review assistant inside Vigilist, a self-hosted e-discovery review platform used by legal teams.
+
+Your job is to help attorneys and paralegals understand, analyze, and cross-reference documents from a litigation production.
+
+Guidelines:
+- When the user has attached documents, ground your answers in that text. Refer to documents by their Bates number so the user can find them.
+- If the attached documents do not contain enough information to answer, say so plainly rather than guessing.
+- Never fabricate facts, dates, parties, quotations, or citations. Accuracy matters more than completeness.
+- Be precise, objective, and concise. Write for a legal professional.
+- You can help with summarization, timeline construction, spotting inconsistencies, identifying key parties, drafting search strategies, and flagging privilege or responsiveness concerns — but your output is assistive, not legal advice."""
+
+# Per-document text budget when building chat context. The model has a large
+# context window, but capping keeps latency and cost reasonable when many
+# documents are attached.
+_CHAT_DOC_CHAR_LIMIT = 12000
+
+
+def build_chat_system_prompt(documents: list) -> str:
+    """Build the chat system prompt, embedding any attached document text as context."""
+    if not documents:
+        return CHAT_SYSTEM_PROMPT
+
+    parts: list[str] = []
+    for doc in documents:
+        bates = doc.bates_begin
+        if doc.bates_end and doc.bates_end != doc.bates_begin:
+            bates = f"{doc.bates_begin}–{doc.bates_end}"
+        header = f"## Document {bates}"
+        if doc.title:
+            header += f" — {doc.title}"
+        text = (doc.text_content or "").strip()
+        if not text:
+            body = "(No extracted text available for this document.)"
+        else:
+            body = text[:_CHAT_DOC_CHAR_LIMIT]
+            if len(text) > _CHAT_DOC_CHAR_LIMIT:
+                body += "\n…[document truncated]"
+        parts.append(f"{header}\n{body}")
+
+    context = "\n\n".join(parts)
+    return (
+        f"{CHAT_SYSTEM_PROMPT}\n\n"
+        f"# Attached documents\n"
+        f"The user has attached the following {len(documents)} document(s) as context for this conversation:\n\n"
+        f"{context}"
+    )
+
+
 # ── Document Summarization ──
 
 SUMMARY_PROMPT = """You are a legal document analyst. Summarize this litigation document in 2-4 sentences.
