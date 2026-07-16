@@ -868,6 +868,16 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         onClose={() => setChatOpen(false)}
         attachedDocs={chatDocs}
         onRemoveDoc={(id) => setChatDocs(prev => prev.filter(d => d.id !== id))}
+        onOpenDocument={(id) => {
+          // Open the cited document in a new tab so the (session-only) chat
+          // stays alive — the in-app viewer is a full-page view that would
+          // otherwise unmount the panel and lose the conversation.
+          const url = new URL(window.location.href);
+          url.searchParams.set('prod', String(production.id));
+          url.searchParams.set('doc', id);
+          ['q', 'batch', 'view'].forEach(k => url.searchParams.delete(k));
+          window.open(url.toString(), '_blank', 'noopener');
+        }}
       />
 
     </div>
