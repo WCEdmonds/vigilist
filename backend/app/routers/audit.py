@@ -4,16 +4,27 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_accessible_production_ids, get_user_role_for_production, ROLE_RANK
-from app.models import AuditLog, User
+from app.dependencies import get_user_role_for_production, ROLE_RANK
+from app.models import AuditLog, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.schemas import AuditLogOut, PaginatedAuditLogs
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
+
+
+async def _auditable_production_ids(db: AsyncSession, user: User) -> list[int]:
+    """Productions where the user may read audit logs (owner or manager+)."""
+    owned = select(Production.id).where(Production.owner_id == user.id)
+    granted = select(ProductionAccess.production_id).where(
+        ProductionAccess.user_id == user.id,
+        ProductionAccess.role.in_(["manager", "admin"]),
+    )
+    result = await db.execute(union_all(owned, granted))
+    return [row[0] for row in result.all()]
 
 
 @router.get("", response_model=PaginatedAuditLogs)
@@ -28,18 +39,22 @@ async def list_audit_logs(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # Audit logs require at least manager role on the production
-    accessible = await get_accessible_production_ids(db, user)
+    # Audit logs require at least manager role — on the requested production,
+    # or (when browsing across productions) on at least one production, with
+    # results scoped to only those manager+ productions.
+    auditable = await _auditable_production_ids(db, user)
     if production_id is not None:
         role = await get_user_role_for_production(db, user, production_id)
         if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
             raise HTTPException(status_code=403, detail="Manager or admin role required to view audit logs")
+    elif not auditable:
+        raise HTTPException(status_code=403, detail="Manager or admin role required to view audit logs")
 
     query = select(AuditLog).where(
-        AuditLog.production_id.in_(accessible) | AuditLog.production_id.is_(None)
+        AuditLog.production_id.in_(auditable) | AuditLog.production_id.is_(None)
     )
     count_query = select(func.count(AuditLog.id)).where(
-        AuditLog.production_id.in_(accessible) | AuditLog.production_id.is_(None)
+        AuditLog.production_id.in_(auditable) | AuditLog.production_id.is_(None)
     )
 
     if production_id is not None:
@@ -84,14 +99,16 @@ async def export_audit_csv(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    accessible = await get_accessible_production_ids(db, user)
+    auditable = await _auditable_production_ids(db, user)
     if production_id is not None:
         role = await get_user_role_for_production(db, user, production_id)
         if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
             raise HTTPException(status_code=403, detail="Manager or admin role required")
+    elif not auditable:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
     query = select(AuditLog).where(
-        AuditLog.production_id.in_(accessible) | AuditLog.production_id.is_(None)
+        AuditLog.production_id.in_(auditable) | AuditLog.production_id.is_(None)
     )
 
     if production_id is not None:

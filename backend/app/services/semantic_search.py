@@ -1,5 +1,6 @@
 """Semantic search using pgvector."""
 
+import asyncio
 import logging
 
 from sqlalchemy import select, func
@@ -25,7 +26,8 @@ async def semantic_search(
     Embeds the query, finds nearest-neighbor chunks via pgvector,
     groups by document, returns ranked results.
     """
-    query_embedding = embed_query(query)
+    # embed_query makes a blocking HTTP call to Voyage — run it off the loop.
+    query_embedding = await asyncio.to_thread(embed_query, query)
     if not query_embedding:
         return [], 0
 
