@@ -12,7 +12,12 @@
 
 ## Global Constraints
 
-- **No automated tests in this project.** The repo has no frontend test framework — `frontend/package.json` has only `dev`, `build`, `lint`. Adding one is deferred to a follow-up project by explicit decision. **This plan therefore deviates from the usual TDD cycle: tasks are gated on `npm run build` (which runs `tsc -b`), `npm run lint`, and browser verification instead of on failing tests.** Do not add vitest/testing-library as part of this work.
+- **No automated tests in this project.** The repo has no frontend test framework — `frontend/package.json` has only `dev`, `build`, `lint`. Adding one is deferred to a follow-up project by explicit decision. **This plan therefore deviates from the usual TDD cycle: tasks are gated on `npm run build` (which runs `tsc -b`), a scoped lint check, and browser verification instead of on failing tests.** Do not add vitest/testing-library as part of this work.
+- **The lint baseline is already failing — this is expected and not yours to fix.** `npm run lint` reports 41 errors and 8 warnings across 20 files on `origin/main`, predating this work (mostly `no-explicit-any` and `exhaustive-deps`). A whole-repo "lint is clean" gate is therefore unsatisfiable. The gate for every task is instead:
+  - **New files must have zero lint errors and zero warnings.** Check with `npx eslint src/onboarding/slides.tsx src/components/OnboardingGuide.tsx src/hooks/useOnboarding.ts` (name only the files that exist yet).
+  - **`src/App.tsx` must not exceed its recorded baseline of 7 errors / 1 warning.** Check with `npx eslint src/App.tsx`.
+  - **`npm run build` must pass.**
+  Do not fix pre-existing lint errors in files you touch — that is unrelated debt and would bury this diff. Do not silence errors with `eslint-disable` in new code; fix the code instead.
 - Storage keys are namespaced per Firebase UID, exactly: `vigilist.onboarding.dismissed.<uid>` (localStorage) and `vigilist.onboarding.seen.<uid>` (sessionStorage).
 - Every storage read and write is wrapped in `try/catch`. A storage failure must never prevent the app from booting. Read failure → treat as not dismissed/not seen (show the guide).
 - Reuse existing CSS classes — `modal-overlay`, `modal-panel`, `modal-header`, `modal-body`, `modal-close-btn`, `btn`, `btn-primary`, `btn-secondary`, `btn-ghost`, `btn-sm`, `btn-header`, `visually-hidden`. Only add new classes where none exists (the footer and slide body).
@@ -188,10 +193,11 @@ export const SLIDES: Slide[] = [
 Run: `npm run build`
 Expected: build succeeds, no TypeScript errors. (The file is not imported yet; `tsc -b` still typechecks it.)
 
-- [ ] **Step 3: Verify it lints**
+- [ ] **Step 3: Verify the new file lints clean**
 
-Run: `npm run lint`
-Expected: no errors.
+Run: `npx eslint src/onboarding/slides.tsx`
+Expected: no output (zero errors, zero warnings). Do not run the repo-wide
+`npm run lint` as a gate — it fails on 41 pre-existing errors that are not yours.
 
 - [ ] **Step 4: Commit**
 
@@ -445,10 +451,14 @@ Append to the end of `frontend/src/styles/components.css`:
 }
 ```
 
-- [ ] **Step 3: Verify it compiles and lints**
+- [ ] **Step 3: Verify it compiles and lints clean**
 
-Run: `npm run build && npm run lint`
-Expected: both succeed. The component is not yet mounted, so nothing changes visually.
+Run: `npm run build`
+Expected: succeeds.
+
+Run: `npx eslint src/components/OnboardingGuide.tsx`
+Expected: no output (zero errors, zero warnings). The component is not yet
+mounted, so nothing changes visually.
 
 - [ ] **Step 4: Commit**
 
@@ -548,10 +558,13 @@ export function useOnboarding(uid: string | undefined) {
 }
 ```
 
-- [ ] **Step 2: Verify it compiles and lints**
+- [ ] **Step 2: Verify it compiles and lints clean**
 
-Run: `npm run build && npm run lint`
-Expected: both succeed.
+Run: `npm run build`
+Expected: succeeds.
+
+Run: `npx eslint src/hooks/useOnboarding.ts`
+Expected: no output (zero errors, zero warnings).
 
 - [ ] **Step 3: Commit**
 
@@ -687,10 +700,18 @@ The `content` variable needs the type. Update the React import at the top of `Ap
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 ```
 
-- [ ] **Step 6: Verify it compiles and lints**
+- [ ] **Step 6: Verify it compiles and lints within baseline**
 
-Run: `npm run build && npm run lint`
-Expected: both succeed.
+Run: `npm run build`
+Expected: succeeds.
+
+Run: `npx eslint src/App.tsx`
+Expected: **at most** 7 errors and 1 warning — App.tsx's recorded pre-existing
+baseline. If the count went up, your change introduced it; fix that. Do not fix
+the 7 pre-existing errors, and do not add `eslint-disable` comments.
+
+Run: `npx eslint src/onboarding/slides.tsx src/components/OnboardingGuide.tsx src/hooks/useOnboarding.ts`
+Expected: no output.
 
 - [ ] **Step 7: Verify in the browser**
 
