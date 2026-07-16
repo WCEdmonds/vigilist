@@ -7,7 +7,6 @@ pydantic-settings>=2.7
 pillow>=11
 python-multipart>=0.0.20
 anthropic>=0.52
-openai>=1.0
 firebase-admin>=6.6
 google-cloud-storage>=2.18
 google-cloud-tasks>=2.16

@@ -148,6 +148,15 @@ async def ingest_production(
 
     await db.commit()
 
+    # Generate chunk embeddings so semantic search / clustering / duplicate
+    # detection work on this production. Best-effort — never fails the ingest.
+    try:
+        from app.services.embeddings import embed_production_documents
+        await embed_production_documents(db, production.id)
+    except Exception as e:
+        logger.exception("Embedding generation failed")
+        errors.append(f"Embedding generation skipped: {e}")
+
     return {
         "production_id": production.id,
         "production_name": production_name,
@@ -382,6 +391,16 @@ async def _finalize_job_if_done(
         # rejects an aware datetime against a TIMESTAMP WITHOUT TIME ZONE).
         job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
+
+        # Generate chunk embeddings for semantic search / clustering /
+        # duplicate detection. Runs after the job is marked complete so a
+        # long embedding pass (or a killed container) can never strand the
+        # job in "processing". Best-effort — failures are logged only.
+        try:
+            from app.services.embeddings import embed_production_documents
+            await embed_production_documents(db, production_id)
+        except Exception:
+            logger.exception("Embedding generation failed")
 
 
 async def ingest_batch(
