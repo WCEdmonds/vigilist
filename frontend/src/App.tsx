@@ -958,7 +958,11 @@ function AppRouter() {
   return (
     <>
       {content}
-      {showIngestWizard && (
+      {/* Only the WelcomePage and ProductionPicker branches ever rendered this
+          wizard. `Home` renders its own from its own state, so guarding on
+          !activeProduction keeps a minimized in-flight ingest from surviving into
+          Home and doubling up with Home's instance. */}
+      {showIngestWizard && !activeProduction && (
         <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
       )}
       {guideOpen && (
