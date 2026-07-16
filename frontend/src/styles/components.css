@@ -590,6 +590,12 @@ mark {
   border-bottom: 1px solid rgba(44, 62, 107, 0.1);
 }
 
+.modal-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+}
+
 .modal-body {
   padding: var(--space-4);
   overflow: auto;
@@ -1000,7 +1006,7 @@ mark {
 
 .onboarding-dots {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .onboarding-dot {
