@@ -76,6 +76,9 @@ async def stream_chat_events(
             tool_results.append({
                 "type": "tool_result", "tool_use_id": block.id, "content": run.result,
             })
+        if not tool_results:
+            yield _sse({"type": "done"})
+            return
         convo.append({"role": "user", "content": tool_results})
 
     # Reached the round cap: ask once more with no tools for a final answer.
