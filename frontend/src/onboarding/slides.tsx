@@ -24,8 +24,9 @@ export const SLIDES: Slide[] = [
           tag, and review lives inside one.
         </p>
         <p>
-          This guide is a quick tour of what you can do. It takes about a minute, and
-          you can reopen it any time from the <strong>Guide</strong> button in the header.
+          This guide is a quick tour of what you can do. It takes about a minute.
+          Once you are inside a production you can reopen it any time from the{' '}
+          <strong>Guide</strong> button in the header.
         </p>
       </>
     ),
@@ -69,7 +70,11 @@ export const SLIDES: Slide[] = [
           From there you can tag, download the native files as a ZIP, or send the
           selection straight to the AI Agent.
         </p>
-        <p>Filter the document list by tag, by file type, and sort by Bates number, recency, or size.</p>
+        <p>
+          Filter the document list by tag, by file type, and sort by Bates number,
+          recency, or size. Document titles are editable inline in the list; the
+          Bates numbers are not.
+        </p>
       </>
     ),
   },
@@ -86,8 +91,7 @@ export const SLIDES: Slide[] = [
         </p>
         <p>
           <strong>Find similar</strong> pulls up documents that resemble the one you are
-          reading — useful for chasing a thread once you have found one good hit. Titles
-          are editable inline; the Bates numbers are not.
+          reading — useful for chasing a thread once you have found one good hit.
         </p>
       </>
     ),
