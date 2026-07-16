@@ -14,6 +14,8 @@ interface Props {
   onRemoveDoc: (id: string) => void;
 }
 
+const DEFAULT_SIZE = { w: 420, h: 620 };
+
 function transcriptText(messages: ChatMessage[]): string {
   return messages
     .map(m => `${m.role === 'user' ? 'You' : 'AI Agent'}:\n${m.content}`)
@@ -30,8 +32,7 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-
-  const DEFAULT_SIZE = { w: 420, h: 620 };
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const [size, setSize] = useState<{ w: number; h: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('vigilist.aiAgent.size') || '');
@@ -52,14 +53,22 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
       const h = Math.min(Math.max(360, startH + (startY - ev.clientY)), window.innerHeight - 32);
       setSize({ w, h });
     };
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      dragCleanupRef.current = null;
+    };
+    const onUp = () => {
+      cleanup();
       setSize(curr => { localStorage.setItem('vigilist.aiAgent.size', JSON.stringify(curr)); return curr; });
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    dragCleanupRef.current = cleanup;
   };
+
+  // Clean up any in-progress resize drag listeners if the panel unmounts mid-drag.
+  useEffect(() => () => { dragCleanupRef.current?.(); }, []);
 
   // Keep the transcript scrolled to the latest message as it grows/streams.
   useEffect(() => {
@@ -118,6 +127,7 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
     abortRef.current = null;
     setStreaming(false);
     setStreamingText('');
+    setActivity([]);
     if (acc) {
       setMessages([...nextMessages, { role: 'assistant', content: acc }]);
     } else if (!errored) {
@@ -185,7 +195,7 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
       role="dialog"
       aria-label="AI Agent"
       style={{ width: size.w, height: size.h }}
-      onMouseDown={() => panelRef.current?.focus?.()}
+      onMouseDown={() => panelRef.current?.focus()}
       ref={panelRef}
       tabIndex={-1}
     >
