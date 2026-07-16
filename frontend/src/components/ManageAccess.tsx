@@ -27,8 +27,8 @@ export default function ManageAccess({ productionId, productionName: _production
       ]);
       setAccess(a);
       setInvites(i);
-    } catch (e: any) {
-      showToast(`Could not load access list: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not load access list: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     }
   };
 
@@ -44,8 +44,8 @@ export default function ManageAccess({ productionId, productionName: _production
       setMessage(res.status === 'granted' ? `Access granted to ${res.email}` : `Invitation sent to ${res.email}`);
       setEmail('');
       await load();
-    } catch (e: any) {
-      setError(e.message || 'Failed to invite');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to invite');
     } finally {
       setLoading(false);
     }
@@ -59,8 +59,8 @@ export default function ManageAccess({ productionId, productionName: _production
     try {
       await revokeAccess(productionId, userId);
       await load();
-    } catch (e: any) {
-      setError(e.message || 'Failed to revoke');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to revoke');
     } finally {
       setRevokingId(null);
     }

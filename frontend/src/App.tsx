@@ -128,8 +128,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
-    } catch (e: any) {
-      showToast(`Could not load documents: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not load documents: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -160,8 +160,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
-    } catch (e: any) {
-      showToast(`Search failed: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Search failed: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -204,8 +204,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       showToast(`Tagged ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
       if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
       else loadDocuments(docPage);
-    } catch (e: any) {
-      showToast(`Could not apply tag: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not apply tag: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setBulkTagging(false);
     }
@@ -225,8 +225,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       showToast(`Created tag "${name}" and applied to ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
       if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
       else loadDocuments(docPage);
-    } catch (e: any) {
-      showToast(`Could not create tag: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not create tag: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setBulkTagging(false);
     }
@@ -244,8 +244,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       showToast(`Downloaded ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
-    } catch (e: any) {
-      showToast(`Could not build download: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not build download: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setBulkDownloading(false);
     }
@@ -352,11 +352,12 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                 const { getRandomDocument } = await import('./api/client');
                 const { id } = await getRandomDocument(production.id);
                 setViewDocId(id);
-              } catch (e: any) {
+              } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : '';
                 showToast(
-                  e?.message?.includes('404')
+                  msg.includes('404')
                     ? 'No documents in this production yet.'
-                    : `Could not pick a random document: ${e?.message || 'unknown error'}`,
+                    : `Could not pick a random document: ${msg || 'unknown error'}`,
                   'error',
                 );
               }
@@ -892,8 +893,8 @@ function AppRouter() {
       if (fromUrl) setActiveProduction(fromUrl);
       else if (prods.length === 1) setActiveProduction(prods[0]);
       else if (prods.length === 0) setActiveProduction(null);
-    } catch (e: any) {
-      showToast(`Could not load productions: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not load productions: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setProdLoading(false);
     }

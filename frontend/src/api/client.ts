@@ -263,9 +263,9 @@ export async function streamChat(
       body: JSON.stringify({ messages, doc_ids: docIds }),
       signal,
     });
-  } catch (e: any) {
-    if (e?.name === 'AbortError') return;
-    handlers.onError(e?.message || 'Network error');
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') return;
+    handlers.onError(e instanceof Error ? e.message : 'Network error');
     return;
   }
 
@@ -309,8 +309,8 @@ export async function streamChat(
         }
       }
     }
-  } catch (e: any) {
-    if (e?.name !== 'AbortError') handlers.onError(e?.message || 'Stream interrupted');
+  } catch (e: unknown) {
+    if (!(e instanceof Error && e.name === 'AbortError')) handlers.onError(e instanceof Error ? e.message : 'Stream interrupted');
   }
 }
 
