@@ -42,7 +42,17 @@ async def create_production_for_ingest(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Production with this name already exists")
 
-    production = Production(name=production_name, description=description, owner_id=user.id)
+    # File the production under the creator's organization, if any, so every
+    # member of that org can access it.
+    from app.dependencies import resolve_org_for_creator
+    org_id = await resolve_org_for_creator(db, user)
+
+    production = Production(
+        name=production_name,
+        description=description,
+        owner_id=user.id,
+        organization_id=org_id,
+    )
     db.add(production)
     await db.commit()
     await db.refresh(production)

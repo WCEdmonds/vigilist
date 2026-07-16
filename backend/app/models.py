@@ -15,7 +15,7 @@ from sqlalchemy import (
     func,
 )
 from pgvector.sqlalchemy import Vector
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.types import UserDefinedType
 
@@ -40,6 +40,37 @@ class User(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+class Organization(Base):
+    """A tenant (e.g. a law firm) served on a *.vigilist.co subdomain.
+
+    Access model:
+    - Any user whose email domain is in `member_domains` is a member of the
+      org and gets `member_role` access to every production owned by the org.
+    - A production is auto-assigned to the org at creation time when its
+      creator's email domain is in `member_domains`, OR the creator's exact
+      email is in `creator_emails` (for individuals outside the member
+      domains — e.g. an external admin whose personal email should still
+      file productions under this org).
+    """
+
+    __tablename__ = "organizations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Subdomain label — e.g. "thirulaw" for thirulaw.vigilist.co.
+    slug = Column(String(63), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
+    # Role granted to member-domain users on the org's productions.
+    member_role = Column(String(20), nullable=False, server_default="reviewer")
+    # Email domains whose users are members (lowercase, no "@"): ["thirulaw.com"]
+    member_domains = Column(ARRAY(String), nullable=False, server_default="{}")
+    # Extra individual emails (lowercase) whose new productions file under this
+    # org even though their domain isn't a member domain.
+    creator_emails = Column(ARRAY(String), nullable=False, server_default="{}")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    productions = relationship("Production", back_populates="organization")
+
+
 class Production(Base):
     __tablename__ = "productions"
 
@@ -47,10 +78,12 @@ class Production(Base):
     name = Column(String(255), nullable=False, unique=True)
     description = Column(Text, nullable=True)
     owner_id = Column(String(128), ForeignKey("users.id"), nullable=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     documents = relationship("Document", back_populates="production")
     owner = relationship("User", foreign_keys=[owner_id])
+    organization = relationship("Organization", back_populates="productions")
     access_list = relationship("ProductionAccess", back_populates="production", cascade="all, delete-orphan")
 
 
