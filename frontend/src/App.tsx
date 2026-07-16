@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
@@ -251,19 +251,25 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     }
   };
 
-  // AI Review full-screen mode
+  // Build the current doc ID list for nav (search results or filtered docs)
+  const currentDocIds = hasSearched
+    ? searchResults.map(r => r.id)
+    : documents.map(d => d.id);
+
+  const displayDocs = documents;
+  const totalPages = Math.ceil(docTotal / perPage);
+
+  // Full-screen sub-views are computed (not early-returned) so the floating AI
+  // Agent panel rendered below stays mounted across all of them — its
+  // session-only conversation must survive navigation to the doc viewer, AI
+  // review, corpus analysis, and batch review.
+  let fullScreenView: ReactNode = null;
   if (showAIReview) {
-    return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
-  }
-
-  // Corpus Analysis full-screen mode
-  if (showCorpusAnalysis) {
-    return <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onFilterCluster={() => {}} onBack={() => setShowCorpusAnalysis(false)} />;
-  }
-
-  // Batch review full-screen mode
-  if (activeBatchId) {
-    return (
+    fullScreenView = <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
+  } else if (showCorpusAnalysis) {
+    fullScreenView = <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onFilterCluster={() => {}} onBack={() => setShowCorpusAnalysis(false)} />;
+  } else if (activeBatchId) {
+    fullScreenView = (
       <BatchReview
         batchId={activeBatchId}
         onClose={() => setActiveBatchId(null)}
@@ -273,16 +279,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         }}
       />
     );
-  }
-
-  // Build the current doc ID list for nav (search results or filtered docs)
-  const currentDocIds = hasSearched
-    ? searchResults.map(r => r.id)
-    : documents.map(d => d.id);
-
-  // Document viewer mode
-  if (viewDocId) {
-    return (
+  } else if (viewDocId) {
+    fullScreenView = (
       <DocumentViewer
         docId={viewDocId}
         onNavigate={setViewDocId}
@@ -301,11 +299,10 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     );
   }
 
-  const displayDocs = documents;
-  const totalPages = Math.ceil(docTotal / perPage);
-
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
+    <>
+      {fullScreenView ?? (
+      <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
       {/* Header */}
       <div className="app-header">
         <span className="logo" onClick={clearSearch}>
@@ -850,7 +847,12 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         </div>
       )}
 
-      {/* Floating AI Agent launcher — hidden while the panel is open. */}
+    </div>
+      )}
+
+      {/* Floating AI Agent launcher — hidden while the panel is open. Rendered
+          outside the view switch so it persists across the doc viewer, AI
+          review, corpus, and batch views. */}
       {!chatOpen && (
         <button
           className="ai-agent-fab"
@@ -862,15 +864,17 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         </button>
       )}
 
-      {/* AI Agent chat panel — kept mounted so the session conversation persists across open/close. */}
+      {/* AI Agent chat panel — kept mounted across all views so the session
+          conversation survives navigation. Citations open in-app; the chat
+          floats above the opened document. */}
       <AIAgent
         open={chatOpen}
         onClose={() => setChatOpen(false)}
         attachedDocs={chatDocs}
         onRemoveDoc={(id) => setChatDocs(prev => prev.filter(d => d.id !== id))}
+        onOpenDocument={(id) => setViewDocId(id)}
       />
-
-    </div>
+    </>
   );
 }
 

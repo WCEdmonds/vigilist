@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import Markdown, { defaultUrlTransform, type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { streamChat, type ChatMessage } from '../api/client';
 import { showToast } from './Toast';
 
@@ -12,6 +14,7 @@ interface Props {
   onClose: () => void;
   attachedDocs: AttachedDoc[];
   onRemoveDoc: (id: string) => void;
+  onOpenDocument?: (docId: string) => void;
 }
 
 const DEFAULT_SIZE = { w: 420, h: 620 };
@@ -22,7 +25,7 @@ function transcriptText(messages: ChatMessage[]): string {
     .join('\n\n────────────────────\n\n');
 }
 
-export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Props) {
+export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc, onOpenDocument }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -33,6 +36,36 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  // Render assistant messages as markdown. Document citations arrive as links
+  // with a `doc:<id>` href — render those as in-app links that open the viewer.
+  const mdComponents: Components = useMemo(() => ({
+    a({ href, children, node: _node, ...props }) {
+      if (href && href.startsWith('doc:')) {
+        const id = href.slice(4);
+        return (
+          <a
+            className="ai-agent-doc-link"
+            href={`#doc-${id}`}
+            onClick={(e) => { e.preventDefault(); onOpenDocument?.(id); }}
+          >
+            {children}
+          </a>
+        );
+      }
+      return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+    },
+  }), [onOpenDocument]);
+
+  const renderMarkdown = (text: string) => (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      components={mdComponents}
+      urlTransform={(url) => (url.startsWith('doc:') ? url : defaultUrlTransform(url))}
+    >
+      {text}
+    </Markdown>
+  );
   const [size, setSize] = useState<{ w: number; h: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('vigilist.aiAgent.size') || '');
@@ -256,7 +289,9 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
         {messages.map((m, i) => (
           <div key={i} className={`ai-agent-msg ai-agent-msg-${m.role}`}>
             <div className="ai-agent-msg-role">{m.role === 'user' ? 'You' : 'AI Agent'}</div>
-            <div className="ai-agent-msg-content">{m.content}</div>
+            <div className="ai-agent-msg-content ai-agent-markdown">
+              {m.role === 'assistant' ? renderMarkdown(m.content) : m.content}
+            </div>
           </div>
         ))}
 
@@ -273,8 +308,8 @@ export default function AIAgent({ open, onClose, attachedDocs, onRemoveDoc }: Pr
                 ))}
               </div>
             )}
-            <div className="ai-agent-msg-content">
-              {streamingText || <span className="ai-agent-typing"><span /><span /><span /></span>}
+            <div className="ai-agent-msg-content ai-agent-markdown">
+              {streamingText ? renderMarkdown(streamingText) : <span className="ai-agent-typing"><span /><span /><span /></span>}
             </div>
           </div>
         )}
