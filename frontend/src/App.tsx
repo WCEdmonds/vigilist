@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
@@ -20,8 +20,11 @@ import { ToastContainer, showToast } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import UserAvatar from './components/UserAvatar';
+import OnboardingGuide from './components/OnboardingGuide';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
+import { useOnboarding } from './hooks/useOnboarding';
+import { SLIDES } from './onboarding/slides';
 import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
@@ -35,9 +38,10 @@ interface HomeProps {
   production: ProductionInfo;
   onSwitchProduction: () => void;
   onIngestComplete: () => void;
+  onOpenGuide: () => void;
 }
 
-function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
+function Home({ production, onSwitchProduction, onIngestComplete, onOpenGuide }: HomeProps) {
   const { user, logout } = useAuth();
   const initialUrl = useMemo(() => getInitialUrlState(), []);
   const [viewDocId, setViewDocId] = useState<string | null>(initialUrl.doc ?? null);
@@ -325,6 +329,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
           </button>
           <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowQueueManager(true)}>Review Queues</button>
           <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowDashboard(true)}>Dashboard</button>
+          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={onOpenGuide}>Guide</button>
         </div>
         <div className="user-menu">
           <span className="desktop-only" style={{ display: 'contents' }}>
@@ -906,6 +911,18 @@ function AppRouter() {
     loadProductions();
   };
 
+  const { user } = useAuth();
+  const { open: guideOpen, close: closeGuide, dismissForever, reopen: openGuide } = useOnboarding(user?.uid);
+
+  // Someone with zero productions is about to ingest and become an owner —
+  // they are exactly who needs the owner slide.
+  const showOwnerSlides = productions.length === 0 || productions.some(p => p.is_owner);
+  const slides = useMemo(
+    () => SLIDES.filter(s => showOwnerSlides || !s.ownerOnly),
+    [showOwnerSlides],
+  );
+
+  // Don't show the guide over a loading spinner.
   if (prodLoading) {
     return (
       <div className="loading-fullscreen">
@@ -915,42 +932,42 @@ function AppRouter() {
     );
   }
 
+  let content: ReactNode;
   if (productions.length === 0) {
-    return (
-      <>
-        <WelcomePage onIngest={() => setShowIngestWizard(true)} />
-        {showIngestWizard && (
-          <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
-        )}
-        <ToastContainer />
-      </>
+    content = <WelcomePage onIngest={() => setShowIngestWizard(true)} />;
+  } else if (!activeProduction) {
+    content = (
+      <ProductionPicker
+        productions={productions}
+        onSelect={setActiveProduction}
+        onIngest={() => setShowIngestWizard(true)}
+        onDeleted={loadProductions}
+      />
     );
-  }
-
-  if (!activeProduction) {
-    return (
-      <>
-        <ProductionPicker
-          productions={productions}
-          onSelect={setActiveProduction}
-          onIngest={() => setShowIngestWizard(true)}
-          onDeleted={loadProductions}
-        />
-        {showIngestWizard && (
-          <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
-        )}
-        <ToastContainer />
-      </>
+  } else {
+    content = (
+      <Home
+        production={activeProduction}
+        onSwitchProduction={() => setActiveProduction(null)}
+        onIngestComplete={handleIngestComplete}
+        onOpenGuide={openGuide}
+      />
     );
   }
 
   return (
     <>
-      <Home
-        production={activeProduction}
-        onSwitchProduction={() => setActiveProduction(null)}
-        onIngestComplete={handleIngestComplete}
-      />
+      {content}
+      {showIngestWizard && (
+        <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
+      )}
+      {guideOpen && (
+        <OnboardingGuide
+          slides={slides}
+          onClose={closeGuide}
+          onDismissForever={dismissForever}
+        />
+      )}
       <ToastContainer />
     </>
   );
@@ -996,5 +1013,5 @@ function AppContent() {
     </div>
   );
   if (!user) return <AuthPage />;
-  return <AppRouter />;
+  return <AppRouter key={user.uid} />;
 }
