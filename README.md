@@ -58,3 +58,30 @@ Cloudflare Pages (see `marketing/README.md`). To serve the **app** on a
    Extra origins can be added via the `VIGILIST_CORS_ORIGINS` env var.
 4. **Invite emails** — set `VIGILIST_APP_URL=https://app.vigilist.co` on the
    Cloud Run service so emailed invite links point at the new domain.
+
+### Organizations (firm-wide access)
+
+An **organization** (the `organizations` table) lets everyone at a firm share
+productions by email domain instead of per-user invites:
+
+- Users whose email domain is in the org's `member_domains` automatically get
+  `member_role` access to **every** production the org owns.
+- A production is filed under an org at creation time when its creator's email
+  domain is in `member_domains`, or the creator's exact email is in
+  `creator_emails`.
+
+The initial migration seeds **Thiru Law** (`slug='thirulaw'`,
+`member_domains={thirulaw.com}`, `member_role=manager`,
+`creator_emails={wcedmonds28@gmail.com}`) and back-fills every existing
+production to it. To add another firm, insert an `organizations` row (no code
+change needed) and point its subdomain at Firebase Hosting per the steps above.
+
+Notes:
+- API access (documents, search, review) is enforced server-side on every
+  request, so org access is effective immediately.
+- Direct Firebase **Storage** reads are gated by custom claims, which refresh
+  on the member's next login / token refresh — so a brand-new production added
+  to an org becomes directly file-readable to existing members after their
+  token refreshes (API-served files are immediate). Custom claims are also
+  capped at 1000 bytes (~200 production IDs); a firm past that needs a
+  claims-free storage-auth model (see `app/services/claims.py`).
