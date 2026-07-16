@@ -240,7 +240,12 @@ export interface ChatMessage {
 export async function streamChat(
   messages: ChatMessage[],
   docIds: string[],
-  handlers: { onDelta: (text: string) => void; onError: (message: string) => void },
+  handlers: {
+    onDelta: (text: string) => void;
+    onError: (message: string) => void;
+    onToolUse?: (evt: { name: string; summary: string }) => void;
+    onToolResult?: (evt: { name: string; ok: boolean; summary: string }) => void;
+  },
   signal?: AbortSignal,
 ): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -296,6 +301,8 @@ export async function streamChat(
         try {
           const evt = JSON.parse(payload);
           if (evt.type === 'delta' && typeof evt.text === 'string') handlers.onDelta(evt.text);
+          else if (evt.type === 'tool_use') handlers.onToolUse?.({ name: evt.name, summary: evt.summary });
+          else if (evt.type === 'tool_result') handlers.onToolResult?.({ name: evt.name, ok: !!evt.ok, summary: evt.summary });
           else if (evt.type === 'error') handlers.onError(evt.message || 'The AI service failed to respond.');
         } catch {
           // Ignore malformed frames.
