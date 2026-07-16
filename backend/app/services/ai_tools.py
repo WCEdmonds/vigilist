@@ -354,7 +354,7 @@ _DISPATCH = {
 }
 
 
-async def run_tool(db, user, accessible_ids: list[int], name: str, tool_input: dict) -> ToolRun:
+async def run_tool(db: AsyncSession, user: User, accessible_ids: list[int], name: str, tool_input: dict) -> ToolRun:
     """Execute one tool call under the user's access scope. Never raises."""
     impl = _DISPATCH.get(name)
     if impl is None:
