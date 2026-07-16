@@ -22,6 +22,7 @@ def test_tools_are_well_formed():
 def test_expected_tool_set():
     assert ai_tools.TOOL_NAMES == {
         "search_documents",
+        "semantic_search",
         "get_document",
         "list_productions",
         "find_similar_documents",
@@ -83,6 +84,27 @@ def test_run_tool_routes_search(monkeypatch):
     ))
     assert run.ok is True
     assert calls["query"] == "hello"
+    assert calls["accessible"] == [1, 2]      # access scope always passed through
+    assert "1 document" in run.result_summary
+
+
+def test_run_tool_routes_semantic_search(monkeypatch):
+    calls = {}
+
+    async def fake_semantic(db, query, **kwargs):
+        calls["query"] = query
+        calls["accessible"] = kwargs.get("accessible_production_ids")
+        return ([{"id": "d1", "bates_begin": "ABC-1", "bates_end": "ABC-1",
+                  "title": "T", "snippet": "snip", "page_count": 1,
+                  "production_id": 1, "rank": 0.9}], 1)
+
+    monkeypatch.setattr(ai_tools, "_semantic_search", fake_semantic)
+    run = asyncio.run(ai_tools.run_tool(
+        db=object(), user=_FakeUser(), accessible_ids=[1, 2],
+        name="semantic_search", tool_input={"query": "drinking"},
+    ))
+    assert run.ok is True
+    assert calls["query"] == "drinking"
     assert calls["accessible"] == [1, 2]      # access scope always passed through
     assert "1 document" in run.result_summary
 
