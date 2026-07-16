@@ -9,9 +9,24 @@ class Settings(BaseSettings):
     # Local file storage root for converted images (will be replaced by Firebase Storage in a later plan)
     storage_root: str = "./storage"
     # CORS origins (Firebase Hosting domain added for prod)
-    cors_origins: list[str] = ["http://localhost:5173", "https://ediscover.web.app", "https://ediscover.firebaseapp.com"]
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "https://ediscover.web.app",
+        "https://ediscover.firebaseapp.com",
+        "https://vigilist.co",
+        "https://www.vigilist.co",
+    ]
+    # Regex for additional allowed origins — accepts vigilist.co and any
+    # *.vigilist.co subdomain (app.vigilist.co, staging.app.vigilist.co, ...)
+    # over https. Starlette matches this with fullmatch, so lookalike domains
+    # (evilvigilist.co, vigilist.co.attacker.com) are rejected.
+    cors_origin_regex: str = r"https://([a-z0-9-]+\.)*vigilist\.co"
     # Anthropic API key for AI features
     anthropic_api_key: str = ""
+    # Voyage AI API key for embeddings (semantic search, clustering,
+    # near-duplicate detection). Unset = those features degrade gracefully
+    # (semantic search falls back to full-text).
+    voyage_api_key: str = ""
     # Resend email
     resend_api_key: str = ""
     resend_from_email: str = "Vigilist <noreply@qndary.com>"

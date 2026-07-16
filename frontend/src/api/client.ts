@@ -46,11 +46,6 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
   return request(`/api/documents/random?${params}`);
 }
 
-export function getMetadataKeys(productionId?: number): Promise<string[]> {
-  const params = new URLSearchParams();
-  if (productionId) params.set('production_id', String(productionId));
-  return request<string[]>(`/api/documents/metadata-keys?${params}`);
-}
 
 export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
@@ -75,8 +70,6 @@ export function getByBates(bates: string, productionId?: number) {
   return request<DocumentDetail>(`/api/documents/by-bates?${params}`);
 }
 
-export const imageUrl = (docId: string, pageNum: number) =>
-  `/api/documents/${docId}/image/${pageNum}`;
 
 const _imageBlobCache = new Map<string, string>();
 
@@ -105,8 +98,6 @@ export async function fetchImageBlob(docId: string, pageNum: number, width?: num
   return url;
 }
 
-export const nativeUrl = (docId: string) =>
-  `/api/documents/${docId}/native`;
 
 export function updateDocTitle(docId: string, title: string): Promise<{ ok: boolean; title: string | null }> {
   return request(`/api/documents/${docId}/title`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
@@ -136,8 +127,6 @@ export async function fetchDocumentPdf(docId: string): Promise<Blob> {
   return res.blob();
 }
 
-export const streamUrl = (docId: string) =>
-  `/api/documents/${docId}/stream`;
 
 export async function fetchBulkZip(docIds: string[]): Promise<Blob> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -171,14 +160,12 @@ export async function searchDocuments(
   perPage = 50,
   sort = 'relevance',
   productionId?: number,
-  tagIds?: number[],
   metadata?: Record<string, string>,
   mode?: 'fulltext' | 'semantic',
   fileType?: string,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
-  if (tagIds?.length) params.set('tag_ids', tagIds.join(','));
   if (metadata && Object.keys(metadata).length > 0) {
     params.set('metadata', JSON.stringify(metadata));
   }
@@ -195,8 +182,6 @@ export const getTags = (category?: string) =>
 export const createTag = (data: { name: string; category: string; color?: string; keyboard_shortcut?: string }) =>
   request<Tag>('/api/tags', json(data));
 
-export const getDocumentTags = (docId: string) =>
-  request<DocumentTagEntry[]>(`/api/documents/${docId}/tags`);
 
 export const applyTags = (docId: string, tagIds: number[]) =>
   request<DocumentTagEntry[]>(`/api/documents/${docId}/tags`, json({ tag_ids: tagIds }));
@@ -413,8 +398,6 @@ export const startProcessing = (
 ) =>
   request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat }));
 
-export const reprocessProduction = (productionId: number) =>
-  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: 0 }));
 
 export const getIngestStatus = (jobId: string) =>
   request<IngestJob>(`/api/ingest/${jobId}/status`);
@@ -515,8 +498,6 @@ export const listReviewProjects = (productionId: number) =>
 export const createReviewProject = (productionId: number, data: { name: string; prompt_text: string; sample_size?: number; categories?: { name: string; color: string; description: string }[] }) =>
   request<ReviewProject>(`/api/review/projects/${productionId}`, json(data));
 
-export const updateReviewProject = (productionId: number, projectId: number, data: { name?: string; prompt_text?: string }) =>
-  request<ReviewProject>(`/api/review/projects/${productionId}/${projectId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
 
 export const deleteReviewProject = (productionId: number, projectId: number) =>
   request(`/api/review/projects/${productionId}/${projectId}`, { method: 'DELETE' });
@@ -553,11 +534,6 @@ export const recordDecision = (resultId: number, decision: string, note?: string
     body: JSON.stringify({ decision, note }),
   });
 
-// ── Leaderboard ──
-
-export function getLeaderboard(productionId: number): Promise<{ views: { user_id: string; email: string; count: number }[]; activity: { user_id: string; email: string; display_name: string | null; notes: number; tags: number; total: number }[] }> {
-  return request(`/api/productions/${productionId}/leaderboard`);
-}
 
 // ── Intelligence ──
 
@@ -577,6 +553,3 @@ export function getDocumentDuplicates(docId: string): Promise<DuplicateEntry[]> 
   return request<DuplicateEntry[]>(`/api/documents/${docId}/duplicates`);
 }
 
-export function propagateTag(docId: string, tagId: number, relationshipType: string): Promise<{ tagged_count: number }> {
-  return request(`/api/documents/${docId}/propagate-tag`, json({ tag_id: tagId, relationship_type: relationshipType }));
-}
