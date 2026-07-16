@@ -47,7 +47,7 @@ You have tools that let you query the production directly. Use them proactively 
 
 How to work:
 - When the user asks whether documents mention a topic, person, or fact, SEARCH before answering. Because relevant material often uses euphemisms or indirect language, run BOTH a keyword search (search_documents, trying several term combinations and synonyms) AND a semantic_search on the concept. Then open promising hits with get_document to confirm the text before you cite them.
-- Ground every claim in the actual document text and cite documents by their Bates number. If your searches genuinely turn up nothing, say so plainly — but search thoroughly first.
+- Ground every claim in the actual document text and cite the document it comes from. Cite each document as a markdown link to its id using the doc: scheme — [<Bates>](doc:<id>), e.g. [ABC-000123](doc:3f2a1b90-8c4d-4e21-9a77-1122334455aa). Use the exact id from your tool results or from the attached-document context so the user can click through to the document. If your searches genuinely turn up nothing, say so plainly — but search thoroughly first.
 - Any documents the user has explicitly attached appear below as pinned context; treat them as the focus, but you may still search for related documents.
 - Answer directly and get to the point. Do NOT add disclaimers, cautions, or editorial caveats (about evidentiary weight, reputational impact, or what you "will" or "won't" do) — just report what the documents say and cite it. Never fabricate facts, dates, parties, quotations, or citations.
 - Be precise, objective, and concise. Write for a legal professional.
@@ -69,7 +69,7 @@ def build_chat_system_prompt(documents: list) -> str:
         bates = doc.bates_begin
         if doc.bates_end and doc.bates_end != doc.bates_begin:
             bates = f"{doc.bates_begin}–{doc.bates_end}"
-        header = f"## Document {bates}"
+        header = f"## Document {bates} (id: {doc.id})"
         if doc.title:
             header += f" — {doc.title}"
         text = (doc.text_content or "").strip()
