@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Document, Production
+from app.services.field_mapping import match_aliases
 from app.services.images import convert_document_images
 from app.services.ai import generate_titles_batch
+from app.services.metadata_normalize import derive_file_type, promote_record
 from app.utils.parsers import parse_dat, parse_opt
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,29 @@ FIELD_MAP = {
     "Text Link": "text_link",
     "Native Link": "native_link",
 }
+
+FIELD_MAP_REVERSED = {v: k for k, v in FIELD_MAP.items()}
+
+
+def _effective_mapping(record_keys, field_mapping: dict | None) -> dict:
+    """Use the confirmed field_mapping if present; else fall back to alias
+    matching over the record's own columns (keeps ingest working without an
+    explicit mapping, e.g. the legacy/inline path)."""
+    if field_mapping:
+        return field_mapping
+    return match_aliases(list(record_keys))
+
+
+def _apply_metadata(doc, record: dict, field_mapping: dict | None) -> None:
+    """Promote typed metadata onto a freshly built Document."""
+    mapping = _effective_mapping(record.keys(), field_mapping)
+    typed, leftover = promote_record(record, mapping)
+    for field, value in typed.items():
+        setattr(doc, field, value)
+    if not doc.file_type:
+        doc.file_type = derive_file_type(doc.file_name or doc.native_path)
+    # Preserve original values for everything not structural.
+    doc.metadata_ = leftover
 
 
 async def ingest_production(
@@ -104,22 +129,18 @@ async def ingest_production(
             raw_image_paths, production_root, converted_dir
         )
 
-        # Build metadata dict from all DAT fields (for flexibility)
-        metadata = {}
-        for key, value in record.items():
-            if key not in FIELD_MAP and value:
-                metadata[key] = value
-
         doc = Document(
             production_id=production.id,
             bates_begin=bates_begin,
             bates_end=bates_end,
             page_count=page_count,
-            metadata_=metadata,
+            metadata_={},
             text_content=text_content,
             native_path=native_link if native_link else None,
             image_paths=jpeg_paths,
+            file_name=record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or None,
         )
+        _apply_metadata(doc, record, None)
         documents.append(doc)
 
     db.add_all(documents)
@@ -207,6 +228,7 @@ def process_ingest_record(
     opt_pages: dict[str, list[str]],
     converted_tmp: str,
     errors: list[str],
+    field_mapping: dict | None = None,
 ) -> Document | None:
     """Turn a single DAT record into a Document.
 
@@ -284,21 +306,19 @@ def process_ingest_record(
     if native_link:
         native_storage_path = f"{prefix}{native_link.replace(chr(92), '/')}"
 
-    metadata = {}
-    for key, value in record.items():
-        if key not in FIELD_MAP and value:
-            metadata[key] = value
-
-    return Document(
+    doc = Document(
         production_id=production_id,
         bates_begin=bates_begin,
         bates_end=bates_end,
         page_count=page_count,
-        metadata_=metadata,
+        metadata_={},
         text_content=text_content,
         native_path=native_storage_path,
         image_paths=jpeg_storage_paths,
+        file_name=record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or None,
     )
+    _apply_metadata(doc, record, field_mapping)
+    return doc
 
 
 async def _incr_skipped(db: AsyncSession, job_id: str) -> None:
@@ -425,6 +445,8 @@ async def ingest_batch(
     if not job:
         return
 
+    field_mapping: dict | None = job.field_mapping or None
+
     records, opt_pages = bootstrap_ingest_source(production_id)
     slice_records = records[start_idx:end_idx]
 
@@ -466,6 +488,7 @@ async def ingest_batch(
                 doc = await asyncio.to_thread(
                     process_ingest_record,
                     production_id, record, opt_pages, converted_tmp, errors,
+                    field_mapping,
                 )
                 if doc is None:
                     await _incr_skipped(db, job_id)
