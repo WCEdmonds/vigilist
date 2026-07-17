@@ -471,6 +471,18 @@ class DuplicateEntryOut(BaseModel):
     custodian: str | None = None
 
 
+class FamilyMemberOut(BaseModel):
+    document_id: UUID
+    bates_begin: str
+    title: str | None
+    is_inclusive: bool
+
+
+class FamilyThreadOut(BaseModel):
+    family: list[FamilyMemberOut]
+    thread: list[FamilyMemberOut]
+
+
 class ClusterOut(BaseModel):
     id: int
     cluster_index: int

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
-import type { Annotation, DocumentDetail, DocumentTagEntry, DuplicateEntry } from '../types';
+import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentFamily, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
+import type { Annotation, DocumentDetail, DocumentTagEntry, DuplicateEntry, FamilyMember, FamilyThread } from '../types';
 import DocumentNav from './DocumentNav';
 import ImagePanel from './ImagePanel';
 import NativeViewer, { type MediaPlayerHandle } from './NativeViewer';
@@ -13,6 +13,27 @@ import AnnotationSidebar from './AnnotationSidebar';
 
 const TIER_RANK: Record<string, number> = { hash: 0, exact: 1, similar: 2 };
 const tierRank = (t: string): number => TIER_RANK[t] ?? 9;
+
+const FamilyList = ({ label, items, onNavigate }: {
+  label: string; items: FamilyMember[]; onNavigate: (id: string) => void;
+}) => {
+  if (items.length === 0) return null;
+  return (
+    <div style={{ flex: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderTop: '1px solid rgba(44,62,107,0.08)' }}>
+      <div className="panel-header">{label} ({items.length})</div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2)' }}>
+        {items.map(m => (
+          <div key={m.document_id} onClick={() => onNavigate(m.document_id)}
+            style={{ padding: 'var(--space-1-5)', cursor: 'pointer', fontSize: 'var(--text-xs)', borderBottom: '1px solid rgba(44,62,107,0.06)' }}>
+            <div style={{ fontWeight: 600 }}>{m.bates_begin}</div>
+            <div style={{ color: 'rgba(44,62,107,0.5)' }}>{m.title || 'No title'}</div>
+            {m.is_inclusive && <span className="badge badge-gray" style={{ fontSize: 9 }}>Inclusive</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 interface Props {
   docId: string;
@@ -38,6 +59,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [similarLoading, setSimilarLoading] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateEntry[]>([]);
+  const [family, setFamily] = useState<FamilyThread>({ family: [], thread: [] });
   const [imageRotation, setImageRotation] = useState(0);
   const [mediaTime, setMediaTime] = useState<number | null>(null);
   const mediaRef = useRef<MediaPlayerHandle>(null);
@@ -57,6 +79,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     setCenterTab('images');
     setAnnotations([]);
     setDuplicates([]);
+    setFamily({ family: [], thread: [] });
     setPopover(null);
     getDocument(docId).then(d => {
       setDoc(d);
@@ -65,6 +88,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     getDocumentNav(docId).then(nav => setNextId(nav.next_id)).catch(e => console.warn('getDocumentNav failed:', e));
     listAnnotations(docId).then(setAnnotations).catch(e => console.warn('listAnnotations failed:', e));
     getDocumentDuplicates(docId).then(setDuplicates).catch(e => console.warn('getDocumentDuplicates failed:', e));
+    getDocumentFamily(docId).then(setFamily).catch(e => console.warn('getDocumentFamily failed:', e));
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {
@@ -430,6 +454,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                 </div>
               </div>
             )}
+            <FamilyList label="Family" items={family.family} onNavigate={onNavigate} />
+            <FamilyList label="Thread" items={family.thread} onNavigate={onNavigate} />
           </div>
         </div>
 
