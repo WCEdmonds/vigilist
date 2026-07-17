@@ -124,10 +124,29 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
   const firstLoadRef = useRef(true);
   const prevClusteringRef = useRef<PipelineStageState | undefined>(undefined);
 
+  // Grace-period countdown (in poll ticks, ~5s each) covering the gap between
+  // POST /pipeline/run enqueuing work and the worker's first status write.
+  // Ticks down only while `starting` is true and no stage has been observed
+  // running yet; reaching 0 gives up waiting and reveals whatever the server
+  // actually reports (failed/retrofit/etc).
+  const graceRef = useRef(0);
+
   const loadPipeline = useCallback(async () => {
     try {
       const data = await getPipeline(production.id);
       setInfo(data);
+      if (anyStageRunning(data.status)) {
+        // Real status now drives `isRunning` directly — no more need to
+        // paper over enqueue latency.
+        graceRef.current = 0;
+        setStarting(false);
+      } else {
+        setStarting(prev => {
+          if (!prev || graceRef.current <= 0) return false;
+          graceRef.current -= 1;
+          return graceRef.current > 0;
+        });
+      }
     } catch (e) {
       console.warn('getPipeline failed:', e);
     } finally {
@@ -186,14 +205,18 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
   }, [expanded, clusters, production.id]);
 
   const handleRunPipeline = useCallback(async () => {
+    // ~30s grace period (6 ticks at the 5s poll interval) for the worker to
+    // pick up the enqueued job and write its first status. `starting` is
+    // cleared by `loadPipeline` once real status takes over (see above) —
+    // never here — so a fast reload landing before the worker's first write
+    // can't strand the UI on stale status.
+    graceRef.current = 6;
     setStarting(true);
     try {
       await runPipeline(production.id);
       await loadPipeline();
     } catch (e) {
       showToast(`Could not start brief generation: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
-    } finally {
-      setStarting(false);
     }
   }, [production.id, loadPipeline]);
 
@@ -211,6 +234,11 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
   // ── State 2: running — skeleton with per-stage glyphs. ──
   if (isRunning) {
     const status = info?.status;
+    // During the grace window before any stage is actually observed running,
+    // `status` may still be stale (e.g. a previous failed run) — show all
+    // stages as pending rather than flashing a stale `!` glyph.
+    const realRunning = anyStageRunning(status);
+    const glyph = (s: PipelineStageState | undefined) => (realRunning ? stageGlyph(s) : '·');
     return (
       <div className="brief-card brief-skeleton">
         <div className="brief-header">
@@ -220,9 +248,9 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
         <div className="brief-skeleton-bar" />
         <div className="brief-skeleton-bar" style={{ width: '70%' }} />
         <div className="brief-stages">
-          <span>Clustering {stageGlyph(status?.clustering)}</span>
-          <span>Summaries {stageGlyph(status?.summaries)}</span>
-          <span>Brief {stageGlyph(status?.brief)}</span>
+          <span>Clustering {glyph(status?.clustering)}</span>
+          <span>Summaries {glyph(status?.summaries)}</span>
+          <span>Brief {glyph(status?.brief)}</span>
         </div>
       </div>
     );
