@@ -22,9 +22,13 @@ _DATE_FORMATS = [
 
 
 def normalize_date(value: str) -> datetime | None:
-    if not value or not value.strip():
+    if not isinstance(value, str):
         return None
-    v = value.strip().replace("Z", "+0000")
+    if not value.strip():
+        return None
+    v = value.strip()
+    if v.endswith("Z"):
+        v = v[:-1] + "+0000"
     for fmt in _DATE_FORMATS:
         try:
             dt = datetime.strptime(v, fmt)
@@ -71,8 +75,12 @@ def promote_record(record: dict, field_mapping: dict[str, str]) -> tuple[dict, d
         source_col for canon, source_col in field_mapping.items()
         if canon in _STRUCTURAL_TARGETS
     }
+
+    def _is_empty(v) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+
     leftover = {
         k: v for k, v in record.items()
-        if v and k not in structural_cols
+        if k not in structural_cols and not _is_empty(v)
     }
     return typed, leftover
