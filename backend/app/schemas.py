@@ -194,6 +194,27 @@ class PaginatedDocuments(BaseModel):
     per_page: int
 
 
+class ProposedMappingItem(BaseModel):
+    """One column's proposed mapping, as returned by build_proposed_mapping."""
+    source_name: str
+    samples: list[str]
+    target: str | None
+    confidence: float
+    source: str  # "alias" | "ai" | "unmapped"
+
+
+class LoadFileFormat(BaseModel):
+    encoding: str
+    delimiter: str
+
+
+class AnalyzeResponse(BaseModel):
+    format: LoadFileFormat
+    columns: list[ProposedMappingItem]
+    sample_rows: list[dict]
+    total_rows: int
+
+
 class IngestRequest(BaseModel):
     production_name: str
     production_root: str
