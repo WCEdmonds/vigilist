@@ -1,0 +1,4 @@
+[     420ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=8da60bbd:14336
+[     919ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:5173/:0
+[   14119ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ http://localhost:5173/node_modules/.vite/deps/firebase_auth.js?v=789d5ed4:7896
+[   14120ms] [ERROR] Cross-Origin-Opener-Policy policy would block the window.closed call. @ http://localhost:5173/node_modules/.vite/deps/firebase_auth.js?v=789d5ed4:7896

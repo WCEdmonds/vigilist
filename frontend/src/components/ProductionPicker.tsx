@@ -53,7 +53,7 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                 {p.description && <div className="case-card-desc">{p.description}</div>}
                 {/* Phase 2 slot: one-line AI theme summary from the production brief. */}
                 <div className="case-card-meta">
-                  <span>{p.document_count.toLocaleString()} document{p.document_count === 1 ? '' : 's'}</span>
+                  <span>{(p.document_count ?? 0).toLocaleString()} document{(p.document_count ?? 0) === 1 ? '' : 's'}</span>
                   {formatAdded(p.created_at) && (
                     <>
                       <span className="case-card-dot">·</span>
