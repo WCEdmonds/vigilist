@@ -1583,3 +1583,74 @@
   font-weight: var(--font-semibold);
   color: var(--color-primary-900);
 }
+
+/* ── Home shell + context rail ── */
+
+.home-shell {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.home-shell > .content-area {
+  flex: 1;
+  min-width: 0;
+}
+
+.context-rail {
+  width: var(--rail-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-card);
+  border-left: 1px solid var(--color-neutral-200);
+  position: sticky;
+  top: var(--cb-height);
+  height: calc(100vh - var(--cb-height));
+  overflow: hidden;
+}
+
+.context-rail-tab {
+  width: 36px;
+  flex-shrink: 0;
+  border: none;
+  border-left: 1px solid var(--color-neutral-200);
+  background: var(--color-card);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: var(--space-4);
+  gap: var(--space-2);
+  position: sticky;
+  top: var(--cb-height);
+  height: calc(100vh - var(--cb-height));
+  color: var(--color-neutral-400);
+  transition: color var(--transition-fast);
+}
+.context-rail-tab:hover {
+  color: var(--color-ink);
+}
+
+.context-rail-tab .rail-tab-label {
+  writing-mode: vertical-rl;
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Rail pushes the centered floating bar leftward so it stays centered over the list. */
+.home-shell.rail-open ~ .floating-bar,
+.home-shell.rail-open .floating-bar {
+  left: calc(50% - var(--rail-width) / 2);
+}
+
+@media (max-width: 1024px) {
+  /* Below tablet width the rail leaves the flow entirely; Phase 5 may add a
+     drawer. The chat remains reachable by widening the window — documented
+     limitation for this phase. */
+  .context-rail,
+  .context-rail-tab {
+    display: none;
+  }
+}
