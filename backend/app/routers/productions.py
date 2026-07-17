@@ -1,11 +1,11 @@
 """Production listing and access management."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_accessible_production_ids, get_user_role_for_production
+from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
 from app.models import Document, PendingInvite, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.services.audit import log_action
@@ -14,7 +14,9 @@ from app.services.email import send_access_granted_email, send_invite_email
 from app.schemas import (
     InviteRequest,
     PendingInviteOut,
+    PipelineStatusOut,
     ProductionAccessOut,
+    ProductionUpdate,
     ProductionWithAccess,
 )
 
@@ -51,6 +53,8 @@ async def list_productions(
             is_owner=(p.owner_id == user.id),
             created_at=p.created_at,
             document_count=counts.get(p.id, 0),
+            case_context=p.case_context,
+            has_brief=bool(p.brief),
         )
         for p in prods
     ]
@@ -111,6 +115,95 @@ async def delete_production(
             await sync_user_claims(db, affected_user)
 
     return {"ok": True}
+
+
+@router.get("/{production_id}/pipeline", response_model=PipelineStatusOut)
+async def get_pipeline(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Ambient AI pipeline status, brief, and case context. Any accessible role."""
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+    await get_user_role_for_production(db, user, production_id)
+    return PipelineStatusOut(
+        status=prod.ai_pipeline_status, brief=prod.brief, case_context=prod.case_context
+    )
+
+
+@router.post("/{production_id}/pipeline/run")
+async def run_pipeline(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Kick off (or re-run) the ambient AI pipeline. Manager or admin role required.
+
+    409s if any stage is currently "running" — this is what serializes
+    invocations per production, since run_ambient_pipeline's per-stage
+    status write is read-modify-write and cannot safely run concurrently
+    with itself.
+    """
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+    status = prod.ai_pipeline_status or {}
+    if any(status.get(s) == "running" for s in ("clustering", "summaries", "brief")):
+        raise HTTPException(status_code=409, detail="Pipeline already running")
+    force = bool((body or {}).get("force"))
+    await log_action(
+        db, user, "pipeline_run_requested", "production", str(production_id),
+        production_id=production_id, details={"force": force},
+    )
+    await db.commit()
+
+    from app.services import tasks as task_service
+    from app.services.pipeline import run_ambient_pipeline
+
+    if task_service.is_configured():
+        task_service.enqueue_pipeline(production_id)
+    else:
+        background_tasks.add_task(run_ambient_pipeline, production_id, force)
+    return {"started": True}
+
+
+@router.patch("/{production_id}", response_model=ProductionWithAccess)
+async def update_production(
+    production_id: int,
+    body: ProductionUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update a production's description or case context. Owner only."""
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+    if prod.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Owner only")
+    if body.description is not None:
+        prod.description = body.description.strip() or None
+    if body.case_context is not None:
+        prod.case_context = body.case_context.strip() or None
+    await db.commit()
+    await db.refresh(prod)
+    doc_count = (
+        await db.execute(
+            select(func.count(Document.id)).where(Document.production_id == production_id)
+        )
+    ).scalar() or 0
+    return ProductionWithAccess(
+        id=prod.id, name=prod.name, description=prod.description,
+        owner_id=prod.owner_id, is_owner=True, created_at=prod.created_at,
+        document_count=doc_count, case_context=prod.case_context,
+        has_brief=bool(prod.brief),
+    )
 
 
 @router.get("/{production_id}/access", response_model=list[ProductionAccessOut])

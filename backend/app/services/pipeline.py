@@ -114,6 +114,12 @@ _STAGE_RUNNERS = {
 
 
 async def run_ambient_pipeline(production_id: int, force: bool = False) -> None:
+    """Run the ambient pipeline's pending stages for a production.
+
+    Callers must serialize invocations per production: each stage's status
+    write is read-modify-write against `Production.ai_pipeline_status`, so
+    two concurrent runs for the same production can race and clobber state.
+    """
     async with async_session() as db:
         prod = await db.get(Production, production_id)
         if prod is None:

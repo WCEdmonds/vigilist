@@ -402,6 +402,20 @@ async def _finalize_job_if_done(
         except Exception:
             logger.exception("Embedding generation failed")
 
+        # Ambient AI pipeline (clustering -> summaries -> brief). Best-effort:
+        # never blocks ingest completion. Prod fans out via Cloud Tasks so the
+        # long-running work doesn't ride on this request; locally we detach.
+        try:
+            from app.services import tasks as task_service
+            from app.services.pipeline import run_ambient_pipeline
+
+            if task_service.is_configured():
+                task_service.enqueue_pipeline(production_id)
+            else:
+                asyncio.create_task(run_ambient_pipeline(production_id))
+        except Exception:
+            logger.exception("Failed to start ambient pipeline for production %s", production_id)
+
 
 async def ingest_batch(
     db: AsyncSession,
