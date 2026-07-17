@@ -47,6 +47,15 @@ def derive_file_type(name_or_path: str | None) -> str | None:
     return ext or None
 
 
+def backfill_typed_fields(metadata: dict) -> dict:
+    """Derive typed metadata fields from an existing metadata_ dict using the
+    alias dictionary only (deterministic; no AI)."""
+    from app.services.field_mapping import match_aliases
+    mapping = match_aliases(list(metadata.keys()))
+    typed, _ = promote_record(metadata, mapping)
+    return typed
+
+
 def promote_record(record: dict, field_mapping: dict[str, str]) -> tuple[dict, dict]:
     """Return (typed_fields, leftover_metadata).
 
