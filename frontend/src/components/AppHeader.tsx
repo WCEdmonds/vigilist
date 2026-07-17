@@ -13,6 +13,7 @@ interface AppHeaderProps {
   onSearch?: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => void;
   onLogoClick?: () => void;
   initialQuery?: string;
+  onAsk?: (question: string) => void;
   onOpenReview?: () => void;
   onOpenDashboard?: () => void;
   onOpenShare?: () => void;
@@ -37,6 +38,7 @@ export default function AppHeader({
   onSearch,
   onLogoClick,
   initialQuery,
+  onAsk,
   onOpenReview,
   onOpenDashboard,
   onOpenShare,
@@ -122,7 +124,7 @@ export default function AppHeader({
         </div>
       )}
 
-      {onSearch && <Omnibox onSearch={onSearch} initialQuery={initialQuery} />}
+      {onSearch && <Omnibox onSearch={onSearch} initialQuery={initialQuery} onAsk={onAsk} />}
 
       <div className="cb-actions">
         {onOpenReview && (

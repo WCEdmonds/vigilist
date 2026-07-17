@@ -99,6 +99,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setAskFocusToken(t => t + 1);
   }, []);
 
+  const handleAsk = useCallback((question: string) => {
+    focusChat();
+    chat.send(question);
+  }, [chat, focusChat]);
+
   // Mirror the key bits of state back into the URL so a refresh lands
   // the user on the same page (doc viewer, batch review, search, etc.).
   useSyncUrl({
@@ -352,6 +357,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onSearch={handleSearch}
         onLogoClick={clearSearch}
         initialQuery={searchQuery}
+        onAsk={handleAsk}
         onOpenReview={() => setShowAIReview(true)}
         onOpenDashboard={() => setShowDashboard(true)}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
