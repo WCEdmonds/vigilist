@@ -222,6 +222,7 @@ class ProductionWithAccess(BaseModel):
     owner_id: str | None
     is_owner: bool = False
     created_at: datetime
+    document_count: int = 0
 
     model_config = {"from_attributes": True}
 
