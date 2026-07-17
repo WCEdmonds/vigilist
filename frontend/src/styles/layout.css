@@ -1347,17 +1347,24 @@
 }
 
 /* Buttons used as menu rows — strip UA button chrome so .dropdown-item
-   renders as a full-width menu row. */
+   renders as a full-width menu row. Colors are explicit: `inherit` would
+   pick up the command bar's parchment text and go white-on-white on the
+   dropdown's white panel. */
 .cb-menu button.dropdown-item,
 .omnibox-menu button.dropdown-item {
-  display: block;
+  display: flex;
   width: 100%;
   text-align: left;
   background: transparent;
   border: none;
   cursor: pointer;
-  font: inherit;
-  color: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: rgba(44, 62, 107, 0.7);
+}
+.cb-menu button.dropdown-item:hover,
+.omnibox-menu button.dropdown-item:hover {
+  background: rgba(44, 62, 107, 0.03);
 }
 
 .cb-menu .dropdown-item.is-current {
