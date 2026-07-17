@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from app.database import get_db
 from app.models import Document, IngestJob, Production, User
 from app.routers.auth import get_current_user
-from app.schemas import IngestJobOut
+from app.schemas import AnalyzeResponse, IngestJobOut
 from app.services.oidc import verify_cloud_tasks_request
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ async def create_production_for_ingest(
     return {"production_id": production.id, "production_name": production.name}
 
 
-@router.post("/ingest/analyze")
+@router.post("/ingest/analyze", response_model=AnalyzeResponse)
 async def analyze_ingest(
     body: dict,
     db: AsyncSession = Depends(get_db),

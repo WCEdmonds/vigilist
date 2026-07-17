@@ -24,35 +24,37 @@ _BATCH_SIZE = 500
 
 def upgrade() -> None:
     from app.services.metadata_normalize import backfill_typed_fields
-    conn = op.get_bind()
 
-    offset = 0
-    while True:
-        rows = conn.execute(
-            sa.text("SELECT id, metadata FROM documents ORDER BY id LIMIT :limit OFFSET :offset"),
-            {"limit": _BATCH_SIZE, "offset": offset},
-        ).fetchall()
-        if not rows:
-            break
+    with op.get_context().autocommit_block():
+        conn = op.get_bind()
 
-        for row in rows:
-            meta = row._mapping["metadata"] or {}
-            typed = backfill_typed_fields(meta)
-            if not typed:
-                continue
-            # Only set columns currently NULL (idempotent; never overwrite).
-            sets, params = [], {"id": row._mapping["id"]}
-            for col in _SET_COLUMNS:
-                if col in typed:
-                    sets.append(f"{col} = COALESCE({col}, :{col})")
-                    params[col] = typed[col]
-            if sets:
-                conn.execute(
-                    sa.text(f"UPDATE documents SET {', '.join(sets)} WHERE id = :id"),
-                    params,
-                )
+        offset = 0
+        while True:
+            rows = conn.execute(
+                sa.text("SELECT id, metadata FROM documents ORDER BY id LIMIT :limit OFFSET :offset"),
+                {"limit": _BATCH_SIZE, "offset": offset},
+            ).fetchall()
+            if not rows:
+                break
 
-        offset += _BATCH_SIZE
+            for row in rows:
+                meta = row._mapping["metadata"] or {}
+                typed = backfill_typed_fields(meta)
+                if not typed:
+                    continue
+                # Only set columns currently NULL (idempotent; never overwrite).
+                sets, params = [], {"id": row._mapping["id"]}
+                for col in _SET_COLUMNS:
+                    if col in typed:
+                        sets.append(f"{col} = COALESCE({col}, :{col})")
+                        params[col] = typed[col]
+                if sets:
+                    conn.execute(
+                        sa.text(f"UPDATE documents SET {', '.join(sets)} WHERE id = :id"),
+                        params,
+                    )
+
+            offset += _BATCH_SIZE
 
 
 def downgrade() -> None:
