@@ -6,6 +6,7 @@ import type { SavedSearch } from '../types';
 interface Props {
   onSearch: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => void;
   initialQuery?: string;
+  onAsk?: (question: string) => void;
 }
 
 /**
@@ -13,7 +14,7 @@ interface Props {
  * as the user types and shows it as a clickable pill so the choice is
  * visible and overridable — the override applies to the next submit only.
  */
-export default function Omnibox({ onSearch, initialQuery = '' }: Props) {
+export default function Omnibox({ onSearch, initialQuery = '', onAsk }: Props) {
   const [query, setQuery] = useState(initialQuery);
   const [modeOverride, setModeOverride] = useState<SearchMode | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
@@ -82,6 +83,16 @@ export default function Omnibox({ onSearch, initialQuery = '' }: Props) {
             title="Toggle between full-text search and asking the production"
           >
             {mode === 'semantic' ? '✦ Ask' : 'Text'}
+          </button>
+        )}
+        {mode === 'semantic' && onAsk && query.trim() && (
+          <button
+            type="button"
+            className="omnibox-tool omnibox-ask"
+            onClick={() => { onAsk(query.trim()); setModeOverride(null); }}
+            title="Send this question to the AI chat"
+          >
+            ✦ Ask AI
           </button>
         )}
         <button

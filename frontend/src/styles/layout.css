@@ -1190,6 +1190,15 @@
   color: var(--color-ink);
 }
 
+.omnibox-ask {
+  color: var(--color-brass);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+}
+.omnibox-ask:hover {
+  color: var(--color-ink);
+}
+
 .omnibox-menu {
   top: calc(100% + 6px);
   left: 0;
