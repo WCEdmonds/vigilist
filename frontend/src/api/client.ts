@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ClusterDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  AIReviewResult, Annotation, BatchDocument, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
   IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag,
@@ -47,12 +47,13 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
 }
 
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number) {
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
   if (fileType) params.set('file_type', fileType);
   if (clusterId) params.set('cluster_id', String(clusterId));
+  if (aiDecision) params.set('ai_decision', aiDecision);
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
 
@@ -556,6 +557,18 @@ export const recordDecision = (resultId: number, decision: string, note?: string
     body: JSON.stringify({ decision, note }),
   });
 
+export const getClassifyEstimate = (productionId: number): Promise<ClassifyEstimate> =>
+  request(`/api/review/estimate/${productionId}`);
+
+export const startAutoClassification = (productionId: number) =>
+  request(`/api/review/auto-classify/${productionId}`, { method: 'POST' });
+
+export const bulkAcceptResults = (productionId: number, projectId: number, minConfidence: number): Promise<{ accepted: number }> =>
+  request(`/api/review/projects/${productionId}/${projectId}/bulk-accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ min_confidence: minConfidence }),
+  });
 
 // ── Intelligence ──
 
