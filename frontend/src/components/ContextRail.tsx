@@ -70,9 +70,11 @@ export default function ContextRail({
 
   // Lazy per-document fetch: only runs when exactly one document is
   // selected, and only once per id (tracked via fetchedDocIds).
+  const selectedKey = Array.from(selectedIds).sort().join(',');
   useEffect(() => {
-    if (selectedIds.size !== 1) return;
-    const id = Array.from(selectedIds)[0];
+    const ids = selectedKey ? selectedKey.split(',') : [];
+    if (ids.length !== 1) return;
+    const id = ids[0];
     const idCache = fetchedDocIds.current;
     if (idCache.has(id)) return;
     idCache.add(id);
@@ -83,7 +85,8 @@ export default function ContextRail({
       .then(detail => {
         settled = true;
         if (cancelled) return;
-        setDocSummaries(prev => ({ ...prev, [id]: detail.summary }));
+        const summary = detail.summary && detail.summary.trim() ? detail.summary : null;
+        setDocSummaries(prev => ({ ...prev, [id]: summary }));
       })
       .catch(err => {
         settled = true;
@@ -100,7 +103,7 @@ export default function ContextRail({
       // stuck on "Loading…" forever with a poisoned cache entry.
       if (!settled) idCache.delete(id);
     };
-  }, [selectedIds]);
+  }, [selectedKey]);
 
   // Label resolution mirrors the old sendSelectionToAgent: bates from
   // searchResults first, then documents, else a truncated id.
@@ -123,7 +126,8 @@ export default function ContextRail({
     setSummarizing(true);
     try {
       const res = await summarizeDocument(id);
-      setDocSummaries(prev => ({ ...prev, [id]: res.summary }));
+      const summary = res.summary && res.summary.trim() ? res.summary : null;
+      setDocSummaries(prev => ({ ...prev, [id]: summary }));
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Summarize failed', 'error');
     } finally {
