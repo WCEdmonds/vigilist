@@ -13,13 +13,12 @@ import ManageAccess from './components/ManageAccess';
 import QueueManager from './components/QueueManager';
 import BatchReview from './components/BatchReview';
 import Dashboard from './components/Dashboard';
-import SearchBar from './components/SearchBar';
+import AppHeader from './components/AppHeader';
 import SearchResults from './components/SearchResults';
 import TopicGroups from './components/TopicGroups';
 import { ToastContainer, showToast } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
-import UserAvatar from './components/UserAvatar';
 import OnboardingGuide from './components/OnboardingGuide';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
@@ -37,13 +36,14 @@ type ViewMode = 'list' | 'grid';
 
 interface HomeProps {
   production: ProductionInfo;
+  productions: ProductionInfo[];
+  onSelectProduction: (p: ProductionInfo) => void;
   onSwitchProduction: () => void;
   onIngestComplete: () => void;
   onOpenGuide: () => void;
 }
 
-function Home({ production, onSwitchProduction, onIngestComplete, onOpenGuide }: HomeProps) {
-  const { user, logout } = useAuth();
+function Home({ production, productions, onSelectProduction, onSwitchProduction, onIngestComplete, onOpenGuide }: HomeProps) {
   const initialUrl = useMemo(() => getInitialUrlState(), []);
   const [viewDocId, setViewDocId] = useState<string | null>(initialUrl.doc ?? null);
   const [searchQuery, setSearchQuery] = useState(initialUrl.q ?? '');
@@ -250,6 +250,21 @@ function Home({ production, onSwitchProduction, onIngestComplete, onOpenGuide }:
     }
   };
 
+  const handleRandomDoc = async () => {
+    try {
+      const { getRandomDocument } = await import('./api/client');
+      const { id } = await getRandomDocument(production.id);
+      setViewDocId(id);
+    } catch (e) {
+      showToast(
+        e instanceof Error && e.message.includes('404')
+          ? 'No documents in this production yet.'
+          : `Could not pick a random document: ${e instanceof Error ? e.message : 'unknown error'}`,
+        'error',
+      );
+    }
+  };
+
   // AI Review full-screen mode
   if (showAIReview) {
     return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
@@ -305,68 +320,26 @@ function Home({ production, onSwitchProduction, onIngestComplete, onOpenGuide }:
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
-      {/* Header */}
-      <div className="app-header">
-        <span className="logo" onClick={clearSearch}>
-          Vigilist
-        </span>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44, 62, 107, 0.25)', margin: '0 2px' }}>/</span>
-        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink)', cursor: 'pointer', marginRight: 'var(--space-3)' }} onClick={onSwitchProduction}>
-          {production.name}
-        </span>
-        <div className="desktop-only" style={{ display: 'flex', gap: 4, background: 'rgba(44, 62, 107, 0.05)', borderRadius: 'var(--radius-md)', padding: 3 }}>
-          {production.is_owner && (
-            <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowManageAccess(true)}>Share</button>
-          )}
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setShowAIReview(true)}>
-            <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
-            Smart Review
-          </button>
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowQueueManager(true)}>Review Queues</button>
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowDashboard(true)}>Dashboard</button>
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={onOpenGuide}>Guide</button>
-        </div>
-        <div className="user-menu">
-          <span className="desktop-only" style={{ display: 'contents' }}>
-            {production.is_owner && (
-              <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
-            )}
-            <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
-          </span>
-          <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} photoUrl={user?.photoURL} size={26} />
-          <span className="desktop-only" style={{ color: 'var(--color-ink)', fontWeight: 500 }}>{user?.displayName || user?.email}</span>
-          <button className="btn-header" onClick={logout}>Sign out</button>
-        </div>
-      </div>
+      <AppHeader
+        production={production}
+        productions={productions}
+        onSelectProduction={onSelectProduction}
+        onShowAllProductions={onSwitchProduction}
+        onSearch={handleSearch}
+        onLogoClick={clearSearch}
+        initialQuery={searchQuery}
+        onOpenReview={() => setShowAIReview(true)}
+        onOpenDashboard={() => setShowDashboard(true)}
+        onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
+        onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}
+        onOpenQueues={() => setShowQueueManager(true)}
+        onOpenIngest={() => setShowIngestWizard(true)}
+        onOpenGuide={onOpenGuide}
+        onRandomDoc={handleRandomDoc}
+      />
 
       {/* Content */}
       <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <div style={{ flex: 1 }}>
-            <SearchBar onSearch={handleSearch} initialQuery={searchQuery} />
-          </div>
-          <button
-            className="btn btn-primary desktop-only"
-            onClick={async () => {
-              try {
-                const { getRandomDocument } = await import('./api/client');
-                const { id } = await getRandomDocument(production.id);
-                setViewDocId(id);
-              } catch (e) {
-                showToast(
-                  e instanceof Error && e.message.includes('404')
-                    ? 'No documents in this production yet.'
-                    : `Could not pick a random document: ${e instanceof Error ? e.message : 'unknown error'}`,
-                  'error',
-                );
-              }
-            }}
-            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
-          >
-            I'm Feeling Lucky
-          </button>
-        </div>
-
         <TopicGroups
           clusters={clusters}
           activeClusterId={filterClusterId}
@@ -943,6 +916,8 @@ function AppRouter() {
     content = (
       <Home
         production={activeProduction}
+        productions={productions}
+        onSelectProduction={setActiveProduction}
         onSwitchProduction={() => setActiveProduction(null)}
         onIngestComplete={handleIngestComplete}
         onOpenGuide={openGuide}
