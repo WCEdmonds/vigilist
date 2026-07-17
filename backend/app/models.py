@@ -384,7 +384,7 @@ class DuplicateGroup(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
-    type = Column(String(20), nullable=False)  # 'exact' or 'similar'
+    type = Column(String(20), nullable=False)  # 'hash' | 'exact' | 'similar'
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     members = relationship("DocumentDuplicate", back_populates="group", cascade="all, delete-orphan")
