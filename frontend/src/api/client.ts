@@ -407,7 +407,12 @@ export interface ProposedColumn {
 }
 
 export const analyzeLoadFile = (productionId: number) =>
-  request<{ format: string; delimiter: string; columns: ProposedColumn[]; sample_rows: Record<string, string>[]; total_rows: number }>(
+  request<{
+    format: { encoding: string; delimiter: string };
+    columns: ProposedColumn[];
+    sample_rows: Record<string, string>[];
+    total_rows: number;
+  }>(
     '/api/ingest/analyze', json({ production_id: productionId }),
   );
 
