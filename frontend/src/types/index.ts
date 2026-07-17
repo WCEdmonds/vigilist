@@ -304,4 +304,5 @@ export interface DuplicateEntry {
   title: string | null;
   similarity: number;
   type: string;
+  custodian: string | null;
 }
