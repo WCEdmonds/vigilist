@@ -33,11 +33,9 @@ export function useChat(): ChatState {
   const [streamingText, setStreamingText] = useState('');
   const [attachedDocs, setAttachedDocs] = useState<AttachedDoc[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  // Mirrors the accumulated streamed text / error flag so `stop()` can commit
-  // synchronously without waiting on the aborted fetch to settle (AIAgent.tsx:85-94).
+  // Mirrors the accumulated streamed text so `stop()` can commit synchronously
+  // without waiting on the aborted fetch to settle (AIAgent.tsx:85-94).
   const accRef = useRef('');
-  const erroredRef = useRef(false);
-  const pendingMessagesRef = useRef<ChatMessage[]>([]);
 
   const attachDocs = useCallback((docs: AttachedDoc[]) => {
     setAttachedDocs(prev => {
@@ -62,15 +60,14 @@ export function useChat(): ChatState {
     const controller = new AbortController();
     abortRef.current = controller;
     accRef.current = '';
-    erroredRef.current = false;
-    pendingMessagesRef.current = nextMessages;
+    let errored = false;
 
     streamChat(
       nextMessages,
       attachedDocs.map(d => d.id),
       {
         onDelta: delta => { accRef.current += delta; setStreamingText(accRef.current); },
-        onError: message => { erroredRef.current = true; showToast(message, 'error'); },
+        onError: message => { errored = true; showToast(message, 'error'); },
       },
       controller.signal,
     ).then(() => {
@@ -78,20 +75,23 @@ export function useChat(): ChatState {
       setStreaming(false);
       setStreamingText('');
       if (accRef.current) {
-        setMessages([...pendingMessagesRef.current, { role: 'assistant', content: accRef.current }]);
-      } else if (!erroredRef.current) {
+        setMessages([...nextMessages, { role: 'assistant', content: accRef.current }]);
+      } else if (!errored) {
         showToast('The AI agent returned an empty response.', 'error');
       }
+      accRef.current = '';
     });
   }, [messages, attachedDocs, streaming]);
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    if (!abortRef.current) return;
+    abortRef.current.abort();
     abortRef.current = null;
     // Keep whatever text streamed so far as the assistant turn (AIAgent.tsx:85-94).
     if (accRef.current) {
       setMessages(prev => [...prev, { role: 'assistant', content: accRef.current }]);
     }
+    accRef.current = '';
     setStreaming(false);
     setStreamingText('');
   }, []);
@@ -99,6 +99,7 @@ export function useChat(): ChatState {
   const clear = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    accRef.current = '';
     setMessages([]);
     setStreaming(false);
     setStreamingText('');
