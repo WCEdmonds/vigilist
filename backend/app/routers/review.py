@@ -397,7 +397,9 @@ async def record_decision(
 
     project = await db.get(ReviewProject, result.project_id)
     if project:
-        await get_user_role_for_production(db, user, project.production_id)
+        role = await get_user_role_for_production(db, user, project.production_id)
+        if role == "readonly":
+            raise HTTPException(status_code=403, detail="Read-only access")
 
     result.attorney_decision = body.decision
     result.attorney_note = body.note
