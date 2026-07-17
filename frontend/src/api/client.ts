@@ -121,7 +121,9 @@ export async function fetchDocumentPdf(docId: string): Promise<Blob> {
     try {
       const body = await res.json();
       if (body?.detail) detail = body.detail;
-    } catch {}
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
     throw new Error(detail);
   }
   return res.blob();
@@ -145,7 +147,9 @@ export async function fetchBulkZip(docIds: string[]): Promise<Blob> {
     try {
       const body = await res.json();
       if (body?.detail) detail = body.detail;
-    } catch {}
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
     throw new Error(detail);
   }
   return res.blob();
@@ -253,9 +257,9 @@ export async function streamChat(
       body: JSON.stringify({ messages, doc_ids: docIds }),
       signal,
     });
-  } catch (e: any) {
-    if (e?.name === 'AbortError') return;
-    handlers.onError(e?.message || 'Network error');
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') return;
+    handlers.onError(e instanceof Error ? e.message : 'Network error');
     return;
   }
 
@@ -264,7 +268,9 @@ export async function streamChat(
     try {
       const body = await res.json();
       if (body?.detail) detail = body.detail;
-    } catch {}
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
     handlers.onError(detail);
     return;
   }
@@ -293,12 +299,14 @@ export async function streamChat(
           if (evt.type === 'delta' && typeof evt.text === 'string') handlers.onDelta(evt.text);
           else if (evt.type === 'error') handlers.onError(evt.message || 'The AI service failed to respond.');
         } catch {
-          // Ignore malformed frames.
+          /* Ignore malformed frames */
         }
       }
     }
-  } catch (e: any) {
-    if (e?.name !== 'AbortError') handlers.onError(e?.message || 'Stream interrupted');
+  } catch (e: unknown) {
+    if (!(e instanceof Error && e.name === 'AbortError')) {
+      handlers.onError(e instanceof Error ? e.message : 'Stream interrupted');
+    }
   }
 }
 
