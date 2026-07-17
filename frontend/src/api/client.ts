@@ -1,8 +1,8 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  AIReviewResult, Annotation, BatchDocument, ClusterDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
   IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
-  ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
+  PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag,
 } from '../types';
 
@@ -222,11 +222,6 @@ export const deleteSavedSearch = (id: number) =>
 export const summarizeDocument = (docId: string) =>
   request<{ summary: string; cached: boolean }>(`/api/ai/summarize/${docId}`, { method: 'POST' });
 
-export const nlSearch = (query: string) =>
-  request<{ original_query: string; structured_query: string; results: unknown[]; total: number }>(
-    '/api/ai/nl-search', json({ query })
-  );
-
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -388,8 +383,8 @@ export async function getAuditLogs(
 
 // ── Ingest ──
 
-export const createProductionForIngest = (productionName: string, description: string) =>
-  request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description }));
+export const createProductionForIngest = (productionName: string, description: string, caseContext: string) =>
+  request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description, case_context: caseContext }));
 
 export const startProcessing = (
   productionId: number,
@@ -398,6 +393,25 @@ export const startProcessing = (
 ) =>
   request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat }));
 
+export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
+  request(`/api/productions/${productionId}/pipeline`);
+
+export const runPipeline = (productionId: number, force = false) =>
+  request<{ started: boolean }>(`/api/productions/${productionId}/pipeline/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+
+export const updateProduction = (productionId: number, data: { description?: string; case_context?: string }): Promise<ProductionInfo> =>
+  request(`/api/productions/${productionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const getClusterDocuments = (productionId: number, clusterId: number, limit = 5): Promise<ClusterDocument[]> =>
+  request(`/api/productions/${productionId}/clusters/${clusterId}/documents?limit=${limit}`);
 
 export const getIngestStatus = (jobId: string) =>
   request<IngestJob>(`/api/ingest/${jobId}/status`);

@@ -99,6 +99,8 @@ export interface ProductionInfo {
   is_owner: boolean;
   created_at: string;
   document_count: number;
+  case_context?: string | null;
+  has_brief?: boolean;
 }
 
 export interface ProductionAccessEntry {
@@ -305,4 +307,35 @@ export interface DuplicateEntry {
   title: string | null;
   similarity: number;
   type: string;
+}
+
+export interface ProductionBriefData {
+  overview: string;
+  key_players: string[];
+  date_range: string | null;
+  notable_documents: { bates: string; reason: string }[];
+  generated_at: string;
+  model: string;
+}
+
+export type PipelineStageState = 'pending' | 'running' | 'done' | 'failed';
+
+export interface PipelineStatus {
+  clustering?: PipelineStageState;
+  summaries?: PipelineStageState;
+  brief?: PipelineStageState;
+  errors?: Record<string, string>;
+  updated_at?: string;
+}
+
+export interface PipelineInfo {
+  status: PipelineStatus | null;
+  brief: ProductionBriefData | null;
+  case_context: string | null;
+}
+
+export interface ClusterDocument {
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
 }
