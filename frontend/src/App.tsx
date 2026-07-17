@@ -292,9 +292,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         className={`doc-theme-chip${active ? ' is-active' : ''}`}
         style={{ background: `var(--theme-${themeIndexById.get(d.cluster_id)})` }}
         onClick={e => { e.stopPropagation(); setFilterClusterId(active ? null : d.cluster_id!); }}
-        title={d.cluster_label ?? 'Theme'}
+        title={d.cluster_label || 'Theme'}
       >
-        {d.cluster_label ?? 'Theme'}
+        {d.cluster_label || 'Theme'}
       </button>
     );
   };
