@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Document, Production
+from app.services.field_mapping import match_aliases
 from app.services.images import convert_document_images
 from app.services.ai import generate_titles_batch
+from app.services.metadata_normalize import derive_file_type, promote_record
 from app.utils.parsers import parse_dat, parse_opt
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,29 @@ FIELD_MAP = {
     "Text Link": "text_link",
     "Native Link": "native_link",
 }
+
+FIELD_MAP_REVERSED = {v: k for k, v in FIELD_MAP.items()}
+
+
+def _effective_mapping(record_keys, field_mapping: dict | None) -> dict:
+    """Use the confirmed field_mapping if present; else fall back to alias
+    matching over the record's own columns (keeps ingest working without an
+    explicit mapping, e.g. the legacy/inline path)."""
+    if field_mapping:
+        return field_mapping
+    return match_aliases(list(record_keys))
+
+
+def _apply_metadata(doc, record: dict, field_mapping: dict | None) -> None:
+    """Promote typed metadata onto a freshly built Document."""
+    mapping = _effective_mapping(record.keys(), field_mapping)
+    typed, leftover = promote_record(record, mapping)
+    for field, value in typed.items():
+        setattr(doc, field, value)
+    if not doc.file_type:
+        doc.file_type = derive_file_type(doc.file_name or doc.native_path)
+    # Preserve original values for everything not structural.
+    doc.metadata_ = leftover
 
 
 async def ingest_production(
@@ -104,22 +129,20 @@ async def ingest_production(
             raw_image_paths, production_root, converted_dir
         )
 
-        # Build metadata dict from all DAT fields (for flexibility)
-        metadata = {}
-        for key, value in record.items():
-            if key not in FIELD_MAP and value:
-                metadata[key] = value
-
+        nl = record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or ""
+        file_name = os.path.basename(nl.replace("\\", "/")) if nl else None
         doc = Document(
             production_id=production.id,
             bates_begin=bates_begin,
             bates_end=bates_end,
             page_count=page_count,
-            metadata_=metadata,
+            metadata_={},
             text_content=text_content,
             native_path=native_link if native_link else None,
             image_paths=jpeg_paths,
+            file_name=file_name,
         )
+        _apply_metadata(doc, record, None)
         documents.append(doc)
 
     db.add_all(documents)
@@ -169,6 +192,29 @@ async def ingest_production(
 INGEST_BATCH_SIZE = 25
 
 
+def _download_dat_to_temp(production_id: int) -> str:
+    """Download the production's DAT load file to a temp path and return it.
+
+    Reused by both bootstrap_ingest_source and analyze_load_file so we never
+    duplicate the Firebase Storage access logic.
+    """
+    import tempfile
+
+    from app.services.storage import download_file, list_files
+
+    prefix = f"productions/{production_id}/raw/"
+    data_files = list_files(f"{prefix}DATA/")
+    dat_remote = next((f for f in data_files if f.lower().endswith(".dat")), None)
+
+    if not dat_remote:
+        raise FileNotFoundError("No .dat file found in uploaded DATA/ folder")
+
+    tmp_dir = tempfile.mkdtemp(prefix=f"ingest_dat_{production_id}_")
+    dat_local = os.path.join(tmp_dir, "data.dat")
+    download_file(dat_remote, dat_local)
+    return dat_local
+
+
 def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, list[str]]]:
     """Download and parse the DAT and OPT files for a production.
 
@@ -201,12 +247,37 @@ def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, l
     return records, opt_pages
 
 
+def analyze_load_file(production_id: int) -> dict:
+    """Parse the uploaded load file and propose a column mapping.
+
+    Downloads the DAT file from Firebase Storage (reusing _download_dat_to_temp),
+    parses it with parse_loadfile, and runs build_proposed_mapping.
+    Never raises on AI failure — build_proposed_mapping handles that gracefully.
+    """
+    from app.utils.loadfile import parse_loadfile
+    from app.services.field_mapping import build_proposed_mapping
+
+    dat_path = _download_dat_to_temp(production_id)
+    parsed = parse_loadfile(dat_path)
+    columns = build_proposed_mapping(parsed.headers, parsed.sample_rows)
+    return {
+        "format": {
+            "encoding": parsed.encoding,
+            "delimiter": parsed.delimiter,
+        },
+        "columns": columns,
+        "sample_rows": parsed.sample_rows,
+        "total_rows": parsed.total_rows,
+    }
+
+
 def process_ingest_record(
     production_id: int,
     record: dict,
     opt_pages: dict[str, list[str]],
     converted_tmp: str,
     errors: list[str],
+    field_mapping: dict | None = None,
 ) -> Document | None:
     """Turn a single DAT record into a Document.
 
@@ -284,21 +355,30 @@ def process_ingest_record(
     if native_link:
         native_storage_path = f"{prefix}{native_link.replace(chr(92), '/')}"
 
-    metadata = {}
-    for key, value in record.items():
-        if key not in FIELD_MAP and value:
-            metadata[key] = value
-
-    return Document(
+    nl = record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or ""
+    file_name = os.path.basename(nl.replace("\\", "/")) if nl else None
+    doc = Document(
         production_id=production_id,
         bates_begin=bates_begin,
         bates_end=bates_end,
         page_count=page_count,
-        metadata_=metadata,
+        metadata_={},
         text_content=text_content,
         native_path=native_storage_path,
         image_paths=jpeg_storage_paths,
+        file_name=file_name,
     )
+    _apply_metadata(doc, record, field_mapping)
+    if native_storage_path and not doc.file_hash_sha256:
+        try:
+            import hashlib
+            native_bytes = get_download_bytes(native_storage_path)
+            doc.file_hash_sha256 = hashlib.sha256(native_bytes).hexdigest()
+        except Exception as e:
+            doc.extraction_status = "partial"
+            doc.extraction_error = f"sha256 from native failed: {e}"
+            errors.append(f"{bates_begin}: sha256 from native failed: {e}")
+    return doc
 
 
 async def _incr_skipped(db: AsyncSession, job_id: str) -> None:
@@ -425,6 +505,8 @@ async def ingest_batch(
     if not job:
         return
 
+    field_mapping: dict | None = job.field_mapping or None
+
     records, opt_pages = bootstrap_ingest_source(production_id)
     slice_records = records[start_idx:end_idx]
 
@@ -466,6 +548,7 @@ async def ingest_batch(
                 doc = await asyncio.to_thread(
                     process_ingest_record,
                     production_id, record, opt_pages, converted_tmp, errors,
+                    field_mapping,
                 )
                 if doc is None:
                     await _incr_skipped(db, job_id)
