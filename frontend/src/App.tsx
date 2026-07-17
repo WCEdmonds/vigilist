@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
-import AIReviewPage from './components/AIReviewPage';
+import AIReviewLane from './components/AIReviewLane';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
@@ -301,7 +301,18 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
 
   // AI Review full-screen mode
   if (showAIReview) {
-    return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
+    /* interim wrapper — replaced by ReviewWorkspace in the next task */
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+        <div className="app-header">
+          <button className="btn-header" onClick={() => setShowAIReview(false)}>← Back</button>
+          <span className="logo">Smart Review</span>
+        </div>
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <AIReviewLane productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} />
+        </div>
+      </div>
+    );
   }
 
   // Batch review full-screen mode
