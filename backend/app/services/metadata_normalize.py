@@ -10,15 +10,33 @@ _METADATA_TARGETS = {
     "custodian", "date_sent", "date_received", "date_created", "date_modified",
     "file_hash_md5", "file_hash_sha256", "file_type", "file_name", "source_path",
     "email_from", "email_to", "email_cc", "email_bcc", "email_subject",
+    "family_id", "thread_id", "is_inclusive",
 }
 _STRUCTURAL_TARGETS = {"bates_begin", "bates_end", "page_count", "text_link", "native_link"}
 _DATE_TARGETS = {"date_sent", "date_received", "date_created", "date_modified"}
+_BOOL_TARGETS = {"is_inclusive"}
 
 _DATE_FORMATS = [
     "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
     "%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M:%S",
     "%m/%d/%Y %H:%M", "%m/%d/%Y",
 ]
+
+
+_TRUE = {"yes", "y", "true", "t", "1"}
+_FALSE = {"no", "n", "false", "f", "0"}
+
+
+def normalize_bool(value) -> bool | None:
+    """Parse a load-file truthy string to a bool, or None if unrecognized."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if v in _TRUE:
+        return True
+    if v in _FALSE:
+        return False
+    return None
 
 
 def normalize_date(value: str) -> datetime | None:
@@ -75,6 +93,10 @@ def promote_record(record: dict, field_mapping: dict[str, str]) -> tuple[dict, d
             dt = normalize_date(raw)
             if dt is not None:
                 typed[canon] = dt
+        elif canon in _BOOL_TARGETS:
+            b = normalize_bool(raw)
+            if b is not None:
+                typed[canon] = b
         elif canon == "file_type":
             typed[canon] = raw.lstrip(".").lower()[:50]
         else:
