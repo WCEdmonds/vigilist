@@ -111,7 +111,7 @@ async def get_document_duplicates(
     # Get all other members of those groups
     group_ids = [g[0] for g in groups]
     members_result = await db.execute(
-        select(DocumentDuplicate, Document.bates_begin, Document.title, DuplicateGroup.type)
+        select(DocumentDuplicate, Document.bates_begin, Document.title, Document.custodian, DuplicateGroup.type)
         .join(Document, DocumentDuplicate.document_id == Document.id)
         .join(DuplicateGroup, DocumentDuplicate.group_id == DuplicateGroup.id)
         .where(DocumentDuplicate.group_id.in_(group_ids))
@@ -122,8 +122,9 @@ async def get_document_duplicates(
         DuplicateEntryOut(
             document_id=dd.document_id, bates_begin=bates,
             title=title, similarity=dd.similarity, type=dup_type,
+            custodian=custodian,
         )
-        for dd, bates, title, dup_type in members_result.all()
+        for dd, bates, title, custodian, dup_type in members_result.all()
     ]
 
 
