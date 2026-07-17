@@ -11,7 +11,7 @@ from app.models import (
     DocumentDuplicate, DocumentTag, DuplicateGroup, User,
 )
 from app.routers.auth import get_current_user
-from app.schemas import ClusterOut, DuplicateEntryOut, PropagateTagRequest
+from app.schemas import ClusterOut, ClusterDocumentOut, DuplicateEntryOut, PropagateTagRequest
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
@@ -83,6 +83,43 @@ async def list_clusters(
             page_count=page_count,
         )
         for cluster, page_count in rows
+    ]
+
+
+def clamp_limit(limit: int) -> int:
+    return max(1, min(20, limit))
+
+
+@router.get(
+    "/productions/{production_id}/clusters/{cluster_id}/documents",
+    response_model=list[ClusterDocumentOut],
+)
+async def list_cluster_documents(
+    production_id: int,
+    cluster_id: int,
+    limit: int = 5,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await get_user_role_for_production(db, user, production_id)
+    cluster = await db.get(DocumentCluster, cluster_id)
+    if cluster is None or cluster.production_id != production_id:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    rows = (
+        await db.execute(
+            select(Document.id, Document.bates_begin, Document.title)
+            .join(
+                DocumentClusterAssignment,
+                DocumentClusterAssignment.document_id == Document.id,
+            )
+            .where(DocumentClusterAssignment.cluster_id == cluster_id)
+            .order_by(Document.bates_begin)
+            .limit(clamp_limit(limit))
+        )
+    ).all()
+    return [
+        ClusterDocumentOut(document_id=str(r[0]), bates_begin=r[1], title=r[2])
+        for r in rows
     ]
 
 
