@@ -24,6 +24,13 @@ from app.services.review_tags import apply_decision_tag
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/review", tags=["review"])
 
+# Sonnet list pricing 2026-07: $3/M input, $15/M output
+PRICE_PER_INPUT_TOKEN_USD = 3 / 1_000_000
+PRICE_PER_OUTPUT_TOKEN_USD = 15 / 1_000_000
+MAX_DOC_CHARS_FOR_CLASSIFICATION = 12000
+EST_INPUT_CHAR_OVERHEAD_TOKENS = 800  # system prompt + category list overhead
+EST_OUTPUT_TOKENS_PER_DOC = 300
+
 
 # ── Project CRUD ──
 
@@ -185,6 +192,103 @@ async def delete_project(
 
     await db.commit()
     return {"status": "deleted"}
+
+
+# ── Cost Estimate & Auto-Classify ──
+
+@router.get("/estimate/{production_id}")
+async def get_classification_estimate(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Estimate the cost of classifying all documents in a production."""
+    await get_user_role_for_production(db, user, production_id)
+
+    result = await db.execute(
+        select(func.count(Document.id), func.avg(func.length(Document.text_content)))
+        .where(Document.production_id == production_id)
+        .where(Document.text_content.isnot(None))
+    )
+    doc_count, avg_chars = result.one()
+    doc_count = doc_count or 0
+    avg_chars = float(avg_chars) if avg_chars is not None else 0.0
+
+    return estimate_classification_cost(doc_count, avg_chars)
+
+
+@router.post("/auto-classify/{production_id}", response_model=ReviewProjectOut)
+async def auto_classify(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Create the default 'Initial relevance pass' review project and kick off a full classification run."""
+    production = await db.get(Production, production_id)
+    if not production:
+        raise HTTPException(status_code=404, detail="Production not found")
+
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
+    existing = await db.execute(
+        select(ReviewProject.id)
+        .where(ReviewProject.production_id == production_id)
+        .where(ReviewProject.name == "Initial relevance pass")
+    )
+    if existing.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail="Initial relevance pass already exists for this production")
+
+    if not production.case_context:
+        raise HTTPException(status_code=400, detail="Production has no case context")
+
+    doc_result = await db.execute(
+        select(Document.id)
+        .where(Document.production_id == production_id)
+        .where(Document.text_content.isnot(None))
+    )
+    doc_ids = [str(row[0]) for row in doc_result.all()]
+
+    # Clear is_primary on other projects FIRST — a partial unique index enforces one primary per production
+    await db.execute(
+        update(ReviewProject)
+        .where(ReviewProject.production_id == production_id)
+        .values(is_primary=False)
+    )
+
+    project = ReviewProject(
+        production_id=production_id,
+        name="Initial relevance pass",
+        prompt_text=production.case_context,
+        categories=DEFAULT_CATEGORIES,
+        sample_size=0,
+        status="running",
+        is_primary=True,
+        created_by=user.id,
+        total_documents=len(doc_ids),
+    )
+    db.add(project)
+    await db.flush()  # Flush to get the ID
+
+    await log_action(
+        db, user, "classification_run", "review_project", str(project.id),
+        production_id=production_id,
+        details={"source": "ingest_wizard", "doc_count": len(doc_ids)},
+    )
+
+    await db.commit()
+    await db.refresh(project)
+
+    background_tasks.add_task(
+        _run_classification_batch,
+        project_id=project.id,
+        doc_ids=doc_ids,
+        is_sample=False,
+    )
+
+    return await _project_out(db, project)
 
 
 # ── Sample Analysis ──
@@ -489,6 +593,24 @@ async def get_project_status(
 
 
 # ── Helpers ──
+
+def estimate_classification_cost(doc_count: int, avg_chars: float) -> dict:
+    """Pure cost estimate for classifying doc_count documents averaging avg_chars each."""
+    avg_chars = avg_chars or 0
+    per_doc_input_tokens = min(avg_chars, MAX_DOC_CHARS_FOR_CLASSIFICATION) / 4 + EST_INPUT_CHAR_OVERHEAD_TOKENS
+    est_input_tokens = int(per_doc_input_tokens * doc_count)
+    est_output_tokens = EST_OUTPUT_TOKENS_PER_DOC * doc_count
+    est_usd = round(
+        est_input_tokens * PRICE_PER_INPUT_TOKEN_USD + est_output_tokens * PRICE_PER_OUTPUT_TOKEN_USD,
+        2,
+    )
+    return {
+        "doc_count": doc_count,
+        "est_input_tokens": est_input_tokens,
+        "est_output_tokens": est_output_tokens,
+        "est_usd": est_usd,
+    }
+
 
 async def _project_out(db: AsyncSession, project: ReviewProject) -> ReviewProjectOut:
     """Build ReviewProjectOut with computed fields."""
