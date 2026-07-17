@@ -129,6 +129,8 @@ async def ingest_production(
             raw_image_paths, production_root, converted_dir
         )
 
+        nl = record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or ""
+        file_name = os.path.basename(nl.replace("\\", "/")) if nl else None
         doc = Document(
             production_id=production.id,
             bates_begin=bates_begin,
@@ -138,7 +140,7 @@ async def ingest_production(
             text_content=text_content,
             native_path=native_link if native_link else None,
             image_paths=jpeg_paths,
-            file_name=record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or None,
+            file_name=file_name,
         )
         _apply_metadata(doc, record, None)
         documents.append(doc)
@@ -353,6 +355,8 @@ def process_ingest_record(
     if native_link:
         native_storage_path = f"{prefix}{native_link.replace(chr(92), '/')}"
 
+    nl = record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or ""
+    file_name = os.path.basename(nl.replace("\\", "/")) if nl else None
     doc = Document(
         production_id=production_id,
         bates_begin=bates_begin,
@@ -362,7 +366,7 @@ def process_ingest_record(
         text_content=text_content,
         native_path=native_storage_path,
         image_paths=jpeg_storage_paths,
-        file_name=record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or None,
+        file_name=file_name,
     )
     _apply_metadata(doc, record, field_mapping)
     if native_storage_path and not doc.file_hash_sha256:
