@@ -57,6 +57,16 @@ async def _run_clustering(production_id: int) -> None:
     async with async_session() as db:
         await cluster_production(db, production_id)
         await db.commit()
+    # Near-duplicate detection used to ride on the old Corpus Analysis page's
+    # cluster button; it now rides the ambient clustering stage. Best-effort —
+    # duplicates are an enhancement, not a gate.
+    try:
+        async with async_session() as db:
+            from app.services.duplicates import detect_duplicates
+            await detect_duplicates(db, production_id)
+            await db.commit()
+    except Exception:
+        logger.exception("Duplicate detection failed for production %s", production_id)
 
 
 async def _run_summaries(production_id: int) -> None:

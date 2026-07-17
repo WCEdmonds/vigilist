@@ -236,9 +236,10 @@ async def run_pipeline_handler(
     production_id = body.get("production_id")
     if not production_id:
         raise HTTPException(status_code=400, detail="production_id required")
+    force = bool(body.get("force"))
     from app.services.pipeline import run_ambient_pipeline
 
-    await run_ambient_pipeline(int(production_id))
+    await run_ambient_pipeline(int(production_id), force)
     return {"ok": True}
 
 

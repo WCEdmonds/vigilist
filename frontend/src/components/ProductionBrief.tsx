@@ -5,6 +5,12 @@ import type { ClusterDocument, ClusterInfo, PipelineInfo, PipelineStageState, Pi
 
 const POLL_MS = 5000;
 
+// A worker killed mid-stage (e.g. Cloud Run scale-down) leaves a stage
+// "running" forever with no further status writes. Mirrors the backend's
+// STALE_RUNNING_MINUTES (backend/app/routers/productions.py) — the Cloud
+// Tasks dispatch ceiling is 30 minutes, so 45 gives margin.
+const STALE_RUNNING_MINUTES = 45;
+
 function briefCollapseKey(productionId: number) {
   return `vigilist.brief.collapsed.${productionId}`;
 }
@@ -19,6 +25,22 @@ function safeSet(key: string, value: string) {
 function anyStageRunning(status: PipelineStatus | null | undefined): boolean {
   if (!status) return false;
   return status.clustering === 'running' || status.summaries === 'running' || status.brief === 'running';
+}
+
+/**
+ * Same as `anyStageRunning`, but a "running" status whose `updated_at` is
+ * older than the stale threshold is treated as not-running — the worker
+ * that would have advanced it is presumed dead. Drives `isRunning` and
+ * state selection; freshly-started runs (recent `updated_at`, or none yet
+ * written) still count as running.
+ */
+function isActivelyRunning(status: PipelineStatus | null | undefined): boolean {
+  if (!anyStageRunning(status)) return false;
+  const ts = status?.updated_at;
+  if (!ts) return true;
+  const updated = new Date(ts).getTime();
+  if (Number.isNaN(updated)) return true;
+  return Date.now() - updated < STALE_RUNNING_MINUTES * 60 * 1000;
 }
 
 function anyStageFailed(status: PipelineStatus | null | undefined): boolean {
@@ -168,7 +190,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
     firstLoadRef.current = false;
   }, [info, onPipelineSettled]);
 
-  const isRunning = starting || anyStageRunning(info?.status);
+  const isRunning = starting || isActivelyRunning(info?.status);
 
   // Poll while the pipeline is running. Keyed on the derived boolean (not on
   // `info` itself) so a fresh 5s interval isn't torn down and rebuilt on
@@ -237,7 +259,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
     // During the grace window before any stage is actually observed running,
     // `status` may still be stale (e.g. a previous failed run) — show all
     // stages as pending rather than flashing a stale `!` glyph.
-    const realRunning = anyStageRunning(status);
+    const realRunning = isActivelyRunning(status);
     const glyph = (s: PipelineStageState | undefined) => (realRunning ? stageGlyph(s) : '·');
     return (
       <div className="brief-card brief-skeleton">
@@ -389,8 +411,9 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
     );
   }
 
-  // ── State 4: no brief, a stage failed — owner sees Retry, others see nothing. ──
-  if (anyStageFailed(info?.status)) {
+  // ── State 4: no brief, a stage failed (or is stuck "running" past the
+  // stale threshold) — owner sees Retry, others see nothing. ──
+  if (anyStageFailed(info?.status) || (anyStageRunning(info?.status) && !isActivelyRunning(info?.status))) {
     if (!production.is_owner) return null;
     return (
       <div className="brief-card">

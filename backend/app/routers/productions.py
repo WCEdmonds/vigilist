@@ -1,5 +1,7 @@
 """Production listing and access management."""
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,31 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/productions", tags=["productions"])
+
+STALE_RUNNING_MINUTES = 45
+
+
+def _is_actively_running(status: dict | None) -> bool:
+    """True if a pipeline stage is "running" and its status write is recent.
+
+    A worker killed mid-stage (e.g. Cloud Run scale-down) leaves a stage
+    "running" forever with no further status writes. Treat a "running"
+    status whose `updated_at` is older than the Cloud Tasks dispatch
+    ceiling (30 min) plus margin as stale rather than actually in-flight,
+    so re-runs aren't blocked forever by a dead worker.
+    """
+    if not status:
+        return False
+    if not any(status.get(s) == "running" for s in ("clustering", "summaries", "brief")):
+        return False
+    ts = status.get("updated_at")
+    if not ts:
+        return True
+    try:
+        updated = datetime.fromisoformat(ts)
+    except ValueError:
+        return True
+    return datetime.now(timezone.utc) - updated < timedelta(minutes=STALE_RUNNING_MINUTES)
 
 
 @router.get("", response_model=list[ProductionWithAccess])
@@ -155,7 +182,7 @@ async def run_pipeline(
     if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Manager or admin role required")
     status = prod.ai_pipeline_status or {}
-    if any(status.get(s) == "running" for s in ("clustering", "summaries", "brief")):
+    if _is_actively_running(status):
         raise HTTPException(status_code=409, detail="Pipeline already running")
     force = bool((body or {}).get("force"))
     await log_action(
@@ -168,7 +195,7 @@ async def run_pipeline(
     from app.services.pipeline import run_ambient_pipeline
 
     if task_service.is_configured():
-        task_service.enqueue_pipeline(production_id)
+        task_service.enqueue_pipeline(production_id, force)
     else:
         background_tasks.add_task(run_ambient_pipeline, production_id, force)
     return {"started": True}

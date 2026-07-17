@@ -73,7 +73,7 @@ def enqueue_ingest_batch(
     )
 
 
-def enqueue_pipeline(production_id: int) -> None:
+def enqueue_pipeline(production_id: int, force: bool = False) -> None:
     """Enqueue one ambient-pipeline run (clustering -> summaries -> brief) for a production."""
     if not is_configured():
         raise RuntimeError("Cloud Tasks not configured")
@@ -86,7 +86,7 @@ def enqueue_pipeline(production_id: int) -> None:
     )
 
     handler_url = f"{settings.cloud_run_service_url}/api/ingest/run-pipeline"
-    payload = json.dumps({"production_id": production_id}).encode()
+    payload = json.dumps({"production_id": production_id, "force": force}).encode()
 
     task = tasks_v2.Task(
         http_request=tasks_v2.HttpRequest(
