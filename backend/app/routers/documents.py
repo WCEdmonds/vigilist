@@ -37,6 +37,14 @@ FILE_TYPE_EXTENSIONS = {
 }
 
 
+def cluster_label_map(rows) -> dict[str, dict]:
+    """(document_id, cluster_id, label) tuples -> {doc_id_str: {cluster_id, cluster_label}}."""
+    return {
+        str(doc_id): {"cluster_id": cluster_id, "cluster_label": label}
+        for doc_id, cluster_id, label in rows
+    }
+
+
 @router.get("", response_model=PaginatedDocuments)
 async def list_documents(
     production_id: int | None = None,
@@ -138,6 +146,23 @@ async def list_documents(
         )
         ann_counts = dict(ac_result.all())
 
+    # Get cluster assignments for these docs
+    from app.models import DocumentClusterAssignment, DocumentCluster
+    cluster_rows = []
+    if doc_ids:
+        cluster_rows = (
+            await db.execute(
+                select(
+                    DocumentClusterAssignment.document_id,
+                    DocumentClusterAssignment.cluster_id,
+                    DocumentCluster.label,
+                )
+                .join(DocumentCluster, DocumentCluster.id == DocumentClusterAssignment.cluster_id)
+                .where(DocumentClusterAssignment.document_id.in_(doc_ids))
+            )
+        ).all()
+    clusters_by_doc = cluster_label_map(cluster_rows)
+
     return PaginatedDocuments(
         documents=[
             DocumentSummary(
@@ -153,6 +178,8 @@ async def list_documents(
                 tags=[TagOut.model_validate(dt.tag) for dt in d.tags],
                 note_count=note_counts.get(d.id, 0),
                 annotation_count=ann_counts.get(d.id, 0),
+                cluster_id=(clusters_by_doc.get(str(d.id)) or {}).get("cluster_id"),
+                cluster_label=(clusters_by_doc.get(str(d.id)) or {}).get("cluster_label"),
             )
             for d in docs
         ],
