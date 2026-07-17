@@ -53,6 +53,9 @@ export interface DocumentSummary {
   note_count: number;
   cluster_id?: number | null;
   cluster_label?: string | null;
+  ai_decision?: string | null;
+  ai_confidence?: number | null;
+  ai_decided?: boolean;
 }
 
 export interface DocumentDetail {
@@ -268,6 +271,14 @@ export interface ReviewProject {
   updated_at: string;
   sample_agreement_rate: number | null;
   decision_breakdown: Record<string, number> | null;
+  is_primary?: boolean;
+}
+
+export interface ClassifyEstimate {
+  doc_count: number;
+  est_input_tokens: number;
+  est_output_tokens: number;
+  est_usd: number;
 }
 
 export interface AIReviewResult {
