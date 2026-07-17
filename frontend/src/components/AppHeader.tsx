@@ -16,6 +16,7 @@ interface AppHeaderProps {
   onOpenReview?: () => void;
   onOpenDashboard?: () => void;
   onOpenShare?: () => void;
+  onOpenSettings?: () => void;
   onOpenAudit?: () => void;
   onOpenQueues?: () => void;
   onOpenIngest?: () => void;
@@ -39,6 +40,7 @@ export default function AppHeader({
   onOpenReview,
   onOpenDashboard,
   onOpenShare,
+  onOpenSettings,
   onOpenAudit,
   onOpenQueues,
   onOpenIngest,
@@ -62,6 +64,7 @@ export default function AppHeader({
 
   const gearItems = [
     onOpenShare && { label: 'Share…', action: onOpenShare },
+    onOpenSettings && { label: 'Production settings', action: onOpenSettings },
     onOpenIngest && { label: '＋ Ingest a production', action: onOpenIngest },
     onOpenQueues && { label: 'Review queues', action: onOpenQueues },
     onRandomDoc && { label: 'Random document', action: onRandomDoc },

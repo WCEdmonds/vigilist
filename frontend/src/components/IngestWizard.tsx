@@ -14,6 +14,7 @@ type Stage = 'setup' | 'uploading' | 'processing' | 'complete' | 'error';
 export default function IngestWizard({ onClose, onComplete }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [caseContext, setCaseContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [mode, setMode] = useState<'relativity' | 'generic_pdf'>('relativity');
   const [modeWarning, setModeWarning] = useState('');
@@ -97,7 +98,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     try {
       // Phase 1: Create production in backend to get real production_id
       // This also syncs Firebase custom claims so we can write to Storage
-      const { production_id } = await createProductionForIngest(name.trim(), description.trim(), '');
+      const { production_id } = await createProductionForIngest(name.trim(), description.trim(), caseContext.trim());
 
       // Refresh the Firebase token to pick up the new custom claims
       const currentUser = auth.currentUser;
@@ -303,6 +304,24 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     Description (optional)
                   </label>
                   <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief description" />
+                </div>
+                <div>
+                  <label className="input-label" htmlFor="ingest-case-context">
+                    About this case <span className="brief-ai-mark">✦</span>
+                  </label>
+                  <p className="input-hint">
+                    A few sentences: what the case is about and what makes a document
+                    relevant. The AI uses this to brief your team and, later, to
+                    classify documents. You can edit it anytime in Production settings.
+                  </p>
+                  <textarea
+                    id="ingest-case-context"
+                    className="input"
+                    rows={4}
+                    value={caseContext}
+                    onChange={e => setCaseContext(e.target.value)}
+                    placeholder="e.g. Product-liability suit over the March 2024 recall. Relevant: anything about the recall decision, board discussions, or customer injuries."
+                  />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
