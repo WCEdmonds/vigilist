@@ -964,6 +964,72 @@ mark {
   }
 }
 
+/* ── Chat panel (context rail) ── */
+
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+}
+
+.chat-docs {
+  border-top: 1px solid var(--color-neutral-100);
+}
+
+.chat-docs-label {
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.chat-empty {
+  color: var(--color-neutral-400);
+  font-size: var(--text-sm);
+  text-align: center;
+  margin-top: var(--space-6);
+}
+
+.chat-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--color-neutral-200);
+}
+
+.chat-input {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--color-neutral-200);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  background: var(--color-neutral-0);
+  color: var(--color-neutral-700);
+}
+.chat-input:focus {
+  outline: none;
+  box-shadow: var(--shadow-ring);
+}
+
 /* ── Onboarding guide ── */
 
 .modal-footer {
