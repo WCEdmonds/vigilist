@@ -25,6 +25,8 @@ class FakeProduction:
         self.description = None
         self.owner_id = owner_id
         self.created_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        self.case_context = None
+        self.brief = None
 
 
 class FakeResult:
