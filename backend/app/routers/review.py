@@ -147,7 +147,26 @@ async def delete_project(
     project = await db.get(ReviewProject, project_id)
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
+    was_primary = project.is_primary
     await db.delete(project)
+    await db.flush()
+
+    # If the deleted project was primary, promote the newest remaining project
+    if was_primary:
+        result = await db.execute(
+            select(ReviewProject)
+            .where(ReviewProject.production_id == production_id)
+            .order_by(ReviewProject.created_at.desc(), ReviewProject.id.desc())
+            .limit(1)
+        )
+        newest = result.scalars().first()
+        if newest:
+            await db.execute(
+                update(ReviewProject)
+                .where(ReviewProject.id == newest.id)
+                .values(is_primary=True)
+            )
+
     await db.commit()
     return {"status": "deleted"}
 
