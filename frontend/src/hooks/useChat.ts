@@ -71,6 +71,7 @@ export function useChat(): ChatState {
       },
       controller.signal,
     ).then(() => {
+      if (controller.signal.aborted) { setStreaming(false); setStreamingText(''); return; }
       abortRef.current = null;
       setStreaming(false);
       setStreamingText('');
