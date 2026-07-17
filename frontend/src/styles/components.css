@@ -1040,6 +1040,286 @@ mark {
   white-space: nowrap;
 }
 
+/* ── Production Brief ── */
+
+.brief-card {
+  position: relative;
+  margin-bottom: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-parchment-light);
+  border-radius: var(--radius-lg);
+  border-left: 3px solid var(--color-ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.brief-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.brief-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
+  color: var(--color-ink);
+  flex: 1;
+}
+
+.brief-ai-mark {
+  color: var(--color-brass);
+  font-size: var(--text-sm);
+}
+
+.brief-generated-date {
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.brief-overview {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  color: var(--color-neutral-600);
+}
+
+.brief-meta {
+  margin-bottom: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+}
+
+.brief-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.brief-chip {
+  padding: 4px var(--space-3);
+  border: none;
+  border-radius: var(--radius-full);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--color-card);
+  cursor: pointer;
+  opacity: 0.92;
+  transition: opacity var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.brief-chip:hover {
+  opacity: 1;
+}
+
+.brief-chip.is-active {
+  opacity: 1;
+  box-shadow: var(--shadow-ring);
+}
+
+.brief-chip.is-dimmed {
+  opacity: 0.5;
+}
+
+.brief-expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  margin-bottom: var(--space-3);
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--color-ink-light);
+  cursor: pointer;
+}
+
+.brief-expand-toggle:hover {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
+.brief-expand {
+  display: flex;
+  gap: var(--space-5);
+  padding-top: var(--space-3);
+  margin-bottom: var(--space-3);
+  border-top: 1px solid var(--color-neutral-100);
+}
+
+.brief-expand-donut {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.brief-expand-docs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.brief-theme-docs {
+  min-width: 0;
+}
+
+.brief-theme-label {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-neutral-500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.brief-doc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1-5) var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.brief-doc-row:hover {
+  background: var(--color-card-hover);
+}
+
+.brief-doc-title {
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brief-doc-bates {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+.brief-doc-empty {
+  padding: var(--space-1-5) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  font-style: italic;
+}
+
+.brief-notable {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-neutral-100);
+}
+
+.brief-notable-title {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-neutral-500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.brief-notable-row {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--text-xs);
+}
+
+.brief-notable-bates {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--color-neutral-500);
+}
+
+.brief-notable-reason {
+  color: var(--color-neutral-600);
+}
+
+.brief-skeleton-bar {
+  height: 10px;
+  width: 90%;
+  margin-bottom: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--color-neutral-100) 25%, var(--color-neutral-200) 50%, var(--color-neutral-100) 75%);
+  background-size: 200% 100%;
+  animation: brief-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes brief-pulse {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.brief-stages {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+}
+
+.brief-collapsed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+}
+
+.brief-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: 0;
+  background: transparent;
+  border: none;
+  font-family: var(--font-serif);
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--color-ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.brief-collapse-toggle:hover {
+  opacity: 0.8;
+}
+
+.brief-collapsed .brief-chips {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+/* Donut left, key-doc list right above 720px; stacked below it. */
+@media (max-width: 720px) {
+  .brief-expand {
+    flex-direction: column;
+  }
+}
+
 /* The footer is crowded on a phone — stack it. */
 @media (max-width: 560px) {
   .modal-footer {

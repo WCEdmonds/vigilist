@@ -4,7 +4,6 @@ import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AIAgent, { type AttachedDoc } from './components/AIAgent';
 import AIReviewPage from './components/AIReviewPage';
-import CorpusAnalysis from './components/CorpusAnalysis';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
@@ -15,7 +14,7 @@ import BatchReview from './components/BatchReview';
 import Dashboard from './components/Dashboard';
 import AppHeader from './components/AppHeader';
 import SearchResults from './components/SearchResults';
-import TopicGroups from './components/TopicGroups';
+import ProductionBrief from './components/ProductionBrief';
 import { ToastContainer, showToast } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
@@ -73,7 +72,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   );
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
-  const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(initialUrl.view === 'analysis');
 
   // AI Agent chat (session-only) — floating launcher + "Send to AI Agent".
   const [chatOpen, setChatOpen] = useState(false);
@@ -103,7 +101,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showAIReview ? 'ai' : showCorpusAnalysis ? 'analysis' : undefined,
+    view: showAIReview ? 'ai' : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -119,12 +117,16 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
 
   const [perPage, setPerPage] = useState(50);
 
+  const refreshClusters = useCallback(() => {
+    getClusters(production.id).then(setClusters).catch(e => console.warn('getClusters failed:', e));
+  }, [production.id]);
+
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
-    getClusters(production.id).then(setClusters).catch(e => console.warn('getClusters failed:', e));
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId]);
+    refreshClusters();
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId, refreshClusters]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
@@ -270,11 +272,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
   }
 
-  // Corpus Analysis full-screen mode
-  if (showCorpusAnalysis) {
-    return <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onFilterCluster={() => {}} onBack={() => setShowCorpusAnalysis(false)} />;
-  }
-
   // Batch review full-screen mode
   if (activeBatchId) {
     return (
@@ -340,11 +337,13 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
 
       {/* Content */}
       <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
-        <TopicGroups
+        <ProductionBrief
+          production={production}
           clusters={clusters}
           activeClusterId={filterClusterId}
-          onSelect={setFilterClusterId}
-          onOpenAnalysis={() => setShowCorpusAnalysis(true)}
+          onSelectCluster={setFilterClusterId}
+          onViewDocument={setViewDocId}
+          onPipelineSettled={refreshClusters}
         />
 
         {/* My Review Batches */}
