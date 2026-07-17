@@ -250,3 +250,22 @@ async def generate_titles_batch(texts: list[tuple[str, str | None]]) -> dict[str
     tasks = [_gen(doc_id, text) for doc_id, text in texts]
     results = await asyncio.gather(*tasks)
     return dict(results)
+
+
+async def generate_summaries_batch(texts: list[tuple[str, str | None]]) -> dict[str, str | None]:
+    """Generate summaries for (doc_id, text) pairs with bounded concurrency.
+
+    Skips empty texts without a model call. Returns {doc_id: summary or None}.
+    """
+    semaphore = asyncio.Semaphore(2)
+
+    async def _gen(doc_id: str, text: str | None) -> tuple[str, str | None]:
+        if not text or not text.strip():
+            return doc_id, None
+        async with semaphore:
+            summary = await generate_summary(text)
+            await asyncio.sleep(0.5)
+        return doc_id, summary
+
+    results = await asyncio.gather(*(_gen(d, t) for d, t in texts))
+    return dict(results)
