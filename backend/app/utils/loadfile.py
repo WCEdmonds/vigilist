@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 THORN = "þ"        # þ  Concordance field wrapper / quote
 DC4 = "\x14"            # Concordance field separator
-_DELIMS = [DC4, "\t", ",", "|"]
 
 
 @dataclass
@@ -37,14 +36,30 @@ def detect_encoding(raw: bytes) -> str:
 
 
 def detect_delimiter(text_line: str) -> str:
-    # Concordance DC4 wins if present; else the most frequent candidate.
+    """Return the delimiter for *text_line* (the header row of a load file).
+
+    Priority order (highest to lowest):
+    1. DC4 (\x14) — Concordance/Opticon separator; wins if present at all.
+    2. Most-frequent of tab, comma, pipe among those with count > 0.
+       Tie-break: fixed priority order tab > comma > pipe (first wins).
+    3. If NO candidate delimiter appears in the line (single-column file),
+       return comma as the documented default.
+    """
+    # Concordance DC4 wins unconditionally if present.
     if DC4 in text_line:
         return DC4
-    best, best_count = ",", 0
-    for d in ["\t", ",", "|"]:
+
+    # Fixed priority order ensures deterministic tie-breaking.
+    candidates = ["\t", ",", "|"]
+    best, best_count = None, 0
+    for d in candidates:
         c = text_line.count(d)
         if c > best_count:
             best, best_count = d, c
+
+    # No delimiter found (single-column file): default to comma.
+    if best is None:
+        return ","
     return best
 
 
@@ -60,7 +75,16 @@ def parse_loadfile(path: str, sample_size: int = 20) -> LoadFileParse:
     with open(path, "rb") as f:
         raw = f.read()
     encoding = detect_encoding(raw)
-    text = raw.decode(encoding, errors="replace").replace("\x00", "")
+    text = raw.decode(encoding, errors="replace")
+
+    # Strip stray null bytes only on non-UTF-16 encodings. For UTF-16, Python's
+    # decoder already produces proper Unicode with no embedded nulls; stripping
+    # here would be a no-op, but we skip it explicitly to avoid any future risk
+    # of corrupting legitimate null-containing text. For Concordance/DC4 DAT
+    # files (typically UTF-8 or cp1252), null bytes are stray control artifacts
+    # that must be removed.
+    if encoding not in ("utf-16", "utf-16-le", "utf-16-be"):
+        text = text.replace("\x00", "")
 
     lines = text.strip().split("\r\n")
     if len(lines) == 1 and "\n" in lines[0]:
@@ -79,11 +103,6 @@ def parse_loadfile(path: str, sample_size: int = 20) -> LoadFileParse:
         total += 1
         if len(rows) < sample_size:
             values = _split(line, delimiter)
-            record = {}
-            for i, h in enumerate(headers):
-                v = values[i] if i < len(values) else ""
-                if v and "\\" in v:
-                    v = v.replace("\\", "/")
-                record[h] = v
+            record = {h: (values[i] if i < len(values) else "") for i, h in enumerate(headers)}
             rows.append(record)
     return LoadFileParse(encoding, delimiter, headers, rows, total)
