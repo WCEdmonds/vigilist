@@ -1,12 +1,12 @@
 """Production listing and access management."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
-from app.models import PendingInvite, Production, ProductionAccess, User
+from app.models import Document, PendingInvite, Production, ProductionAccess, User
 from app.routers.auth import get_current_user
 from app.services.audit import log_action
 from app.services.claims import sync_user_claims
@@ -36,6 +36,12 @@ async def list_productions(
         .order_by(Production.created_at.desc())
     )
     prods = result.scalars().all()
+    counts_result = await db.execute(
+        select(Document.production_id, func.count(Document.id))
+        .where(Document.production_id.in_(prod_ids))
+        .group_by(Document.production_id)
+    )
+    counts = dict(counts_result.all())
     return [
         ProductionWithAccess(
             id=p.id,
@@ -44,6 +50,7 @@ async def list_productions(
             owner_id=p.owner_id,
             is_owner=(p.owner_id == user.id),
             created_at=p.created_at,
+            document_count=counts.get(p.id, 0),
         )
         for p in prods
     ]
