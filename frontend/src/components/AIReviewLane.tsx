@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  deleteReviewProject, getProjectStatus, listReviewProjects, listReviewResults,
+  bulkAcceptResults, createQueue, deleteReviewProject, getProjectStatus, listReviewProjects, listReviewResults,
   pauseRun, recordDecision, runFull, runSample,
 } from '../api/client';
 import type { AIReviewResult, PaginatedReviewResults, ReviewProject } from '../types';
 import ReviewProjectSetup from './ReviewProjectSetup';
+import { showToast } from './Toast';
 
 interface Props {
   productionId: number;
   onViewDocument: (docId: string, excerpts?: string[]) => void;
-  onBack: () => void;
 }
 
 const CAT_COLORS: Record<string, string> = {
@@ -28,7 +28,7 @@ function getCategoryStyle(categories: { name: string; color: string; description
   };
 }
 
-export default function AIReviewPage({ productionId, onViewDocument, onBack }: Props) {
+export default function AIReviewLane({ productionId, onViewDocument }: Props) {
   const [projects, setProjects] = useState<ReviewProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [activeProject, setActiveProject] = useState<ReviewProject | null>(null);
@@ -39,6 +39,16 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
   const [sort, setSort] = useState('confidence_asc');
   const [decisionNote, setDecisionNote] = useState('');
   const pollRef = useRef<number | null>(null);
+
+  // Bulk accept
+  const [bulkThreshold, setBulkThreshold] = useState(80);
+  const [bulkAccepting, setBulkAccepting] = useState(false);
+
+  // Queue from this slice
+  const [showQueueForm, setShowQueueForm] = useState(false);
+  const [queueDecision, setQueueDecision] = useState('relevant');
+  const [queueName, setQueueName] = useState('AI relevant ≥80%');
+  const [queueCreating, setQueueCreating] = useState(false);
 
   // Load projects
   useEffect(() => {
@@ -153,6 +163,49 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
     if (activeProjectId === id) { setActiveProjectId(null); setResults(null); setSelectedResult(null); }
   };
 
+  const handleBulkAccept = async () => {
+    if (!activeProject) return;
+    setBulkAccepting(true);
+    try {
+      const { accepted } = await bulkAcceptResults(productionId, activeProject.id, bulkThreshold);
+      showToast(`Accepted ${accepted} suggestions`, 'success');
+      await fetchResults();
+      const updated = await listReviewProjects(productionId);
+      setProjects(updated);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Bulk accept failed', 'error');
+    } finally {
+      setBulkAccepting(false);
+    }
+  };
+
+  const openQueueForm = () => {
+    const decision = queueDecision || 'relevant';
+    setQueueName(`AI ${decision} ≥80%`);
+    setShowQueueForm(true);
+  };
+
+  const handleQueueDecisionChange = (decision: string) => {
+    setQueueDecision(decision);
+    setQueueName(`AI ${decision} ≥80%`);
+  };
+
+  const handleCreateQueueFromSlice = async () => {
+    if (!activeProject) return;
+    setQueueCreating(true);
+    try {
+      await createQueue(productionId, queueName.trim() || `AI ${queueDecision} ≥80%`, '', '', {
+        ai: { project_id: activeProject.id, decision: queueDecision, min_confidence: 80, exclude_decided: true },
+      });
+      showToast(`Queue "${queueName.trim() || queueDecision}" created`, 'success');
+      setShowQueueForm(false);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not create queue', 'error');
+    } finally {
+      setQueueCreating(false);
+    }
+  };
+
   const isProcessing = activeProject && ['sampling', 'running'].includes(activeProject.status);
   const progressPct = activeProject && activeProject.total_documents > 0
     ? Math.round((activeProject.processed_documents / activeProject.total_documents) * 100) : 0;
@@ -161,11 +214,13 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
   const agreementRate = results?.agreement_rate;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      {/* Header */}
-      <div className="app-header">
-        <button className="btn-header" onClick={onBack}>← Back</button>
-        <span className="logo">Smart Review</span>
+    <div className="review-lane" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Lane toolbar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--color-neutral-200)',
+      }}>
+        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-neutral-500)' }}>Smart Review</span>
         <button className="btn btn-primary btn-sm" onClick={() => setShowSetup(true)}>
           + New Review Project
         </button>
@@ -233,6 +288,55 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
                   onClick={() => handleDelete(activeProject.id)}>Delete</button>
               </div>
 
+              {/* Results header: bulk accept + queue-from-slice */}
+              <div style={{
+                display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-3)',
+                padding: 'var(--space-2) var(--space-3)', marginBottom: 'var(--space-3)',
+                background: 'var(--color-neutral-50)', border: '1px solid var(--color-neutral-200)', borderRadius: 'var(--radius-md)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+                  <span>Bulk accept &ge;</span>
+                  <input
+                    type="number" className="input" min={0} max={100}
+                    value={bulkThreshold}
+                    onChange={e => setBulkThreshold(Number(e.target.value) || 0)}
+                    style={{ width: 64, padding: '2px 6px' }}
+                  />
+                  <span>%</span>
+                  <button className="btn btn-secondary btn-sm" disabled={bulkAccepting} onClick={handleBulkAccept}>
+                    {bulkAccepting ? 'Accepting…' : 'Bulk accept'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  {!showQueueForm ? (
+                    <button className="btn btn-ghost btn-sm" onClick={openQueueForm}>
+                      &rarr; Queue from this slice
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+                      <select className="input" value={queueDecision} onChange={e => handleQueueDecisionChange(e.target.value)} style={{ padding: '2px 6px' }}>
+                        {activeProject.categories.map(c => (
+                          <option key={c.name} value={c.name}>{c.name}</option>
+                        ))}
+                        {!activeProject.categories.some(c => c.name === 'relevant') && (
+                          <option value="relevant">relevant</option>
+                        )}
+                      </select>
+                      <input
+                        type="text" className="input" value={queueName}
+                        onChange={e => setQueueName(e.target.value)}
+                        style={{ width: 200, padding: '2px 6px' }}
+                      />
+                      <button className="btn btn-primary btn-sm" disabled={queueCreating} onClick={handleCreateQueueFromSlice}>
+                        {queueCreating ? 'Creating…' : 'Create'}
+                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setShowQueueForm(false)}>Cancel</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Progress bar */}
               {isProcessing && (
                 <div style={{ height: 4, background: 'var(--color-neutral-200)', borderRadius: 2, marginBottom: 'var(--space-3)' }}>
@@ -286,7 +390,7 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
                   </div>
                   {r.attorney_decision && (
                     <span style={{ fontSize: 'var(--text-xs)', color: r.attorney_decision === 'agree' ? 'var(--color-success-600)' : 'var(--color-warning-600)' }}>
-                      {r.attorney_decision === 'agree' ? '\u2713' : '\u270E'}
+                      {r.attorney_decision === 'agree' ? '✓' : '✎'}
                     </span>
                   )}
                 </div>

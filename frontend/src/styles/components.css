@@ -1381,3 +1381,10 @@ mark {
   opacity: 1;
   box-shadow: var(--shadow-ring);
 }
+
+/* ── AI review lane (embeddable, no page chrome) ── */
+
+.review-lane {
+  width: 100%;
+  min-height: 0;
+}
