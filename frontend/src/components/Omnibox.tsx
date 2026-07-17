@@ -22,10 +22,14 @@ export default function Omnibox({ onSearch, initialQuery = '' }: Props) {
   const [metadataFilters, setMetadataFilters] = useState<Record<string, string>>({});
   const [filterKey, setFilterKey] = useState('');
   const [filterValue, setFilterValue] = useState('');
+  const [prevInitialQuery, setPrevInitialQuery] = useState(initialQuery);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setQuery(initialQuery); setModeOverride(null); }, [initialQuery]);
+  if (initialQuery !== prevInitialQuery) {
+    setPrevInitialQuery(initialQuery);
+    setQuery(initialQuery);
+    setModeOverride(null);
+  }
 
   const loadSaved = () => { getSavedSearches().then(setSavedSearches).catch(() => {}); };
   useEffect(loadSaved, []);
