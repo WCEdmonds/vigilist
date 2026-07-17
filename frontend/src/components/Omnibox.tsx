@@ -132,7 +132,7 @@ export default function Omnibox({ onSearch, initialQuery = '' }: Props) {
             <div
               key={ss.id}
               className="dropdown-item omnibox-saved-item"
-              onClick={() => { setQuery(ss.query); setMenu('none'); onSearch(ss.query); }}
+              onClick={() => { setQuery(ss.query); setMenu('none'); setModeOverride(null); onSearch(ss.query); }}
             >
               <div className="omnibox-saved-text">
                 <div className="omnibox-saved-name">{ss.name}</div>
