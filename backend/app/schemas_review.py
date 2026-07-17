@@ -72,6 +72,10 @@ class AttorneyDecision(BaseModel):
     note: str | None = None
 
 
+class BulkAcceptRequest(BaseModel):
+    min_confidence: int
+
+
 class PaginatedResults(BaseModel):
     results: list[AIReviewResultOut]
     total: int

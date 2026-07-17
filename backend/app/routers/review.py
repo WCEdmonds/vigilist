@@ -9,14 +9,17 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies import ROLE_RANK, get_user_role_for_production
 from app.models import Document, Production, User
 from app.models_review import AIReviewResult, ReviewProject
 from app.routers.auth import get_current_user
 from app.schemas_review import (
-    AIReviewResultOut, AttorneyDecision, PaginatedResults,
+    AIReviewResultOut, AttorneyDecision, BulkAcceptRequest, PaginatedResults,
     ReviewProjectCreate, ReviewProjectOut, ReviewProjectUpdate,
 )
 from app.services.ai_review import DEFAULT_CATEGORIES
+from app.services.audit import log_action
+from app.services.review_tags import apply_decision_tag
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/review", tags=["review"])
@@ -366,6 +369,11 @@ async def record_decision(
 
     result.attorney_decision = body.decision
     result.attorney_note = body.note
+
+    project = await db.get(ReviewProject, result.project_id)
+    if project:
+        await apply_decision_tag(db, user, result, body.decision, project)
+
     await db.commit()
     await db.refresh(result)
 
@@ -380,6 +388,48 @@ async def record_decision(
         prompt_version=result.prompt_version, api_model=result.api_model,
         api_cost_tokens=result.api_cost_tokens, created_at=result.created_at,
     )
+
+
+@router.post("/projects/{production_id}/{project_id}/bulk-accept")
+async def bulk_accept(
+    production_id: int,
+    project_id: int,
+    body: BulkAcceptRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Accept all undecided AI results at/above a confidence threshold, tagging each. Manager+."""
+    project = await db.get(ReviewProject, project_id)
+    if not project or project.production_id != production_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
+    result = await db.execute(
+        select(AIReviewResult)
+        .where(AIReviewResult.project_id == project_id)
+        .where(AIReviewResult.attorney_decision.is_(None))
+        .where(AIReviewResult.confidence_score >= body.min_confidence)
+        .where(AIReviewResult.ai_decision != "needs_review")
+    )
+    results = result.scalars().all()
+
+    count = 0
+    for r in results:
+        r.attorney_decision = "agree"
+        await apply_decision_tag(db, user, r, "agree", project)
+        count += 1
+
+    await log_action(
+        db, user, "ai_suggestions_bulk_accepted", "review_project", str(project_id),
+        production_id=production_id,
+        details={"count": count, "min_confidence": body.min_confidence},
+    )
+
+    await db.commit()
+    return {"accepted": count}
 
 
 # ── Status Polling ──
