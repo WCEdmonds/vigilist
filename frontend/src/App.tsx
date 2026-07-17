@@ -25,6 +25,7 @@ import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
 import { useOnboarding } from './hooks/useOnboarding';
 import { SLIDES } from './onboarding/slides';
+import { detectSearchMode, type SearchMode } from './utils/searchMode';
 import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
@@ -53,7 +54,7 @@ function Home({ production, onSwitchProduction, onIngestComplete, onOpenGuide }:
   const [docPage, setDocPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(!!initialUrl.q);
-  const [lastSearchMode, setLastSearchMode] = useState<'fulltext' | 'semantic'>('fulltext');
+  const [lastSearchMode, setLastSearchMode] = useState<SearchMode>('fulltext');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
@@ -141,20 +142,14 @@ function Home({ production, onSwitchProduction, onIngestComplete, onOpenGuide }:
 
   const [lastMetadata, setLastMetadata] = useState<Record<string, string> | undefined>(undefined);
 
-  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: 'fulltext' | 'semantic') => {
+  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => {
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
     setLastMetadata(metadata);
 
-    // Use forced mode if provided, otherwise auto-detect
-    const mode = forceMode ?? (
-      query.length > 40
-        || /\b(what|where|who|when|why|how|which|find|show|any|all)\b/i.test(query)
-        || query.includes('?')
-      ? 'semantic' : 'fulltext'
-    );
+    const mode = forceMode ?? detectSearchMode(query);
     setLastSearchMode(mode);
 
     try {
