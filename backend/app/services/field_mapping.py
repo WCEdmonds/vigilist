@@ -3,6 +3,9 @@ plus (Task 4) an AI-assisted fallback for unrecognized columns."""
 
 from __future__ import annotations
 
+import json
+import logging
+
 # Canonical fields that a source column can map to. "text_link"/"native_link"
 # are structural (used to locate text/native files); the rest are typed columns.
 CANONICAL_FIELDS: list[str] = [
@@ -57,9 +60,6 @@ def match_aliases(headers: list[str]) -> dict[str, str]:
             result[canon] = h
     return result
 
-
-import json
-import logging
 
 logger = logging.getLogger(__name__)
 
