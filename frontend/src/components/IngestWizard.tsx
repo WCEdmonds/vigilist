@@ -234,7 +234,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     ? Math.round(((job.processed_files + (job.skipped_files || 0)) / job.total_files) * 100)
     : 0;
 
-  const isActive = stage === 'uploading' || stage === 'processing';
+  const isActive = stage === 'uploading' || stage === 'processing' || stage === 'mapping';
   const isDone = stage === 'complete' || stage === 'error';
   const [minimized, setMinimized] = useState(false);
 
@@ -443,7 +443,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                             ? { background: '#fef3c7', color: '#92400e', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }
                             : { background: 'var(--color-neutral-100)', color: 'var(--color-neutral-500)', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 };
                         return (
-                          <tr key={col.source_name} style={{ borderBottom: '1px solid var(--color-neutral-100)' }}>
+                          <tr key={`${col.source_name}-${i}`} style={{ borderBottom: '1px solid var(--color-neutral-100)' }}>
                             <td style={{ padding: '7px 10px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{col.source_name}</td>
                             <td style={{ padding: '7px 10px', color: 'var(--color-neutral-500)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={col.samples.join(', ')}>{col.samples.join(', ')}</td>
                             <td style={{ padding: '7px 10px' }}>
