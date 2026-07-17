@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ChatState } from '../hooks/useChat';
+import { showToast } from './Toast';
 
 interface Props {
   chat: ChatState;
@@ -23,12 +24,23 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
   const submit = () => {
     const el = inputRef.current;
     if (!el) return;
-    chat.send(el.value);
+    const value = el.value;
+    if (!value.trim() || chat.streaming) return;
+    chat.send(value);
     el.value = '';
   };
 
+  const copyTranscript = async () => {
+    try {
+      await navigator.clipboard.writeText(chat.transcriptText());
+      showToast('Transcript copied', 'success');
+    } catch {
+      showToast('Copy failed', 'error');
+    }
+  };
+
   const download = () => {
-    const blob = new Blob([chat.transcriptText()], { type: 'text/plain' });
+    const blob = new Blob([chat.transcriptText()], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -41,7 +53,7 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
     <div className="chat-panel">
       {chat.messages.length > 0 && (
         <div className="chat-actions">
-          <button type="button" className="btn btn-ghost btn-xs" onClick={() => navigator.clipboard.writeText(chat.transcriptText())}>Copy</button>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={copyTranscript}>Copy</button>
           <button type="button" className="btn btn-ghost btn-xs" onClick={download}>Download</button>
           <button type="button" className="btn btn-ghost btn-xs" onClick={chat.clear}>Clear</button>
         </div>
@@ -90,6 +102,7 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
           rows={2}
           placeholder={placeholder}
           aria-label="Ask the AI"
+          disabled={chat.streaming}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
           }}
@@ -97,7 +110,7 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
         {chat.streaming ? (
           <button type="button" className="btn btn-secondary btn-sm" onClick={chat.stop}>Stop</button>
         ) : (
-          <button type="button" className="btn btn-primary btn-sm" onClick={submit}>Send</button>
+          <button type="button" className="btn btn-primary btn-sm" disabled={chat.streaming} onClick={submit}>Send</button>
         )}
       </div>
     </div>
