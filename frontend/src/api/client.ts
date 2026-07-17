@@ -559,14 +559,6 @@ export const recordDecision = (resultId: number, decision: string, note?: string
 
 // ── Intelligence ──
 
-export function detectDuplicates(productionId: number): Promise<{ status: string; exact_groups: number; similar_groups: number; total_documents_grouped: number }> {
-  return request(`/api/productions/${productionId}/detect-duplicates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-}
-
-export function clusterProduction(productionId: number): Promise<{ status: string; clusters: ClusterInfo[] }> {
-  return request(`/api/productions/${productionId}/cluster`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-}
-
 export function getClusters(productionId: number): Promise<ClusterInfo[]> {
   return request<ClusterInfo[]>(`/api/productions/${productionId}/clusters`);
 }

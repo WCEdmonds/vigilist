@@ -17,6 +17,11 @@ from app.utils.parsers import parse_dat, parse_opt
 
 logger = logging.getLogger(__name__)
 
+# Strong references to detached local (non-Cloud-Tasks) pipeline tasks — without
+# this, asyncio only holds a weak reference to a fire-and-forget task, and it
+# can be garbage-collected mid-run.
+_pipeline_tasks: set = set()
+
 # Known DAT field names that map to document columns
 FIELD_MAP = {
     "Begin Bates": "bates_begin",
@@ -412,7 +417,9 @@ async def _finalize_job_if_done(
             if task_service.is_configured():
                 task_service.enqueue_pipeline(production_id)
             else:
-                asyncio.create_task(run_ambient_pipeline(production_id))
+                task = asyncio.create_task(run_ambient_pipeline(production_id))
+                _pipeline_tasks.add(task)
+                task.add_done_callback(_pipeline_tasks.discard)
         except Exception:
             logger.exception("Failed to start ambient pipeline for production %s", production_id)
 
