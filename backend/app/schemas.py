@@ -476,3 +476,9 @@ class ClusterOut(BaseModel):
 class PropagateTagRequest(BaseModel):
     tag_id: int
     relationship_type: Literal["duplicate", "family", "thread"]
+
+
+class ClusterDocumentOut(BaseModel):
+    document_id: str
+    bates_begin: str
+    title: str | None = None
