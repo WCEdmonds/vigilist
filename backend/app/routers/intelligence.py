@@ -11,7 +11,7 @@ from app.models import (
     DocumentDuplicate, DocumentTag, DuplicateGroup, User,
 )
 from app.routers.auth import get_current_user
-from app.schemas import ClusterOut, DuplicateEntryOut, PropagateTagRequest
+from app.schemas import ClusterOut, DuplicateEntryOut, FamilyMemberOut, FamilyThreadOut, PropagateTagRequest
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
@@ -128,6 +128,38 @@ async def get_document_duplicates(
     ]
 
 
+@router.get("/documents/{doc_id}/family", response_model=FamilyThreadOut)
+async def get_document_family(
+    doc_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    doc = await db.get(Document, doc_id)
+    if not doc or doc.production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    async def _members(id_col, id_val):
+        if not id_val:
+            return []
+        result = await db.execute(
+            select(Document.id, Document.bates_begin, Document.title, Document.is_inclusive)
+            .where(id_col == id_val)
+            .where(Document.production_id.in_(accessible))
+            .where(Document.id != doc_id)
+            .order_by(Document.bates_begin)
+        )
+        return [
+            FamilyMemberOut(document_id=r[0], bates_begin=r[1], title=r[2], is_inclusive=r[3])
+            for r in result.all()
+        ]
+
+    return FamilyThreadOut(
+        family=await _members(Document.family_id, doc.family_id),
+        thread=await _members(Document.thread_id, doc.thread_id),
+    )
+
+
 @router.post("/documents/{doc_id}/propagate-tag")
 async def propagate_tag(
     doc_id: UUID,
@@ -159,6 +191,22 @@ async def propagate_tag(
                 .where(DocumentDuplicate.document_id != doc_id)
             )
             related_ids = [r[0] for r in members.all()]
+    elif body.relationship_type == "family" and doc.family_id:
+        members = await db.execute(
+            select(Document.id)
+            .where(Document.family_id == doc.family_id)
+            .where(Document.production_id == doc.production_id)
+            .where(Document.id != doc_id)
+        )
+        related_ids = [r[0] for r in members.all()]
+    elif body.relationship_type == "thread" and doc.thread_id:
+        members = await db.execute(
+            select(Document.id)
+            .where(Document.thread_id == doc.thread_id)
+            .where(Document.production_id == doc.production_id)
+            .where(Document.id != doc_id)
+        )
+        related_ids = [r[0] for r in members.all()]
 
     # Apply tag to each related document
     tagged = 0
