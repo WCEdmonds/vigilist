@@ -1,6 +1,7 @@
 import { auth } from '../firebase';
 import type {
   AIReviewResult, Annotation, BatchDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  FamilyThread,
   IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag,
@@ -577,5 +578,9 @@ export function getClusters(productionId: number): Promise<ClusterInfo[]> {
 
 export function getDocumentDuplicates(docId: string): Promise<DuplicateEntry[]> {
   return request<DuplicateEntry[]>(`/api/documents/${docId}/duplicates`);
+}
+
+export function getDocumentFamily(docId: string): Promise<FamilyThread> {
+  return request<FamilyThread>(`/api/documents/${docId}/family`);
 }
 

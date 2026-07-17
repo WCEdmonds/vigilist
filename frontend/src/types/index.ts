@@ -306,3 +306,15 @@ export interface DuplicateEntry {
   type: string;
   custodian: string | null;
 }
+
+export interface FamilyMember {
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
+  is_inclusive: boolean;
+}
+
+export interface FamilyThread {
+  family: FamilyMember[];
+  thread: FamilyMember[];
+}
