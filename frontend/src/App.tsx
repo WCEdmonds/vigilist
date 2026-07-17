@@ -272,6 +272,28 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     }
   };
 
+  const themeIndexById = useMemo(() => {
+    const m = new Map<number, number>();
+    clusters.forEach((c, i) => m.set(c.id, (i % 8) + 1));
+    return m;
+  }, [clusters]);
+
+  const themeChip = (d: DocumentSummary) => {
+    if (d.cluster_id == null || !themeIndexById.has(d.cluster_id)) return null;
+    const active = filterClusterId === d.cluster_id;
+    return (
+      <button
+        type="button"
+        className={`doc-theme-chip${active ? ' is-active' : ''}`}
+        style={{ background: `var(--theme-${themeIndexById.get(d.cluster_id)})` }}
+        onClick={e => { e.stopPropagation(); setFilterClusterId(active ? null : d.cluster_id!); }}
+        title={d.cluster_label ?? 'Theme'}
+      >
+        {d.cluster_label ?? 'Theme'}
+      </button>
+    );
+  };
+
   // AI Review full-screen mode
   if (showAIReview) {
     return <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
@@ -542,6 +564,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                       <th>Bates Range</th>
                       <th>Title</th>
                       <th style={{ width: 80 }}>Type</th>
+                      <th>Theme</th>
                       <th>Pages</th>
                       <th>Tags</th>
                       <th>Notes</th>
@@ -593,6 +616,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             {d.file_type === 'document' ? 'doc' : d.file_type}
                           </span>
                         </td>
+                        <td className="meta-cell">{themeChip(d)}</td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -642,6 +666,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             {tag.name}
                           </span>
                         ))}
+                        {themeChip(d)}
                       </div>
                     </div>
                   </div>

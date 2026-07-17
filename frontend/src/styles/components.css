@@ -1356,3 +1356,28 @@ mark {
   color: var(--color-neutral-600);
   border-bottom: 1px solid var(--color-neutral-100);
 }
+
+/* ── Document list theme chip ── */
+
+.doc-theme-chip {
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 1px var(--space-2);
+  font-size: 10px;
+  font-weight: var(--font-medium);
+  color: var(--color-neutral-0);
+  cursor: pointer;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+  transition: opacity var(--transition-fast), box-shadow var(--transition-fast);
+}
+.doc-theme-chip:hover {
+  opacity: 1;
+}
+.doc-theme-chip.is-active {
+  opacity: 1;
+  box-shadow: var(--shadow-ring);
+}
