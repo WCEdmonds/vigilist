@@ -44,3 +44,6 @@ firebase-adminsdk*.json
 .env
 .env.*
 !.env.example
+
+.playwright-mcp/
+.superpowers/
