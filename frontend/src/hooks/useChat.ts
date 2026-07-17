@@ -81,6 +81,17 @@ export function useChat(): ChatState {
         showToast('The AI agent returned an empty response.', 'error');
       }
       accRef.current = '';
+    }).catch(() => {
+      // getIdToken() (client.ts, pre-stream) can reject outright — e.g. offline —
+      // which streamChat doesn't catch. If stop() already ran, it committed the
+      // partial text and reset state synchronously; mirror the .then() short
+      // circuit so we don't double-handle or toast on top of a user-initiated stop.
+      if (controller.signal.aborted) { setStreaming(false); setStreamingText(''); return; }
+      abortRef.current = null;
+      accRef.current = '';
+      setStreaming(false);
+      setStreamingText('');
+      showToast('Chat request failed — check your connection.', 'error');
     });
   }, [messages, attachedDocs, streaming]);
 

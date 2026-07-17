@@ -1256,6 +1256,9 @@
   background: var(--color-ink);
   color: var(--color-parchment-light);
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 120; /* above doc-table sticky th (z 10), below the drawer/menus */
 }
 
 .command-bar-logo {
@@ -1648,10 +1651,15 @@
   text-transform: uppercase;
 }
 
-/* Rail pushes the centered floating bar leftward so it stays centered over the list. */
-.home-shell.rail-open ~ .floating-bar,
-.home-shell.rail-open .floating-bar {
-  left: calc(50% - var(--rail-width) / 2);
+/* Rail pushes the centered floating bar leftward so it stays centered over the list.
+   Scoped to desktop widths only — below 1025px the rail is hidden (see the
+   max-width: 1024px block), so the shift must not apply there, and the
+   max-width: 768px block already forces the bar full-width regardless. */
+@media (min-width: 1025px) {
+  .home-shell.rail-open ~ .floating-bar,
+  .home-shell.rail-open .floating-bar {
+    left: calc(50% - var(--rail-width) / 2);
+  }
 }
 
 @media (max-width: 1024px) {
@@ -1660,6 +1668,12 @@
      limitation for this phase. */
   .context-rail,
   .context-rail-tab {
+    display: none;
+  }
+
+  /* The rail is gone, so its "✦ Ask AI" omnibox entry would otherwise fire
+     real API calls into a chat the user can never see. */
+  .omnibox-ask {
     display: none;
   }
 }
