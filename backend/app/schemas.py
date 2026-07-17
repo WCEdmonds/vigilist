@@ -468,6 +468,7 @@ class DuplicateEntryOut(BaseModel):
     title: str | None
     similarity: float
     type: str
+    custodian: str | None = None
 
 
 class ClusterOut(BaseModel):
