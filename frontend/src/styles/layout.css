@@ -1346,6 +1346,20 @@
   right: 0;
 }
 
+/* Buttons used as menu rows — strip UA button chrome so .dropdown-item
+   renders as a full-width menu row. */
+.cb-menu button.dropdown-item,
+.omnibox-menu button.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
 .cb-menu .dropdown-item.is-current {
   font-weight: var(--font-semibold);
   color: var(--color-ink);

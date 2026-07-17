@@ -915,6 +915,7 @@ function AppRouter() {
   } else {
     content = (
       <Home
+        key={activeProduction.id}
         production={activeProduction}
         productions={productions}
         onSelectProduction={setActiveProduction}
