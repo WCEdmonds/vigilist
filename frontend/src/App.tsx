@@ -719,7 +719,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         <ProductionSettings
           production={production}
           onClose={() => setShowSettings(false)}
-          onSaved={() => setShowSettings(false)}
+          onSaved={(updated) => { onSelectProduction(updated); setShowSettings(false); }}
         />
       )}
 
