@@ -190,6 +190,29 @@ async def ingest_production(
 INGEST_BATCH_SIZE = 25
 
 
+def _download_dat_to_temp(production_id: int) -> str:
+    """Download the production's DAT load file to a temp path and return it.
+
+    Reused by both bootstrap_ingest_source and analyze_load_file so we never
+    duplicate the Firebase Storage access logic.
+    """
+    import tempfile
+
+    from app.services.storage import download_file, list_files
+
+    prefix = f"productions/{production_id}/raw/"
+    data_files = list_files(f"{prefix}DATA/")
+    dat_remote = next((f for f in data_files if f.lower().endswith(".dat")), None)
+
+    if not dat_remote:
+        raise FileNotFoundError("No .dat file found in uploaded DATA/ folder")
+
+    tmp_dir = tempfile.mkdtemp(prefix=f"ingest_dat_{production_id}_")
+    dat_local = os.path.join(tmp_dir, "data.dat")
+    download_file(dat_remote, dat_local)
+    return dat_local
+
+
 def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, list[str]]]:
     """Download and parse the DAT and OPT files for a production.
 
@@ -220,6 +243,30 @@ def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, l
     records = parse_dat(dat_local)
     opt_pages = parse_opt(opt_local)
     return records, opt_pages
+
+
+def analyze_load_file(production_id: int) -> dict:
+    """Parse the uploaded load file and propose a column mapping.
+
+    Downloads the DAT file from Firebase Storage (reusing _download_dat_to_temp),
+    parses it with parse_loadfile, and runs build_proposed_mapping.
+    Never raises on AI failure — build_proposed_mapping handles that gracefully.
+    """
+    from app.utils.loadfile import parse_loadfile
+    from app.services.field_mapping import build_proposed_mapping
+
+    dat_path = _download_dat_to_temp(production_id)
+    parsed = parse_loadfile(dat_path)
+    columns = build_proposed_mapping(parsed.headers, parsed.sample_rows)
+    return {
+        "format": {
+            "encoding": parsed.encoding,
+            "delimiter": parsed.delimiter,
+        },
+        "columns": columns,
+        "sample_rows": parsed.sample_rows,
+        "total_rows": parsed.total_rows,
+    }
 
 
 def process_ingest_record(
