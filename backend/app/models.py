@@ -79,6 +79,9 @@ class Production(Base):
     description = Column(Text, nullable=True)
     owner_id = Column(String(128), ForeignKey("users.id"), nullable=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True)
+    case_context = Column(Text, nullable=True)
+    brief = Column(JSONB, nullable=True)
+    ai_pipeline_status = Column(JSONB, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     documents = relationship("Document", back_populates="production")
