@@ -223,8 +223,21 @@ class ProductionWithAccess(BaseModel):
     is_owner: bool = False
     created_at: datetime
     document_count: int = 0
+    case_context: str | None = None
+    has_brief: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class ProductionUpdate(BaseModel):
+    description: str | None = None
+    case_context: str | None = None
+
+
+class PipelineStatusOut(BaseModel):
+    status: dict | None = None
+    brief: dict | None = None
+    case_context: str | None = None
 
 
 class ProductionAccessOut(BaseModel):
