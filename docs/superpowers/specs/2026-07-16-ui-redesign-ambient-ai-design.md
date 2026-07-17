@@ -149,6 +149,15 @@ New audit-log action types (no analytics vendor): `brief_generated`, `summary_ba
 
 Each phase gets its own implementation plan; this spec is the umbrella document.
 
+### Phase 5 cleanup notes (recorded during Phase 1 final review)
+
+- Delete fully-dead CSS: `.search-toolbar`/`.search-row` (layout.css ~265-280 + mobile override ~980), `.saved-list`/`.saved-item` (~611-643), `.production-grid`/`.production-card*` (~718-765, ~1025). Keep `.app-header`/`.btn-header` until DocumentViewer, AIReviewPage, CorpusAnalysis, BatchReview, QCReview are restyled.
+- Delete orphaned `nlSearch` in `frontend/src/api/client.ts` (backend `/api/ai/nl-search` endpoint has no UI caller).
+- Collapse `--cb-height` and `--header-height` into one token when `.app-header` dies.
+- `--color-brass-soft` currently unused — use or remove; spec §4 name reconciled: the shipped token is `--color-brass`.
+- Menus: add Escape-to-close + arrow-key navigation (role="menu" semantics); logo span needs tabIndex/onKeyDown; saved/filter rows keyboard operability.
+- Omnibox polish: pill snaps back to auto-detected mode after an overridden submit while results show the forced mode; add try/catch + user feedback on saved-search create/delete.
+
 ## Out of scope
 
 - Dark mode.
