@@ -84,7 +84,8 @@ async def detect_duplicates(
 ) -> dict:
     """Run full duplicate detection for a production.
 
-    Returns { exact_groups: int, similar_groups: int, total_documents_grouped: int }
+    Returns { hash_groups: int, exact_groups: int, similar_groups: int,
+    total_documents_grouped: int }
     """
     # Clear previous results
     old_groups = await db.execute(
