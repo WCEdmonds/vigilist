@@ -11,6 +11,8 @@ import TextPanel from './TextPanel';
 import AnnotationPopover from './AnnotationPopover';
 import AnnotationSidebar from './AnnotationSidebar';
 
+const TIER_RANK: Record<string, number> = { hash: 0, exact: 1, similar: 2 };
+const tierRank = (t: string): number => TIER_RANK[t] ?? 9;
 
 interface Props {
   docId: string;
@@ -403,7 +405,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
               <div style={{ flex: 0, minHeight: 60, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderTop: '1px solid rgba(44,62,107,0.08)' }}>
                 <div className="panel-header">Duplicates ({duplicates.length})</div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2)' }}>
-                  {duplicates.map(d => (
+                  {[...duplicates].sort((a, b) => tierRank(a.type) - tierRank(b.type)).map(d => (
                     <div
                       key={d.document_id}
                       onClick={() => onNavigate(d.document_id)}
@@ -412,8 +414,17 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                       <div style={{ fontWeight: 600 }}>{d.bates_begin}</div>
                       <div style={{ color: 'rgba(44,62,107,0.5)' }}>{d.title || 'No title'}</div>
                       <span className="badge badge-gray" style={{ fontSize: 9 }}>
-                        {d.type === 'exact' ? 'Exact' : 'Similar'} · {Math.round(d.similarity * 100)}%
+                        {d.type === 'hash'
+                          ? 'Identical file'
+                          : d.type === 'exact'
+                            ? `Near-identical text · ${Math.round(d.similarity * 100)}%`
+                            : `Similar · ${Math.round(d.similarity * 100)}%`}
                       </span>
+                      {d.custodian && (
+                        <div style={{ color: 'rgba(44,62,107,0.5)', fontSize: 9 }}>
+                          Custodian: {d.custodian}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
