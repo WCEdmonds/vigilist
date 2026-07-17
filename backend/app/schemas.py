@@ -142,6 +142,8 @@ class DocumentSummary(BaseModel):
     tags: list[TagOut] = []
     note_count: int = 0
     annotation_count: int = 0
+    cluster_id: int | None = None
+    cluster_label: str | None = None
 
     model_config = {"from_attributes": True}
 
