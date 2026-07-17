@@ -1395,6 +1395,16 @@ mark {
   box-shadow: var(--shadow-ring);
 }
 
+/* ── Document list AI relevance marker ── */
+
+.ai-marker {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.ai-marker .ai-marker-star {
+  color: var(--color-brass);
+}
+
 /* ── AI review lane (embeddable, no page chrome) ── */
 
 .review-lane {
