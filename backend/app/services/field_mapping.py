@@ -13,6 +13,7 @@ CANONICAL_FIELDS: list[str] = [
     "custodian", "date_sent", "date_received", "date_created", "date_modified",
     "file_hash_md5", "file_hash_sha256", "file_type", "file_name", "source_path",
     "email_from", "email_to", "email_cc", "email_bcc", "email_subject",
+    "family_id", "thread_id", "is_inclusive",
 ]
 
 ALIAS_DICT: dict[str, list[str]] = {
@@ -36,6 +37,9 @@ ALIAS_DICT: dict[str, list[str]] = {
     "email_cc": ["CC", "Email CC", "Copyee"],
     "email_bcc": ["BCC", "Email BCC", "Blind Copyee"],
     "email_subject": ["Subject", "Email Subject", "Title"],
+    "family_id": ["Group Identifier", "GroupID", "Group ID", "Family Range", "Family ID", "Family", "Parent Doc ID", "Parent ID", "Attachment Parent"],
+    "thread_id": ["Thread ID", "ThreadID", "Conversation Index", "Conversation ID", "Email Thread"],
+    "is_inclusive": ["Inclusive Email", "Email Inclusive", "Inclusive", "Is Inclusive"],
 }
 
 

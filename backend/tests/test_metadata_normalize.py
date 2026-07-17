@@ -73,3 +73,26 @@ def test_promote_record_ignores_structural_targets():
     typed, leftover = promote_record({"BegBates": "ABC-1"}, {"bates_begin": "BegBates"})
     assert "bates_begin" not in typed
     assert "BegBates" not in leftover
+
+
+from app.services.metadata_normalize import normalize_bool
+
+
+def test_normalize_bool():
+    for v in ("Yes", "y", "TRUE", "t", "1"):
+        assert normalize_bool(v) is True
+    for v in ("No", "n", "false", "F", "0"):
+        assert normalize_bool(v) is False
+    for v in ("", "maybe", "  "):
+        assert normalize_bool(v) is None
+    assert normalize_bool(None) is None
+
+
+def test_promote_record_family_thread_inclusive():
+    record = {"Group Identifier": "FAM-1", "Thread ID": "TH-9", "Inclusive Email": "Yes"}
+    mapping = {"family_id": "Group Identifier", "thread_id": "Thread ID", "is_inclusive": "Inclusive Email"}
+    from app.services.metadata_normalize import promote_record
+    typed, _ = promote_record(record, mapping)
+    assert typed["family_id"] == "FAM-1"
+    assert typed["thread_id"] == "TH-9"
+    assert typed["is_inclusive"] is True

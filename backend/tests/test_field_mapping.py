@@ -106,6 +106,13 @@ def test_propose_ai_mapping_filters_invalid_targets():
     assert out == {}
 
 
+def test_match_aliases_family_thread_inclusive():
+    m = fm.match_aliases(["Group Identifier", "Conversation Index", "Inclusive Email"])
+    assert m["family_id"] == "Group Identifier"
+    assert m["thread_id"] == "Conversation Index"
+    assert m["is_inclusive"] == "Inclusive Email"
+
+
 def test_build_proposed_mapping_ai_path(monkeypatch):
     import json
 
