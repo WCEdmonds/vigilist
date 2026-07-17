@@ -11,6 +11,7 @@ class ReviewProjectCreate(BaseModel):
     sample_size: int = 50
     agreement_threshold: float = 0.80
     categories: list[dict] | None = None  # [{name, color, description}]
+    is_primary: bool = False
 
 
 class ReviewProjectUpdate(BaseModel):
@@ -18,6 +19,7 @@ class ReviewProjectUpdate(BaseModel):
     prompt_text: str | None = None
     sample_size: int | None = None
     agreement_threshold: float | None = None
+    is_primary: bool | None = None
 
 
 class ReviewProjectOut(BaseModel):
@@ -30,6 +32,7 @@ class ReviewProjectOut(BaseModel):
     sample_size: int
     agreement_threshold: float
     status: str
+    is_primary: bool
     total_documents: int
     processed_documents: int
     total_cost_tokens: int

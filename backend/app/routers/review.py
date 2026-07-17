@@ -5,7 +5,7 @@ import logging
 import random
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -53,6 +53,15 @@ async def create_project(
     if not production:
         raise HTTPException(status_code=404, detail="Production not found")
 
+    # Check if this is the first project for the production
+    count_result = await db.execute(
+        select(func.count()).select_from(ReviewProject).where(ReviewProject.production_id == production_id)
+    )
+    existing_count = count_result.scalar() or 0
+
+    # First project is always primary; otherwise honor body.is_primary
+    is_primary = existing_count == 0 or body.is_primary
+
     project = ReviewProject(
         production_id=production_id,
         name=body.name,
@@ -61,9 +70,21 @@ async def create_project(
         prompt_versions=[{"version": 1, "text": body.prompt_text, "created_at": str(func.now())}],
         sample_size=body.sample_size,
         agreement_threshold=body.agreement_threshold,
+        is_primary=is_primary,
         created_by=user.id,
     )
     db.add(project)
+    await db.flush()  # Flush to get the ID
+
+    # Clear is_primary on other projects if this one is primary
+    if is_primary:
+        await db.execute(
+            update(ReviewProject)
+            .where(ReviewProject.production_id == production_id)
+            .where(ReviewProject.id != project.id)
+            .values(is_primary=False)
+        )
+
     await db.commit()
     await db.refresh(project)
     return await _project_out(db, project)
@@ -98,6 +119,18 @@ async def update_project(
         })
         project.prompt_text = body.prompt_text
         project.prompt_versions = versions
+
+    # Handle is_primary update
+    if body.is_primary is True:
+        project.is_primary = True
+        await db.flush()  # Flush to ensure project is updated
+        # Clear is_primary on other projects
+        await db.execute(
+            update(ReviewProject)
+            .where(ReviewProject.production_id == production_id)
+            .where(ReviewProject.id != project.id)
+            .values(is_primary=False)
+        )
 
     await db.commit()
     await db.refresh(project)
@@ -382,7 +415,8 @@ async def _project_out(db: AsyncSession, project: ReviewProject) -> ReviewProjec
         prompt_versions=project.prompt_versions or [],
         categories=project.categories or DEFAULT_CATEGORIES,
         sample_size=project.sample_size, agreement_threshold=project.agreement_threshold,
-        status=project.status, total_documents=project.total_documents,
+        status=project.status, is_primary=project.is_primary,
+        total_documents=project.total_documents,
         processed_documents=project.processed_documents,
         total_cost_tokens=project.total_cost_tokens,
         created_by=project.created_by, created_at=project.created_at,
