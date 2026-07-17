@@ -1,3 +1,8 @@
+export interface AttachedDoc {
+  id: string;
+  label: string;
+}
+
 export interface Tag {
   id: number;
   name: string;
@@ -46,6 +51,8 @@ export interface DocumentSummary {
   processing_status: string;
   tags: Tag[];
   note_count: number;
+  cluster_id?: number | null;
+  cluster_label?: string | null;
 }
 
 export interface DocumentDetail {

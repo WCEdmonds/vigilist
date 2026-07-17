@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { streamChat, type ChatMessage } from '../api/client';
 import { showToast } from './Toast';
+import type { AttachedDoc } from '../types';
 
-export interface AttachedDoc {
-  id: string;
-  label: string;
-}
+export type { AttachedDoc } from '../types';
 
 interface Props {
   open: boolean;
