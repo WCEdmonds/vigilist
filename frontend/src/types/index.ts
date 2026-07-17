@@ -98,6 +98,7 @@ export interface ProductionInfo {
   owner_id: string | null;
   is_owner: boolean;
   created_at: string;
+  document_count: number;
 }
 
 export interface ProductionAccessEntry {

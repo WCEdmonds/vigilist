@@ -75,6 +75,10 @@
   --color-purple-600: #381e87;
   --color-purple-700: #2c166e;
 
+  /* ── Accent (brass — avatar chip, warm highlights) ── */
+  --color-brass: #c49a4a;
+  --color-brass-soft: rgba(196, 154, 74, 0.18);
+
   /* ── Typography ── */
   --font-sans: 'Libre Franklin', 'Segoe UI', system-ui, sans-serif;
   --font-serif: 'Cormorant Garamond', Garamond, 'Times New Roman', serif;
@@ -136,4 +140,5 @@
   --header-height: 52px;
   --nav-height: 44px;
   --sidebar-width: 400px;
+  --cb-height: 52px;
 }
