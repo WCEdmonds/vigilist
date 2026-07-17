@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ref, uploadBytesResumable } from 'firebase/storage';
 import { firebaseStorage, auth } from '../firebase';
-import { createProductionForIngest, startProcessing, getIngestStatus } from '../api/client';
-import type { IngestJob } from '../types';
+import { createProductionForIngest, startProcessing, getIngestStatus, getClassifyEstimate, startAutoClassification } from '../api/client';
+import { showToast } from './Toast';
+import type { IngestJob, ClassifyEstimate } from '../types';
 
 interface Props {
   onClose: () => void;
@@ -23,6 +24,10 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [job, setJob] = useState<IngestJob | null>(null);
   const [error, setError] = useState('');
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const [classifyEstimate, setClassifyEstimate] = useState<ClassifyEstimate | null>(null);
+  const [classifyEstimateFailed, setClassifyEstimateFailed] = useState(false);
+  const [shouldClassify, setShouldClassify] = useState(true);
+  const [startingClassification, setStartingClassification] = useState(false);
 
   // Set webkitdirectory attribute via ref (React doesn't support it as a prop)
   useEffect(() => {
@@ -174,6 +179,35 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
       }
     };
     poll();
+  };
+
+  // Fetch the classification cost estimate once the ingest reaches 'complete'.
+  useEffect(() => {
+    if (stage !== 'complete' || !job?.production_id) return;
+    let cancelled = false;
+    setClassifyEstimate(null);
+    setClassifyEstimateFailed(false);
+    setShouldClassify(true);
+    getClassifyEstimate(job.production_id)
+      .then(est => { if (!cancelled) setClassifyEstimate(est); })
+      .catch(() => { if (!cancelled) setClassifyEstimateFailed(true); });
+    return () => { cancelled = true; };
+  }, [stage, job?.production_id]);
+
+  const handleViewProduction = async () => {
+    if (shouldClassify && classifyEstimate && job?.production_id) {
+      setStartingClassification(true);
+      try {
+        await startAutoClassification(job.production_id);
+        showToast('Classification started', 'success');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Failed to start classification', 'error');
+      } finally {
+        setStartingClassification(false);
+      }
+    }
+    onComplete();
+    onClose();
   };
 
   const formatEta = (seconds: number) => {
@@ -412,8 +446,32 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                   {job?.skipped_files ? ` · ${job.skipped_files} skipped` : ''}
                   {job?.errors && job.errors.length > 0 && ` · ${job.errors.length} warnings`}
                 </div>
-                <button className="btn btn-primary" onClick={() => { onComplete(); onClose(); }}>
-                  View Production
+                {caseContext.trim() !== '' && !classifyEstimateFailed && classifyEstimate && (
+                  <label
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)',
+                      textAlign: 'left', marginBottom: 'var(--space-4)', padding: 'var(--space-2) var(--space-3)',
+                      background: 'var(--color-brass-soft)', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={shouldClassify}
+                      onChange={e => setShouldClassify(e.target.checked)}
+                      style={{ marginTop: 3, cursor: 'pointer' }}
+                    />
+                    <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-700)' }}>
+                      <span className="brief-ai-mark">✦</span> Classify all {classifyEstimate.doc_count} documents
+                      against your case description — est. ${classifyEstimate.est_usd.toFixed(2)}
+                    </span>
+                  </label>
+                )}
+                <button
+                  className="btn btn-primary"
+                  onClick={handleViewProduction}
+                  disabled={startingClassification}
+                >
+                  {startingClassification ? 'Starting classification…' : 'View Production'}
                 </button>
               </div>
             )}
