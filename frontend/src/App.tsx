@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
-import AIAgent, { type AttachedDoc } from './components/AIAgent';
 import AIReviewPage from './components/AIReviewPage';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
@@ -20,9 +19,11 @@ import { ToastContainer, showToast } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import OnboardingGuide from './components/OnboardingGuide';
+import ContextRail from './components/ContextRail';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
 import { useOnboarding } from './hooks/useOnboarding';
+import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
 import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
@@ -75,26 +76,28 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
 
-  // AI Agent chat (session-only) — floating launcher + "Send to AI Agent".
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatDocs, setChatDocs] = useState<AttachedDoc[]>([]);
-
-  // Attach the currently-selected documents to the AI agent and open the panel.
-  const sendSelectionToAgent = useCallback(() => {
-    const labelFor = (id: string): string => {
-      const fromSearch = searchResults.find(r => r.id === id);
-      if (fromSearch) return fromSearch.bates_begin;
-      const fromDocs = documents.find(d => d.id === id);
-      return fromDocs?.bates_begin ?? id.slice(0, 8);
-    };
-    const docs: AttachedDoc[] = Array.from(selectedIds).map(id => ({ id, label: labelFor(id) }));
-    setChatDocs(prev => {
-      // Merge with anything already attached, de-duplicating by id.
-      const seen = new Set(prev.map(d => d.id));
-      return [...prev, ...docs.filter(d => !seen.has(d.id))];
+  // AI chat, docked in the context rail (session-only conversation).
+  const chat = useChat();
+  const [railCollapsed, setRailCollapsed] = useState(() => {
+    try { return window.localStorage.getItem('vigilist.rail.collapsed') === '1'; } catch { return false; }
+  });
+  const toggleRail = useCallback(() => {
+    setRailCollapsed(prev => {
+      const next = !prev;
+      try { window.localStorage.setItem('vigilist.rail.collapsed', next ? '1' : '0'); } catch { /* storage unavailable */ }
+      return next;
     });
-    setChatOpen(true);
-  }, [selectedIds, searchResults, documents]);
+  }, []);
+  const [askFocusToken, setAskFocusToken] = useState(0);
+  const focusChat = useCallback(() => {
+    setRailCollapsed(prev => {
+      if (prev) {
+        try { window.localStorage.setItem('vigilist.rail.collapsed', '0'); } catch { /* storage unavailable */ }
+      }
+      return false;
+    });
+    setAskFocusToken(t => t + 1);
+  }, []);
 
   // Mirror the key bits of state back into the URL so a refresh lands
   // the user on the same page (doc viewer, batch review, search, etc.).
@@ -339,7 +342,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       />
 
       {/* Content */}
-      <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
+      <div className={`home-shell${railCollapsed ? '' : ' rail-open'}`}>
+        <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
         <ProductionBrief
           production={production}
           clusters={clusters}
@@ -696,6 +700,25 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             </button>
           </div>
         )}
+        </div>
+        <ContextRail
+          production={production}
+          chat={chat}
+          collapsed={railCollapsed}
+          onToggleCollapsed={toggleRail}
+          autoFocusToken={askFocusToken}
+          selectedIds={selectedIds}
+          documents={documents}
+          searchResults={searchResults}
+          onViewDocument={setViewDocId}
+          onSimilarResults={(label, results) => {
+            setSearchQuery(label);
+            setHasSearched(true);
+            setSearchResults(results);
+            setSearchTotal(results.length);
+          }}
+          onAttached={focusChat}
+        />
       </div>
 
       {/* Manage access modal */}
@@ -760,14 +783,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           >
             {bulkDownloading ? 'Preparing…' : 'Download'}
           </button>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={sendSelectionToAgent}
-            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <span className="ai-indicator" style={{ fontSize: 9, padding: '0 4px' }}>AI</span>
-            Send to AI Agent
-          </button>
           <div style={{ position: 'relative' }}>
             <button
               className="btn btn-sm btn-secondary"
@@ -831,26 +846,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           </button>
         </div>
       )}
-
-      {/* Floating AI Agent launcher — hidden while the panel is open. */}
-      {!chatOpen && (
-        <button
-          className="ai-agent-fab"
-          onClick={() => setChatOpen(true)}
-          aria-label="Open AI Agent"
-          title="AI Agent"
-        >
-          <span className="ai-indicator" style={{ fontSize: 13, padding: '2px 7px', background: 'transparent', color: '#fff', boxShadow: 'none' }}>AI</span>
-        </button>
-      )}
-
-      {/* AI Agent chat panel — kept mounted so the session conversation persists across open/close. */}
-      <AIAgent
-        open={chatOpen}
-        onClose={() => setChatOpen(false)}
-        attachedDocs={chatDocs}
-        onRemoveDoc={(id) => setChatDocs(prev => prev.filter(d => d.id !== id))}
-      />
 
     </div>
   );
