@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ref, uploadBytesResumable } from 'firebase/storage';
 import { firebaseStorage, auth } from '../firebase';
-import { createProductionForIngest, startProcessing, getIngestStatus } from '../api/client';
+import { createProductionForIngest, startProcessing, analyzeLoadFile, getIngestStatus } from '../api/client';
+import type { ProposedColumn } from '../api/client';
 import type { IngestJob } from '../types';
 
 interface Props {
@@ -9,7 +10,14 @@ interface Props {
   onComplete: () => void;
 }
 
-type Stage = 'setup' | 'uploading' | 'processing' | 'complete' | 'error';
+type Stage = 'setup' | 'uploading' | 'mapping' | 'processing' | 'complete' | 'error';
+
+const CANONICAL_FIELDS = [
+  'bates_begin', 'bates_end', 'page_count', 'text_link', 'native_link', 'custodian',
+  'date_sent', 'date_received', 'date_created', 'date_modified', 'file_hash_md5',
+  'file_hash_sha256', 'file_type', 'file_name', 'source_path', 'email_from', 'email_to',
+  'email_cc', 'email_bcc', 'email_subject',
+] as const;
 
 export default function IngestWizard({ onClose, onComplete }: Props) {
   const [name, setName] = useState('');
@@ -21,6 +29,9 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
   const [job, setJob] = useState<IngestJob | null>(null);
   const [error, setError] = useState('');
+  const [columns, setColumns] = useState<ProposedColumn[]>([]);
+  const [mappingProdId, setMappingProdId] = useState<number | null>(null);
+  const totalFilesRef = useRef<number>(0);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Set webkitdirectory attribute via ref (React doesn't support it as a prop)
@@ -142,15 +153,38 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         await Promise.all(uploadList.slice(i, i + batchSize).map(uploadFile));
       }
 
-      // Phase 3: Start backend processing
-      setStage('processing');
-      const ingestJob = await startProcessing(production_id, uploadList.length, mode);
-      setJob(ingestJob);
-
-      // Poll for status
-      pollStatus(ingestJob.id);
+      // Phase 3: For relativity mode, analyze the load file first (mapping stage).
+      // For generic_pdf, go straight to processing — there is no DAT load file to map.
+      totalFilesRef.current = uploadList.length;
+      if (mode === 'relativity') {
+        const analysis = await analyzeLoadFile(production_id);
+        setMappingProdId(production_id);
+        setColumns(analysis.columns);
+        setStage('mapping');
+      } else {
+        setStage('processing');
+        const ingestJob = await startProcessing(production_id, uploadList.length, mode);
+        setJob(ingestJob);
+        pollStatus(ingestJob.id);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Upload failed');
+      setStage('error');
+    }
+  };
+
+  const handleConfirmMapping = async () => {
+    if (mappingProdId === null) return;
+    const fieldMapping = Object.fromEntries(
+      columns.filter(c => c.target).map(c => [c.target!, c.source_name]),
+    );
+    setStage('processing');
+    try {
+      const ingestJob = await startProcessing(mappingProdId, totalFilesRef.current, 'relativity', fieldMapping);
+      setJob(ingestJob);
+      pollStatus(ingestJob.id);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to start processing');
       setStage('error');
     }
   };
@@ -200,7 +234,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     ? Math.round(((job.processed_files + (job.skipped_files || 0)) / job.total_files) * 100)
     : 0;
 
-  const isActive = stage === 'uploading' || stage === 'processing';
+  const isActive = stage === 'uploading' || stage === 'processing' || stage === 'mapping';
   const isDone = stage === 'complete' || stage === 'error';
   const [minimized, setMinimized] = useState(false);
 
@@ -213,6 +247,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
 
   const statusLine = stage === 'uploading'
     ? `${fmt(uploadProgress.bytesUploaded)} / ${fmt(uploadProgress.totalBytes)}${speedLabel ? ` · ${speedLabel}${etaSeconds > 1 ? ` · ${formatEta(etaSeconds)} remaining` : ''}` : ''}`
+    : stage === 'mapping'
+    ? `Review column mapping · ${columns.length} columns detected`
     : stage === 'processing'
     ? job ? `Processing · ${job.processed_files} ingested${job.skipped_files ? ` · ${job.skipped_files} skipped` : ''} · ${job.processed_files + (job.skipped_files || 0)} / ${job.total_files} total` : 'Processing…'
     : stage === 'complete'
@@ -379,6 +415,65 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                 </div>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', fontFamily: 'var(--font-mono)' }}>
                   {statusLine}
+                </div>
+              </div>
+            )}
+
+            {stage === 'mapping' && (
+              <div>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-3)' }}>
+                  Review detected columns and confirm field mapping
+                </div>
+                <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto', border: '1px solid var(--color-neutral-200)', borderRadius: 'var(--radius-md)' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-xs)' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--color-neutral-50)', position: 'sticky', top: 0 }}>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', borderBottom: '1px solid var(--color-neutral-200)' }}>Source Column</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid var(--color-neutral-200)' }}>Samples</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap', borderBottom: '1px solid var(--color-neutral-200)' }}>Map To</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid var(--color-neutral-200)' }}>Source</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {columns.map((col, i) => {
+                        const badgeStyle: React.CSSProperties =
+                          col.source === 'alias'
+                            ? { background: 'var(--color-success-100)', color: 'var(--color-success-700)', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }
+                            : col.source === 'ai'
+                            ? { background: '#fef3c7', color: '#92400e', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }
+                            : { background: 'var(--color-neutral-100)', color: 'var(--color-neutral-500)', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 };
+                        return (
+                          <tr key={`${col.source_name}-${i}`} style={{ borderBottom: '1px solid var(--color-neutral-100)' }}>
+                            <td style={{ padding: '7px 10px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{col.source_name}</td>
+                            <td style={{ padding: '7px 10px', color: 'var(--color-neutral-500)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={col.samples.join(', ')}>{col.samples.join(', ')}</td>
+                            <td style={{ padding: '7px 10px' }}>
+                              <select
+                                value={col.target ?? ''}
+                                onChange={e => {
+                                  const next = e.target.value || null;
+                                  setColumns(prev => prev.map((c, idx) => idx === i ? { ...c, target: next } : c));
+                                }}
+                                style={{ fontSize: 'var(--text-xs)', padding: '3px 6px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-neutral-300)', background: 'var(--color-neutral-0, #fff)', maxWidth: 180 }}
+                              >
+                                <option value="">— leave in metadata —</option>
+                                {CANONICAL_FIELDS.map(f => (
+                                  <option key={f} value={f}>{f}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td style={{ padding: '7px 10px' }}>
+                              <span style={badgeStyle}>{col.source}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ marginTop: 'var(--space-4)', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button className="btn btn-primary" onClick={handleConfirmMapping}>
+                    Start Processing
+                  </button>
                 </div>
               </div>
             )}

@@ -398,12 +398,31 @@ export async function getAuditLogs(
 export const createProductionForIngest = (productionName: string, description: string) =>
   request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description }));
 
+export interface ProposedColumn {
+  source_name: string;
+  samples: string[];
+  target: string | null;
+  confidence: number;
+  source: 'alias' | 'ai' | 'unmapped';
+}
+
+export const analyzeLoadFile = (productionId: number) =>
+  request<{
+    format: { encoding: string; delimiter: string };
+    columns: ProposedColumn[];
+    sample_rows: Record<string, string>[];
+    total_rows: number;
+  }>(
+    '/api/ingest/analyze', json({ production_id: productionId }),
+  );
+
 export const startProcessing = (
   productionId: number,
   totalFiles: number,
   sourceFormat: 'relativity' | 'generic_pdf' = 'relativity',
+  fieldMapping: Record<string, string> = {},
 ) =>
-  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat }));
+  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat, field_mapping: fieldMapping }));
 
 
 export const getIngestStatus = (jobId: string) =>
