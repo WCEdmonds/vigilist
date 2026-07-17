@@ -144,6 +144,9 @@ class DocumentSummary(BaseModel):
     annotation_count: int = 0
     cluster_id: int | None = None
     cluster_label: str | None = None
+    ai_decision: str | None = None
+    ai_confidence: int | None = None
+    ai_decided: bool = False
 
     model_config = {"from_attributes": True}
 
