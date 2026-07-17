@@ -33,6 +33,7 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    await get_user_role_for_production(db, user, production_id)
     result = await db.execute(
         select(ReviewProject)
         .where(ReviewProject.production_id == production_id)
@@ -55,6 +56,10 @@ async def create_project(
     production = await db.get(Production, production_id)
     if not production:
         raise HTTPException(status_code=404, detail="Production not found")
+
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
 
     # Check if this is the first project for the production
     count_result = await db.execute(
@@ -104,6 +109,10 @@ async def update_project(
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
     if body.name is not None:
         project.name = body.name
     if body.sample_size is not None:
@@ -149,6 +158,11 @@ async def delete_project(
     project = await db.get(ReviewProject, project_id)
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
     was_primary = project.is_primary
     await db.delete(project)
     await db.flush()
@@ -187,6 +201,10 @@ async def run_sample(
     project = await db.get(ReviewProject, project_id)
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
 
     # Use embedding-based diverse sampling (falls back to random if no embeddings)
     from app.services.sampling import select_diverse_sample
@@ -232,6 +250,10 @@ async def run_full(
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
     # Get docs not yet classified for this project
     already_done = select(AIReviewResult.document_id).where(AIReviewResult.project_id == project_id)
     result = await db.execute(
@@ -269,6 +291,11 @@ async def pause_run(
     project = await db.get(ReviewProject, project_id)
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
     project.status = "paused"
     await db.commit()
     return {"status": "paused"}
@@ -289,6 +316,7 @@ async def list_results(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    await get_user_role_for_production(db, user, production_id)
     query = (
         select(AIReviewResult, Document.bates_begin, Document.title)
         .join(Document, Document.id == AIReviewResult.document_id)
@@ -367,10 +395,13 @@ async def record_decision(
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
 
+    project = await db.get(ReviewProject, result.project_id)
+    if project:
+        await get_user_role_for_production(db, user, project.production_id)
+
     result.attorney_decision = body.decision
     result.attorney_note = body.note
 
-    project = await db.get(ReviewProject, result.project_id)
     if project:
         await apply_decision_tag(db, user, result, body.decision, project)
 
@@ -444,6 +475,9 @@ async def get_project_status(
     project = await db.get(ReviewProject, project_id)
     if not project or project.production_id != production_id:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    await get_user_role_for_production(db, user, production_id)
+
     return {
         "status": project.status,
         "total_documents": project.total_documents,
