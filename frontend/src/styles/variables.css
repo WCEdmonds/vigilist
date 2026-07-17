@@ -79,6 +79,16 @@
   --color-brass: #c49a4a;
   --color-brass-soft: rgba(196, 154, 74, 0.18);
 
+  /* ── Theme hues (cluster chips, brief donut) — muted archival palette ── */
+  --theme-1: #5b6e9e;
+  --theme-2: #8a6d4f;
+  --theme-3: #6d8a71;
+  --theme-4: #9e6a5b;
+  --theme-5: #7a6a95;
+  --theme-6: #5f8a8a;
+  --theme-7: #a3855c;
+  --theme-8: #85607a;
+
   /* ── Typography ── */
   --font-sans: 'Libre Franklin', 'Segoe UI', system-ui, sans-serif;
   --font-serif: 'Cormorant Garamond', Garamond, 'Times New Roman', serif;

@@ -97,7 +97,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     try {
       // Phase 1: Create production in backend to get real production_id
       // This also syncs Firebase custom claims so we can write to Storage
-      const { production_id } = await createProductionForIngest(name.trim(), description.trim());
+      const { production_id } = await createProductionForIngest(name.trim(), description.trim(), '');
 
       // Refresh the Firebase token to pick up the new custom claims
       const currentUser = auth.currentUser;
