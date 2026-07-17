@@ -62,6 +62,14 @@ async def create_project(
     # First project is always primary; otherwise honor body.is_primary
     is_primary = existing_count == 0 or body.is_primary
 
+    # Clear is_primary on other projects FIRST if this one will be primary
+    if is_primary:
+        await db.execute(
+            update(ReviewProject)
+            .where(ReviewProject.production_id == production_id)
+            .values(is_primary=False)
+        )
+
     project = ReviewProject(
         production_id=production_id,
         name=body.name,
@@ -75,15 +83,6 @@ async def create_project(
     )
     db.add(project)
     await db.flush()  # Flush to get the ID
-
-    # Clear is_primary on other projects if this one is primary
-    if is_primary:
-        await db.execute(
-            update(ReviewProject)
-            .where(ReviewProject.production_id == production_id)
-            .where(ReviewProject.id != project.id)
-            .values(is_primary=False)
-        )
 
     await db.commit()
     await db.refresh(project)
@@ -122,15 +121,15 @@ async def update_project(
 
     # Handle is_primary update
     if body.is_primary is True:
-        project.is_primary = True
-        await db.flush()  # Flush to ensure project is updated
-        # Clear is_primary on other projects
+        # Clear is_primary on other projects FIRST
         await db.execute(
             update(ReviewProject)
             .where(ReviewProject.production_id == production_id)
             .where(ReviewProject.id != project.id)
             .values(is_primary=False)
         )
+        project.is_primary = True
+        await db.flush()  # Flush to ensure project is updated
 
     await db.commit()
     await db.refresh(project)
