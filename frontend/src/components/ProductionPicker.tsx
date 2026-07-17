@@ -12,6 +12,11 @@ interface Props {
 
 const dateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
+const formatAdded = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : `added ${dateFmt.format(d)}`;
+};
+
 export default function ProductionPicker({ productions, onSelect, onIngest, onDeleted }: Props) {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
@@ -49,8 +54,12 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
                 {/* Phase 2 slot: one-line AI theme summary from the production brief. */}
                 <div className="case-card-meta">
                   <span>{p.document_count.toLocaleString()} document{p.document_count === 1 ? '' : 's'}</span>
-                  <span className="case-card-dot">·</span>
-                  <span>added {dateFmt.format(new Date(p.created_at))}</span>
+                  {formatAdded(p.created_at) && (
+                    <>
+                      <span className="case-card-dot">·</span>
+                      <span>{formatAdded(p.created_at)}</span>
+                    </>
+                  )}
                 </div>
                 <div className="case-card-badges">
                   {p.is_owner
