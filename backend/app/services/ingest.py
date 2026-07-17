@@ -365,6 +365,15 @@ def process_ingest_record(
         file_name=record.get(FIELD_MAP_REVERSED.get("native_link", "Native Link"), "") or None,
     )
     _apply_metadata(doc, record, field_mapping)
+    if native_storage_path and not doc.file_hash_sha256:
+        try:
+            import hashlib
+            native_bytes = get_download_bytes(native_storage_path)
+            doc.file_hash_sha256 = hashlib.sha256(native_bytes).hexdigest()
+        except Exception as e:
+            doc.extraction_status = "partial"
+            doc.extraction_error = f"sha256 from native failed: {e}"
+            errors.append(f"{bates_begin}: sha256 from native failed: {e}")
     return doc
 
 
