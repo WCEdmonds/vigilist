@@ -9,6 +9,7 @@ import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
+import ProductionSettings from './components/ProductionSettings';
 import QueueManager from './components/QueueManager';
 import BatchReview from './components/BatchReview';
 import Dashboard from './components/Dashboard';
@@ -63,6 +64,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [sortBy, setSortBy] = useState<string>('bates');
 
   const [showManageAccess, setShowManageAccess] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
   const [showQueueManager, setShowQueueManager] = useState(false);
@@ -328,6 +330,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onOpenReview={() => setShowAIReview(true)}
         onOpenDashboard={() => setShowDashboard(true)}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
+        onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
         onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}
         onOpenQueues={() => setShowQueueManager(true)}
         onOpenIngest={() => setShowIngestWizard(true)}
@@ -709,6 +712,14 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         <AuditLog
           productionId={production.id}
           onClose={() => setShowAuditLog(false)}
+        />
+      )}
+
+      {showSettings && (
+        <ProductionSettings
+          production={production}
+          onClose={() => setShowSettings(false)}
+          onSaved={() => setShowSettings(false)}
         />
       )}
 
