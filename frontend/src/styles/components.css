@@ -197,6 +197,19 @@ textarea.input {
   border: 1px solid rgba(44, 62, 107, 0.12);
 }
 
+.queue-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+.queue-ai-badge::before {
+  content: '✦';
+  color: var(--color-brass);
+}
+
 .badge-remove {
   cursor: pointer;
   margin-left: 2px;

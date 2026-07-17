@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
-import AIReviewLane from './components/AIReviewLane';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
 import ProductionSettings from './components/ProductionSettings';
-import QueueManager from './components/QueueManager';
+import ReviewWorkspace from './components/ReviewWorkspace';
 import BatchReview from './components/BatchReview';
 import Dashboard from './components/Dashboard';
 import AppHeader from './components/AppHeader';
@@ -68,13 +67,12 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [showSettings, setShowSettings] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
-  const [showQueueManager, setShowQueueManager] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(
     initialUrl.batch ? Number(initialUrl.batch) : null,
   );
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
-  const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
+  const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
 
   // AI chat, docked in the context rail (session-only conversation).
   const chat = useChat();
@@ -111,7 +109,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showAIReview ? 'ai' : undefined,
+    view: showReview ? 'review' : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -299,19 +297,14 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   };
 
-  // AI Review full-screen mode
-  if (showAIReview) {
-    /* interim wrapper — replaced by ReviewWorkspace in the next task */
+  // Review workspace full-screen mode (AI lane + human queue/batch lane)
+  if (showReview) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-        <div className="app-header">
-          <button className="btn-header" onClick={() => setShowAIReview(false)}>← Back</button>
-          <span className="logo">Smart Review</span>
-        </div>
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <AIReviewLane productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} />
-        </div>
-      </div>
+      <ReviewWorkspace
+        production={production}
+        onViewDocument={(id) => { setShowReview(false); setViewDocId(id); }}
+        onBack={() => setShowReview(false)}
+      />
     );
   }
 
@@ -369,12 +362,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onLogoClick={clearSearch}
         initialQuery={searchQuery}
         onAsk={handleAsk}
-        onOpenReview={() => setShowAIReview(true)}
+        onOpenReview={() => setShowReview(true)}
         onOpenDashboard={() => setShowDashboard(true)}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
         onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}
-        onOpenQueues={() => setShowQueueManager(true)}
         onOpenIngest={() => setShowIngestWizard(true)}
         onOpenGuide={onOpenGuide}
         onRandomDoc={handleRandomDoc}
@@ -794,11 +786,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           onClose={() => setShowIngestWizard(false)}
           onComplete={() => { setShowIngestWizard(false); onIngestComplete(); }}
         />
-      )}
-
-      {/* Queue manager modal */}
-      {showQueueManager && (
-        <QueueManager productionId={production.id} onClose={() => setShowQueueManager(false)} />
       )}
 
       {/* Dashboard modal */}
