@@ -8,6 +8,9 @@ import QCReview from './QCReview';
 
 interface Props {
   productionId: number;
+  /** Bump this to force the queue list to refetch (e.g. after the AI lane
+   * creates a queue from a slice). */
+  refreshKey?: number;
 }
 
 interface BatchSizeState {
@@ -18,7 +21,7 @@ interface AssignState {
   [batchId: number]: string;
 }
 
-export default function HumanReviewLane({ productionId }: Props) {
+export default function HumanReviewLane({ productionId, refreshKey }: Props) {
   const [queues, setQueues] = useState<ReviewQueue[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -69,7 +72,7 @@ export default function HumanReviewLane({ productionId }: Props) {
     }
   }, [productionId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;

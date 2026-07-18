@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select, update
@@ -30,6 +31,9 @@ PRICE_PER_OUTPUT_TOKEN_USD = 15 / 1_000_000
 MAX_DOC_CHARS_FOR_CLASSIFICATION = 12000
 EST_INPUT_CHAR_OVERHEAD_TOKENS = 800  # system prompt + category list overhead
 EST_OUTPUT_TOKENS_PER_DOC = 300
+
+# A decision is either a plain "agree" or an "override_<category>" pick.
+_DECISION_PATTERN = re.compile(r"^override_[a-z0-9_]+$", re.IGNORECASE)
 
 
 # ── Project CRUD ──
@@ -420,6 +424,10 @@ async def list_results(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    project = await db.get(ReviewProject, project_id)
+    if project is None or project.production_id != production_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     await get_user_role_for_production(db, user, production_id)
     query = (
         select(AIReviewResult, Document.bates_begin, Document.title)
@@ -495,6 +503,9 @@ async def record_decision(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if body.decision != "agree" and not _DECISION_PATTERN.match(body.decision):
+        raise HTTPException(status_code=400, detail="Invalid decision")
+
     result = await db.get(AIReviewResult, result_id)
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
@@ -667,6 +678,7 @@ async def _run_classification_batch(
             return
 
         prompt_version = len(project.prompt_versions) if project.prompt_versions else 1
+        failed_count = 0
 
         for i, doc_id in enumerate(doc_ids):
             # Check if paused
@@ -688,6 +700,20 @@ async def _run_classification_batch(
                 doc.text_content,
                 categories=project.categories,
             )
+
+            # classify_document returns 0 tokens whenever the API call never
+            # produced a real answer — no key configured, or the request raised
+            # (see app/services/ai_review.py:classify_document, which falls back
+            # to parse_classification_response("{}") in both cases). Treat that
+            # as a failed classification rather than a real "needs_review"
+            # decision: skip the upsert so the document stays unclassified and
+            # a re-run (POST /run only selects docs with no AIReviewResult row
+            # yet) picks it back up.
+            # TODO: rate-limit-aware retry/backoff is future work — for now we
+            # just skip and let the next manual run retry.
+            if tokens == 0:
+                failed_count += 1
+                continue
 
             # Upsert result
             existing = await db.execute(
@@ -727,10 +753,18 @@ async def _run_classification_batch(
             # Commit every doc so polling sees real-time progress
             await db.commit()
 
-        # Final status
-        if is_sample:
+        # Final status. If any documents failed to classify, leave the project
+        # paused (rather than complete/reviewing_sample) so it reads as needing
+        # attention; processed_documents already reflects only real results
+        # since failed docs were skipped above without incrementing it.
+        if failed_count > 0:
+            project.status = "paused"
+        elif is_sample:
             project.status = "reviewing_sample"
         else:
             project.status = "complete"
         await db.commit()
-        logger.info("Review project %d: classified %d documents", project_id, len(doc_ids))
+        logger.info(
+            "Review project %d: classified %d documents (%d failed)",
+            project_id, len(doc_ids) - failed_count, failed_count,
+        )

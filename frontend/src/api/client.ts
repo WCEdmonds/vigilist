@@ -522,6 +522,12 @@ export const createReviewProject = (productionId: number, data: { name: string; 
   request<ReviewProject>(`/api/review/projects/${productionId}`, json(data));
 
 
+export const updateReviewProject = (productionId: number, projectId: number, data: { name?: string; prompt_text?: string; sample_size?: number; agreement_threshold?: number; is_primary?: boolean }) =>
+  request<ReviewProject>(`/api/review/projects/${productionId}/${projectId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
 export const deleteReviewProject = (productionId: number, projectId: number) =>
   request(`/api/review/projects/${productionId}/${projectId}`, { method: 'DELETE' });
 
