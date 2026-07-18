@@ -312,13 +312,21 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   };
 
+  // Re-fetch the doc list (or re-run the active search) after leaving the
+  // review workspace, since markers/tags may have changed there. Called from
+  // event handlers only — never from a render-time effect.
+  const refreshList = () => {
+    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+    else loadDocuments(docPage);
+  };
+
   // Review workspace full-screen mode (AI lane + human queue/batch lane)
   if (showReview) {
     return (
       <ReviewWorkspace
         production={production}
-        onViewDocument={(id) => { setShowReview(false); setViewDocId(id); }}
-        onBack={() => setShowReview(false)}
+        onViewDocument={(id) => { setShowReview(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setShowReview(false); refreshList(); }}
       />
     );
   }

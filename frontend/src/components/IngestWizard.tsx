@@ -446,6 +446,15 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                   {job?.skipped_files ? ` · ${job.skipped_files} skipped` : ''}
                   {job?.errors && job.errors.length > 0 && ` · ${job.errors.length} warnings`}
                 </div>
+                {caseContext.trim() !== '' && !classifyEstimateFailed && !classifyEstimate && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 'var(--space-2)', justifyContent: 'center',
+                    fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-4)',
+                  }}>
+                    <span className="spinner spinner-sm" />
+                    Estimating cost…
+                  </div>
+                )}
                 {caseContext.trim() !== '' && !classifyEstimateFailed && classifyEstimate && (
                   <label
                     style={{

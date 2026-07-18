@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   bulkAcceptResults, createQueue, deleteReviewProject, getProjectStatus, listReviewProjects, listReviewResults,
-  pauseRun, recordDecision, runFull, runSample,
+  pauseRun, recordDecision, runFull, runSample, updateReviewProject,
 } from '../api/client';
 import type { AIReviewResult, PaginatedReviewResults, ReviewProject } from '../types';
 import ReviewProjectSetup from './ReviewProjectSetup';
@@ -10,6 +10,8 @@ import { showToast } from './Toast';
 interface Props {
   productionId: number;
   onViewDocument: (docId: string, excerpts?: string[]) => void;
+  /** Called after a queue is successfully created from a results slice. */
+  onQueueCreated?: () => void;
 }
 
 const CAT_COLORS: Record<string, string> = {
@@ -28,7 +30,7 @@ function getCategoryStyle(categories: { name: string; color: string; description
   };
 }
 
-export default function AIReviewLane({ productionId, onViewDocument }: Props) {
+export default function AIReviewLane({ productionId, onViewDocument, onQueueCreated }: Props) {
   const [projects, setProjects] = useState<ReviewProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [activeProject, setActiveProject] = useState<ReviewProject | null>(null);
@@ -142,18 +144,34 @@ export default function AIReviewLane({ productionId, onViewDocument }: Props) {
 
   const handleDecision = async (decision: string) => {
     if (!selectedResult) return;
-    const updated = await recordDecision(selectedResult.id, decision, decisionNote || undefined);
-    setResults(prev => prev ? {
-      ...prev,
-      results: prev.results.map(r => r.id === updated.id ? updated : r),
-    } : prev);
-    setSelectedResult(updated);
-    setDecisionNote('');
-    // Auto-advance to next unreviewed
-    if (results) {
-      const nextIdx = results.results.findIndex(r => r.id === selectedResult.id) + 1;
-      const next = results.results.slice(nextIdx).find(r => !r.attorney_decision);
-      if (next) setSelectedResult(next);
+    try {
+      const updated = await recordDecision(selectedResult.id, decision, decisionNote || undefined);
+      setResults(prev => prev ? {
+        ...prev,
+        results: prev.results.map(r => r.id === updated.id ? updated : r),
+      } : prev);
+      setSelectedResult(updated);
+      setDecisionNote('');
+      // Auto-advance to next unreviewed
+      if (results) {
+        const nextIdx = results.results.findIndex(r => r.id === selectedResult.id) + 1;
+        const next = results.results.slice(nextIdx).find(r => !r.attorney_decision);
+        if (next) setSelectedResult(next);
+      }
+    } catch {
+      showToast('Could not record decision', 'error');
+    }
+  };
+
+  const handleMakePrimary = async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    try {
+      await updateReviewProject(productionId, id, { is_primary: true });
+      const updated = await listReviewProjects(productionId);
+      setProjects(updated);
+      showToast('Primary project updated', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not update primary project', 'error');
     }
   };
 
@@ -199,6 +217,7 @@ export default function AIReviewLane({ productionId, onViewDocument }: Props) {
       });
       showToast(`Queue "${queueName.trim() || queueDecision}" created`, 'success');
       setShowQueueForm(false);
+      onQueueCreated?.();
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not create queue', 'error');
     } finally {
@@ -238,11 +257,19 @@ export default function AIReviewLane({ productionId, onViewDocument }: Props) {
               background: activeProjectId === p.id ? 'var(--color-neutral-100)' : 'transparent',
               marginBottom: 'var(--space-1)',
             }}>
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{p.name}</div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', display: 'flex', gap: 'var(--space-2)' }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                {p.name}
+                {p.is_primary && <span className="badge badge-blue">Primary</span>}
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                 <span style={{ textTransform: 'capitalize' }}>{p.status.replace(/_/g, ' ')}</span>
                 {p.decision_breakdown && (
                   <span>{Object.values(p.decision_breakdown).reduce((a, b) => a + b, 0)} docs</span>
+                )}
+                {!p.is_primary && (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={e => handleMakePrimary(e, p.id)}>
+                    Make primary
+                  </button>
                 )}
               </div>
             </div>
@@ -299,7 +326,7 @@ export default function AIReviewLane({ productionId, onViewDocument }: Props) {
                   <input
                     type="number" className="input" min={0} max={100}
                     value={bulkThreshold}
-                    onChange={e => setBulkThreshold(Number(e.target.value) || 0)}
+                    onChange={e => setBulkThreshold(Math.max(1, Number(e.target.value) || 0))}
                     style={{ width: 64, padding: '2px 6px' }}
                   />
                   <span>%</span>
