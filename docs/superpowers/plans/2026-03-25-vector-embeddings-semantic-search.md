@@ -155,7 +155,7 @@ def downgrade() -> None:
 
 ```bash
 cd backend
-VIGILIST_DATABASE_URL="postgresql+asyncpg://neondb_owner:REDACTED-DB-PASSWORD@ep-noisy-frog-a8h520r3-pooler.eastus2.azure.neon.tech/neondb" python -m alembic upgrade head
+VIGILIST_DATABASE_URL="postgresql+asyncpg://<user>:<password>@<host>/<db>" python -m alembic upgrade head
 ```
 
 Note: The alembic env.py already handles SSL for Neon URLs.
