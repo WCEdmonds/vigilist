@@ -75,8 +75,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
 
-  // AI chat, docked in the context rail (session-only conversation).
-  const chat = useChat();
+  // AI chat, docked in the context rail (session-only conversation). The
+  // production id lets doc-less questions be grounded in the production
+  // ("ask the production") via server-side retrieval.
+  const chat = useChat(production.id);
   const [railCollapsed, setRailCollapsed] = useState(() => {
     try {
       const stored = window.localStorage.getItem('vigilist.rail.collapsed');

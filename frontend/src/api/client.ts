@@ -242,6 +242,7 @@ export async function streamChat(
   docIds: string[],
   handlers: { onDelta: (text: string) => void; onError: (message: string) => void },
   signal?: AbortSignal,
+  productionId?: number,
 ): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const currentUser = auth.currentUser;
@@ -255,7 +256,7 @@ export async function streamChat(
     res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ messages, doc_ids: docIds }),
+      body: JSON.stringify({ messages, doc_ids: docIds, production_id: productionId }),
       signal,
     });
   } catch (e: unknown) {
