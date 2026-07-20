@@ -132,7 +132,9 @@ async def start_processing(
 
     source_format = body.get("source_format", "relativity")
     field_mapping = body.get("field_mapping") or {}
-    batch_size = 10 if source_format == "generic_pdf" else INGEST_BATCH_SIZE
+    if source_format == "native":
+        field_mapping = {"custodian": (body.get("custodian") or "").strip() or None}
+    batch_size = 10 if source_format in ("generic_pdf", "native") else INGEST_BATCH_SIZE
 
     if task_service.is_configured():
         # Count source items to set an accurate total_files, then enqueue tasks
@@ -140,6 +142,9 @@ async def start_processing(
             if source_format == "generic_pdf":
                 from app.services.ingest_pdf import list_pdf_sources
                 total_files = len(list_pdf_sources(production.id))
+            elif source_format == "native":
+                from app.services.ingest_native import list_native_sources
+                total_files = len(list_native_sources(production.id))
             else:
                 records, _ = bootstrap_ingest_source(production.id)
                 total_files = len(records)

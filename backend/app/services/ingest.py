@@ -657,6 +657,9 @@ async def run_ingest_batch(
     job = await db.get(IngestJob, job_id)
     if job and job.source_format == "generic_pdf":
         await ingest_pdf_batch(db, job_id, production_id, start_idx, end_idx)
+    elif job and job.source_format == "native":
+        from app.services.ingest_native import ingest_native_batch
+        await ingest_native_batch(db, job_id, production_id, start_idx, end_idx)
     else:
         await ingest_batch(db, job_id, production_id, start_idx, end_idx)
 
@@ -672,6 +675,7 @@ async def ingest_from_storage(
 
     from app.models import IngestJob
     from app.services.ingest_pdf import list_pdf_sources
+    from app.services.ingest_native import list_native_sources
 
     job = await db.get(IngestJob, job_id)
     if not job:
@@ -680,15 +684,20 @@ async def ingest_from_storage(
     try:
         if job.source_format == "generic_pdf":
             total = len(list_pdf_sources(production_id))
+            batch_step = 10
+        elif job.source_format == "native":
+            total = len(list_native_sources(production_id))
+            batch_step = 10
         else:
             records, _ = bootstrap_ingest_source(production_id)
             total = len(records)
+            batch_step = INGEST_BATCH_SIZE
         job.total_files = total
         await db.commit()
 
-        for start in range(0, total, INGEST_BATCH_SIZE):
+        for start in range(0, total, batch_step):
             await run_ingest_batch(
-                db, job_id, production_id, start, start + INGEST_BATCH_SIZE
+                db, job_id, production_id, start, start + batch_step
             )
     except Exception as e:
         logger.exception("Inline ingest failed")
