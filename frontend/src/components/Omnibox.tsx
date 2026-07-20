@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createSavedSearch, deleteSavedSearch, getSavedSearches } from '../api/client';
 import { detectSearchMode, type SearchMode } from '../utils/searchMode';
+import { showToast } from './Toast';
 import type { SavedSearch } from '../types';
 
 interface Props {
@@ -46,6 +47,16 @@ export default function Omnibox({ onSearch, initialQuery = '', onAsk }: Props) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Esc closes whichever menu is open. Only listens while a menu is open.
+  useEffect(() => {
+    if (menu === 'none') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setMenu('none'); setSaveName(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menu]);
+
   const mode: SearchMode = modeOverride ?? detectSearchMode(query);
   const filterCount = Object.keys(metadataFilters).length;
 
@@ -59,9 +70,14 @@ export default function Omnibox({ onSearch, initialQuery = '', onAsk }: Props) {
 
   const handleSave = async () => {
     if (!saveName?.trim() || !query.trim()) return;
-    await createSavedSearch(saveName.trim(), query.trim());
-    setSaveName(null);
-    loadSaved();
+    try {
+      await createSavedSearch(saveName.trim(), query.trim());
+      setSaveName(null);
+      loadSaved();
+      showToast('Saved search created', 'success');
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : 'Could not save search', 'error');
+    }
   };
 
   return (
@@ -140,20 +156,32 @@ export default function Omnibox({ onSearch, initialQuery = '', onAsk }: Props) {
             <div className="dropdown-item omnibox-empty">No saved searches yet.</div>
           )}
           {savedSearches.map(ss => (
-            <div
-              key={ss.id}
-              className="dropdown-item omnibox-saved-item"
-              onClick={() => { setQuery(ss.query); setMenu('none'); setModeOverride(null); onSearch(ss.query); }}
-            >
-              <div className="omnibox-saved-text">
-                <div className="omnibox-saved-name">{ss.name}</div>
-                <div className="omnibox-saved-query">{ss.query}</div>
-              </div>
+            <div key={ss.id} className="omnibox-saved-item">
+              <button
+                type="button"
+                className="dropdown-item"
+                style={{ flex: 1 }}
+                onClick={() => { setQuery(ss.query); setMenu('none'); setModeOverride(null); onSearch(ss.query); }}
+              >
+                <div className="omnibox-saved-text">
+                  <div className="omnibox-saved-name">{ss.name}</div>
+                  <div className="omnibox-saved-query">{ss.query}</div>
+                </div>
+              </button>
               <button
                 type="button"
                 className="btn btn-ghost btn-xs"
                 aria-label={`Delete saved search ${ss.name}`}
-                onClick={async e => { e.stopPropagation(); await deleteSavedSearch(ss.id); loadSaved(); }}
+                onClick={async e => {
+                  e.stopPropagation();
+                  try {
+                    await deleteSavedSearch(ss.id);
+                    loadSaved();
+                    showToast('Saved search deleted', 'success');
+                  } catch (err: unknown) {
+                    showToast(err instanceof Error ? err.message : 'Could not delete saved search', 'error');
+                  }
+                }}
               >×</button>
             </div>
           ))}

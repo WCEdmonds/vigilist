@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { streamChat, type ChatMessage } from '../api/client';
 import type { AttachedDoc } from '../types';
 import { showToast } from '../components/Toast';
@@ -34,7 +34,8 @@ export function useChat(): ChatState {
   const [attachedDocs, setAttachedDocs] = useState<AttachedDoc[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   // Mirrors the accumulated streamed text so `stop()` can commit synchronously
-  // without waiting on the aborted fetch to settle (AIAgent.tsx:85-94).
+  // without waiting on the aborted fetch to settle — the same synchronous-commit
+  // behavior the retired AIAgent overlay relied on.
   const accRef = useRef('');
 
   const attachDocs = useCallback((docs: AttachedDoc[]) => {
@@ -99,7 +100,8 @@ export function useChat(): ChatState {
     if (!abortRef.current) return;
     abortRef.current.abort();
     abortRef.current = null;
-    // Keep whatever text streamed so far as the assistant turn (AIAgent.tsx:85-94).
+    // Keep whatever text streamed so far as the assistant turn, mirroring how
+    // the retired AIAgent overlay handled a user-initiated stop.
     if (accRef.current) {
       setMessages(prev => [...prev, { role: 'assistant', content: accRef.current }]);
     }
@@ -120,5 +122,8 @@ export function useChat(): ChatState {
 
   const transcriptText = useCallback(() => formatTranscript(messages), [messages]);
 
-  return { messages, streaming, streamingText, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText };
+  return useMemo(
+    () => ({ messages, streaming, streamingText, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText }),
+    [messages, streaming, streamingText, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText],
+  );
 }
