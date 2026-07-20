@@ -63,26 +63,43 @@ async def resolve_tag_for_category(db, category_name: str, categories: list[dict
 
 
 async def apply_decision_tag(
-    db, user: User, result: AIReviewResult, decision: str, project: ReviewProject
+    db, user: User, result: AIReviewResult, decision: str, project: ReviewProject,
+    *, tag_cache: dict | None = None, existing_pairs: set | None = None
 ) -> int | None:
     """Write a DocumentTag for an accepted/overridden AI decision and log the audit trail.
 
     Does NOT commit — the caller's transaction handles that.
+
+    When tag_cache and existing_pairs are provided (bulk operation), use them to avoid
+    redundant database queries. When None (single-decide path), behavior unchanged.
     """
     final_category = decision_to_category(decision) or result.ai_decision
     if not final_category:
         return None
 
-    tag = await resolve_tag_for_category(db, final_category, project.categories or [])
+    # Use cached tag if available, otherwise resolve normally
+    if tag_cache is not None and final_category in tag_cache:
+        tag = tag_cache[final_category]
+    else:
+        tag = await resolve_tag_for_category(db, final_category, project.categories or [])
+        if tag_cache is not None:
+            tag_cache[final_category] = tag
 
-    existing = await db.execute(
-        select(DocumentTag).where(
-            DocumentTag.document_id == result.document_id,
-            DocumentTag.tag_id == tag.id,
+    # Check existing pairs using the set if available, otherwise query
+    if existing_pairs is not None:
+        pair = (result.document_id, tag.id)
+        if pair not in existing_pairs:
+            db.add(DocumentTag(document_id=result.document_id, tag_id=tag.id, applied_by=user.id))
+            existing_pairs.add(pair)
+    else:
+        existing = await db.execute(
+            select(DocumentTag).where(
+                DocumentTag.document_id == result.document_id,
+                DocumentTag.tag_id == tag.id,
+            )
         )
-    )
-    if not existing.scalar_one_or_none():
-        db.add(DocumentTag(document_id=result.document_id, tag_id=tag.id, applied_by=user.id))
+        if not existing.scalar_one_or_none():
+            db.add(DocumentTag(document_id=result.document_id, tag_id=tag.id, applied_by=user.id))
 
     action = "ai_suggestion_accepted" if decision == "agree" else "ai_suggestion_overridden"
     await log_action(

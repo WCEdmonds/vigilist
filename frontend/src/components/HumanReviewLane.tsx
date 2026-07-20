@@ -283,7 +283,7 @@ export default function HumanReviewLane({ productionId, refreshKey }: Props) {
                   gap: 'var(--space-3)',
                   padding: 'var(--space-3) var(--space-4)',
                   cursor: 'pointer',
-                  background: isExpanded ? 'var(--color-neutral-50)' : 'white',
+                  background: isExpanded ? 'var(--color-neutral-50)' : 'var(--color-neutral-0)',
                 }}
                 onClick={() => toggleExpand(queue.id)}
               >
@@ -359,7 +359,7 @@ export default function HumanReviewLane({ productionId, refreshKey }: Props) {
                       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger-700)' }}>Sure?</span>
                       <button
                         className="btn btn-sm"
-                        style={{ background: 'var(--color-danger-600)', color: 'white' }}
+                        style={{ background: 'var(--color-danger-600)', color: 'var(--color-neutral-0)' }}
                         onClick={() => handleDelete(queue.id)}
                       >
                         Yes
