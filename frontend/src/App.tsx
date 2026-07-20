@@ -302,7 +302,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     if (!d.ai_decision || d.ai_decided) return null;
     const label = d.ai_decision.replace(/_/g, ' ');
     const color =
-      d.ai_decision === 'relevant' || d.ai_decision === 'key_document' ? 'var(--color-success)' :
+      d.ai_decision === 'key_document' ? 'var(--color-primary-400)' :
+      d.ai_decision === 'relevant' ? 'var(--color-success)' :
       d.ai_decision === 'needs_review' ? 'var(--color-warning)' :
       'var(--color-neutral-400)';
     return (

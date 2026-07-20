@@ -564,10 +564,28 @@ async def bulk_accept(
     )
     results = result.scalars().all()
 
+    # Prefetch existing (document_id, tag_id) pairs for candidate docs
+    doc_ids = [r.document_id for r in results]
+    if doc_ids:
+        from app.models import DocumentTag
+        existing_result = await db.execute(
+            select(DocumentTag.document_id, DocumentTag.tag_id)
+            .where(DocumentTag.document_id.in_(doc_ids))
+        )
+        existing_pairs: set[tuple] = set(existing_result.all())
+    else:
+        existing_pairs = set()
+
+    # Cache resolved tags per category to avoid redundant queries
+    tag_cache: dict = {}
+
     count = 0
     for r in results:
         r.attorney_decision = "agree"
-        await apply_decision_tag(db, user, r, "agree", project)
+        await apply_decision_tag(
+            db, user, r, "agree", project,
+            tag_cache=tag_cache, existing_pairs=existing_pairs
+        )
         count += 1
 
     await log_action(
