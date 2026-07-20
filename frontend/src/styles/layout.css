@@ -1652,8 +1652,9 @@
 }
 
 /* Rail pushes the centered floating bar leftward so it stays centered over the list.
-   Scoped to desktop widths only — below 1025px the rail is hidden (see the
-   max-width: 1024px block), so the shift must not apply there, and the
+   Scoped to desktop widths only — below 1025px the rail is a fixed-position
+   drawer that floats over the content rather than taking up flow width (see
+   the max-width: 1024px block), so the shift must not apply there, and the
    max-width: 768px block already forces the bar full-width regardless. */
 @media (min-width: 1025px) {
   .home-shell.rail-open ~ .floating-bar,
@@ -1663,17 +1664,40 @@
 }
 
 @media (max-width: 1024px) {
-  /* Below tablet width the rail leaves the flow entirely; Phase 5 may add a
-     drawer. The chat remains reachable by widening the window — documented
-     limitation for this phase. */
-  .context-rail,
-  .context-rail-tab {
-    display: none;
+  /* Below tablet width the rail leaves the document flow and becomes a
+     slide-in drawer: collapsed state is a compact fixed edge tab, expanded
+     state is a fixed panel that slides in over the content from the right. */
+  .context-rail {
+    position: fixed;
+    top: var(--cb-height);
+    right: 0;
+    bottom: 0;
+    left: auto;
+    height: auto;
+    width: min(var(--rail-width), 90vw);
+    z-index: 200;
+    box-shadow: var(--shadow-xl);
+    transform: translateX(100%);
+    transition: transform var(--transition-slow);
   }
 
-  /* The rail is gone, so its "✦ Ask AI" omnibox entry would otherwise fire
-     real API calls into a chat the user can never see. */
-  .omnibox-ask {
+  .context-rail.is-drawer-open {
+    transform: none;
+  }
+
+  .context-rail-tab {
+    position: fixed;
+    top: 40%;
+    right: 0;
+    left: auto;
+    height: auto;
+    padding: var(--space-3) 0;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 150;
+  }
+
+  .context-rail-tab .rail-tab-label {
     display: none;
   }
 }
