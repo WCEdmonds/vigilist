@@ -61,6 +61,15 @@ export default function AuditLog({ productionId, onClose }: Props) {
             <option value="user_login">Login</option>
             <option value="user_invited">User Invited</option>
             <option value="access_revoked">Access Revoked</option>
+            <option value="ai_chat_started">AI chat started</option>
+            <option value="similar_docs_requested">Find similar</option>
+            <option value="brief_generated">Brief generated</option>
+            <option value="summary_batch_completed">Summaries completed</option>
+            <option value="classification_run">Classification run</option>
+            <option value="ai_suggestion_accepted">AI suggestion accepted</option>
+            <option value="ai_suggestion_overridden">AI suggestion overridden</option>
+            <option value="ai_suggestions_bulk_accepted">Bulk accept</option>
+            <option value="pipeline_run_requested">Pipeline run</option>
           </select>
           <button className="btn btn-secondary" onClick={handleExportCsv}>
             Export CSV
