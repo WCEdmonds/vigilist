@@ -40,8 +40,7 @@ export const SLIDES: Slide[] = [
           The search box in the top bar understands both <strong>full-text</strong> queries
           ("phrases", AND/OR/NOT, wildcard*) and plain questions. Type a question and the
           pill flips to <strong>✦ Ask</strong> — press <strong>✦ Ask AI</strong> to send
-          it to the AI chat instead of searching. Narrow by file type, save searches, and
-          export results to CSV from the results header.
+          it to the AI chat instead of searching. Narrow by file type and export results to CSV from the results header. Save searches from the search box's <strong>Saved</strong> menu.
         </p>
       </>
     ),
@@ -69,8 +68,8 @@ export const SLIDES: Slide[] = [
       <>
         <p>
           Select documents with the checkboxes and a bar appears at the bottom: tag them,
-          download a ZIP, or clear the selection. Titles are inline-editable. AI
-          suggestions you accept become ordinary tags — same colors, same filters.
+          download a ZIP, or clear the selection. Titles are inline-editable. Suggestions
+          you accept in the <strong>Review</strong> workspace become ordinary tags — same colors, same filters.
         </p>
       </>
     ),
