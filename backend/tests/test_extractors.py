@@ -77,3 +77,53 @@ def test_extract_corrupt_supported_type_is_error():
     assert r.extraction_status == "error"
     assert r.extraction_error
     assert r.text == ""
+
+
+def _pptx_direct_text_bytes(text: str) -> bytes:
+    """Build a pptx where text is set via text_frame.text (no explicit runs)."""
+    from pptx import Presentation
+    from pptx.util import Inches
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])  # blank layout
+    txBox = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(2))
+    txBox.text_frame.text = text  # sets paragraph text directly, no explicit runs
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def test_extract_pptx_direct_text():
+    """para.text must capture text set via text_frame.text (no run objects)."""
+    r = extract("direct.pptx", _pptx_direct_text_bytes("Direct Slide Text"))
+    assert r.extraction_status == "ok"
+    assert "Direct Slide Text" in r.text
+
+
+def test_extract_corrupt_xlsx_is_error():
+    r = extract("broken.xlsx", b"not a real office file")
+    assert r.extraction_status == "error"
+    assert r.extraction_error
+    assert r.text == ""
+
+
+def test_extract_corrupt_pptx_is_error():
+    r = extract("broken.pptx", b"not a real office file")
+    assert r.extraction_status == "error"
+    assert r.extraction_error
+    assert r.text == ""
+
+
+def _empty_docx_bytes() -> bytes:
+    """Build a docx with no paragraphs containing non-whitespace text."""
+    from docx import Document as Docx
+    d = Docx()
+    # Default Docx() has one empty paragraph — leave it as-is.
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def test_extract_empty_docx_is_partial():
+    r = extract("empty.docx", _empty_docx_bytes())
+    assert r.extraction_status == "partial"
+    assert r.text == ""

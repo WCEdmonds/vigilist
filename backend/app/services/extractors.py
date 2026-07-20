@@ -23,6 +23,7 @@ class ExtractResult:
 _TEXT_EXTS = {".txt", ".csv", ".md", ".log", ".json", ".xml", ".html", ".htm", ".rtf"}
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".bmp"}
 # Extensions we deliberately do not handle here (email → SP4b; legacy binary Office).
+# Documented only — the routing catch-all handles these via fall-through.
 _UNSUPPORTED_EXTS = {".doc", ".xls", ".ppt", ".msg", ".eml", ".pst"}
 
 
@@ -70,7 +71,7 @@ def _extract_pptx(data: bytes) -> str:
             if not shape.has_text_frame:
                 continue
             for para in shape.text_frame.paragraphs:
-                t = "".join(run.text for run in para.runs)
+                t = para.text
                 if t.strip():
                     parts.append(t)
     return "\n".join(parts)
