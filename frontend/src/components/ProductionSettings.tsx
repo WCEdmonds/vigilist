@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { updateProduction } from '../api/client';
 import { showToast } from './Toast';
 import type { ProductionInfo } from '../types';
@@ -36,7 +36,8 @@ export default function ProductionSettings({ production, onClose, onSaved }: Pro
     onClose();
   }, [onClose, saving]);
 
-  const handleSave = async () => {
+  const handleSave = async (e: FormEvent) => {
+    e.preventDefault();
     setSaving(true);
     try {
       const updated = await updateProduction(production.id, {
@@ -72,50 +73,52 @@ export default function ProductionSettings({ production, onClose, onSaved }: Pro
           </button>
         </div>
 
-        <div className="modal-body">
-          <div style={{ marginBottom: 'var(--space-4)' }}>
-            <label className="input-label" htmlFor="settings-description">
-              Description
-            </label>
-            <input
-              id="settings-description"
-              className="input"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="Brief description"
-              disabled={saving}
-            />
+        <form onSubmit={handleSave}>
+          <div className="modal-body">
+            <div style={{ marginBottom: 'var(--space-4)' }}>
+              <label className="input-label" htmlFor="settings-description">
+                Description
+              </label>
+              <input
+                id="settings-description"
+                className="input"
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="Brief description"
+                disabled={saving}
+              />
+            </div>
+
+            <div>
+              <label className="input-label" htmlFor="settings-case-context">
+                About this case <span className="brief-ai-mark">✦</span>
+              </label>
+              <p className="input-hint">
+                A few sentences: what the case is about and what makes a document
+                relevant. The AI uses this to brief your team and, later, to
+                classify documents. You can edit it anytime in Production settings.
+              </p>
+              <textarea
+                id="settings-case-context"
+                className="input"
+                rows={4}
+                value={caseContext}
+                onChange={e => setCaseContext(e.target.value)}
+                placeholder="e.g. Product-liability suit over the March 2024 recall. Relevant: anything about the recall decision, board discussions, or customer injuries."
+                disabled={saving}
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="input-label" htmlFor="settings-case-context">
-              About this case <span className="brief-ai-mark">✦</span>
-            </label>
-            <p className="input-hint">
-              A few sentences: what the case is about and what makes a document
-              relevant. The AI uses this to brief your team and, later, to
-              classify documents. You can edit it anytime in Production settings.
-            </p>
-            <textarea
-              id="settings-case-context"
-              className="input"
-              rows={4}
-              value={caseContext}
-              onChange={e => setCaseContext(e.target.value)}
-              placeholder="e.g. Product-liability suit over the March 2024 recall. Relevant: anything about the recall decision, board discussions, or customer injuries."
-              disabled={saving}
-            />
+          <div className="modal-footer">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
           </div>
-        </div>
-
-        <div className="modal-footer">
-          <button className="btn btn-ghost btn-sm" onClick={handleClose} disabled={saving}>
-            Cancel
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
+        </form>
       </div>
     </div>
   );
