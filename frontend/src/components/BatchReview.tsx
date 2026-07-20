@@ -29,10 +29,10 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
         if (firstPending) setViewDocId(firstPending.document_id);
         else if (d.length > 0) setViewDocId(d[0].document_id);
       })
-      .catch((e: any) => {
+      .catch((e) => {
         setBatch(null);
         setDocs([]);
-        setNotification(`Failed to load batch: ${e?.message || 'unknown error'}`);
+        setNotification(`Failed to load batch: ${e instanceof Error ? e.message : 'unknown error'}`);
       })
       .finally(() => setLoading(false));
   };
@@ -110,7 +110,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
 
   if (loading) {
     return (
-      <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-neutral-50)' }}>
+      <div className="br-screen" style={{ alignItems: 'center', justifyContent: 'center' }}>
         <span className="spinner spinner-md" />
         <span style={{ marginLeft: 'var(--space-2)' }}>Loading batch…</span>
       </div>
@@ -120,7 +120,7 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
   // Load failed — show an error screen with Retry rather than an empty sidebar.
   if (!batch && notification) {
     return (
-      <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--color-neutral-50)', gap: 'var(--space-4)', padding: 'var(--space-6)' }}>
+      <div className="br-screen" style={{ flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-4)', padding: 'var(--space-6)' }}>
         <div style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-serif)', color: 'var(--color-ink)' }}>
           Could not load batch
         </div>
@@ -136,20 +136,20 @@ export default function BatchReview({ batchId, onClose, onComplete }: BatchRevie
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', flexDirection: 'column', background: 'var(--color-neutral-50)' }}>
+    <div className="br-screen" style={{ flexDirection: 'column' }}>
       {/* Header bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', padding: 'var(--space-3) var(--space-4)', background: 'var(--color-primary-900)', color: 'white', flexShrink: 0 }}>
-        <button className="btn-header" onClick={onClose}>← Back to Batches</button>
-        <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>
+      <div className="fullscreen-bar">
+        <button className="cb-action" onClick={onClose}>← Back to Batches</button>
+        <span className="fs-title">
           Batch Review{batch ? `: ${batch.queue_name}` : ''}
         </span>
         {currentDoc && (
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-primary-300)', opacity: 0.85 }}>
+          <span className="fs-progress">
             — doc {currentIndex + 1} of {docs.length}
           </span>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <span style={{ fontSize: 'var(--text-xs)', opacity: 0.8 }}>{reviewedCount}/{docs.length}</span>
+          <span className="fs-progress">{reviewedCount}/{docs.length}</span>
           <progress value={reviewedCount} max={docs.length} style={{ width: 200 }} />
         </div>
       </div>
