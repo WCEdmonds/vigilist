@@ -86,34 +86,38 @@ def process_native_record(
         return doc
 
     # Everything else: dispatch text extraction (images use Vision OCR).
-    res = extract(filename, data, ocr_fn=_ocr_jpeg)
+    try:
+        res = extract(filename, data, ocr_fn=_ocr_jpeg)
 
-    folder = os.path.dirname(relative_path)
-    metadata = {"File Name": filename}
-    if folder:
-        metadata["Folder"] = folder
+        folder = os.path.dirname(relative_path)
+        metadata = {"File Name": filename}
+        if folder:
+            metadata["Folder"] = folder
 
-    stem = os.path.splitext(filename)[0]
-    title = None if looks_like_bates_stub(stem) else stem[:200]
+        stem = os.path.splitext(filename)[0]
+        title = None if looks_like_bates_stub(stem) else stem[:200]
 
-    return Document(
-        production_id=production_id,
-        bates_begin=control_number,
-        bates_end=control_number,
-        page_count=1,
-        metadata_=metadata,
-        title=title,
-        text_content=res.text or None,
-        native_path=storage_path,
-        image_paths=[],
-        file_name=filename,
-        file_type=res.file_type,
-        source_path=relative_path,
-        custodian=custodian,
-        file_hash_sha256=sha256,
-        extraction_status=res.extraction_status,
-        extraction_error=res.extraction_error,
-    )
+        return Document(
+            production_id=production_id,
+            bates_begin=control_number,
+            bates_end=control_number,
+            page_count=1,
+            metadata_=metadata,
+            title=title,
+            text_content=res.text or None,
+            native_path=storage_path,
+            image_paths=[],
+            file_name=filename,
+            file_type=res.file_type,
+            source_path=relative_path,
+            custodian=custodian,
+            file_hash_sha256=sha256,
+            extraction_status=res.extraction_status,
+            extraction_error=res.extraction_error,
+        )
+    except Exception as e:
+        errors.append(f"{control_number}: extraction failed: {e}")
+        return None
 
 
 async def ingest_native_batch(

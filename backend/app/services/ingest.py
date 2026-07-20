@@ -657,6 +657,9 @@ async def run_ingest_batch(
     job = await db.get(IngestJob, job_id)
     if job and job.source_format == "generic_pdf":
         await ingest_pdf_batch(db, job_id, production_id, start_idx, end_idx)
+    elif job and job.source_format == "native":
+        from app.services.ingest_native import ingest_native_batch
+        await ingest_native_batch(db, job_id, production_id, start_idx, end_idx)
     else:
         await ingest_batch(db, job_id, production_id, start_idx, end_idx)
 
