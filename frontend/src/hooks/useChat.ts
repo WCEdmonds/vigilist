@@ -27,7 +27,7 @@ function formatTranscript(messages: ChatMessage[]): string {
  * the context rail and the omnibox can share one conversation. Owned by Home:
  * the conversation lives as long as the production view does.
  */
-export function useChat(): ChatState {
+export function useChat(productionId?: number): ChatState {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -71,6 +71,7 @@ export function useChat(): ChatState {
         onError: message => { errored = true; showToast(message, 'error'); },
       },
       controller.signal,
+      productionId,
     ).then(() => {
       if (controller.signal.aborted) { setStreaming(false); setStreamingText(''); return; }
       abortRef.current = null;
@@ -94,7 +95,7 @@ export function useChat(): ChatState {
       setStreamingText('');
       showToast('Chat request failed — check your connection.', 'error');
     });
-  }, [messages, attachedDocs, streaming]);
+  }, [messages, attachedDocs, streaming, productionId]);
 
   const stop = useCallback(() => {
     if (!abortRef.current) return;
