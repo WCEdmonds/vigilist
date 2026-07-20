@@ -75,19 +75,23 @@ async def _log_summary_batch_completed(db, production_id: int, written_count: in
     summaries stage finishes (whether it ran out of rows or gave up after a
     batch that wrote nothing). Ambient action — no owner means no actor to
     attribute it to, so we skip logging entirely rather than log with None.
+    Telemetry is best-effort by design and must never affect pipeline outcomes.
     """
-    prod = await db.get(Production, production_id)
-    if prod is None:
-        return
-    actor = await resolve_audit_actor(db, prod)
-    if actor is None:
-        return
-    await log_action(
-        db, actor, "summary_batch_completed", "production", str(production_id),
-        production_id=production_id,
-        details={"summarized": written_count},
-    )
-    await db.commit()
+    try:
+        prod = await db.get(Production, production_id)
+        if prod is None:
+            return
+        actor = await resolve_audit_actor(db, prod)
+        if actor is None:
+            return
+        await log_action(
+            db, actor, "summary_batch_completed", "production", str(production_id),
+            production_id=production_id,
+            details={"summarized": written_count},
+        )
+        await db.commit()
+    except Exception:
+        logger.exception("summary_batch_completed audit logging failed for production %s", production_id)
 
 
 async def _run_summaries(production_id: int) -> None:
@@ -138,14 +142,19 @@ async def _run_brief(production_id: int) -> None:
         if prod is None:
             return
         prod.brief = brief
-        actor = await resolve_audit_actor(db, prod)
-        if actor is not None:
-            await log_action(
-                db, actor, "brief_generated", "production", str(production_id),
-                production_id=production_id,
-                details={"model": brief.get("model")},
-            )
         await db.commit()
+        # Telemetry is best-effort by design and must never affect pipeline outcomes.
+        try:
+            actor = await resolve_audit_actor(db, prod)
+            if actor is not None:
+                await log_action(
+                    db, actor, "brief_generated", "production", str(production_id),
+                    production_id=production_id,
+                    details={"model": brief.get("model")},
+                )
+                await db.commit()
+        except Exception:
+            logger.exception("brief_generated audit logging failed for production %s", production_id)
 
 
 _STAGE_RUNNERS = {
