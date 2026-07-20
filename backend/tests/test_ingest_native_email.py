@@ -1,5 +1,7 @@
 """Unit tests for email→Documents structuring (SP4b-1). Pure, no DB/storage."""
 
+import hashlib
+
 from app.services.email_parse import ParsedMessage
 from app.services.extractors import ExtractResult
 from app.services.ingest_native import build_email_documents
@@ -47,7 +49,6 @@ def test_parent_and_attachment_share_family_and_have_distinct_controls():
     assert parent.file_type == "email"
     assert parent.custodian == "Alice"
     assert parent.source_path == "mail/inbox/email.eml"
-    import hashlib
     assert parent.file_hash_sha256 == hashlib.sha256(b"the-raw-message-bytes").hexdigest()
 
     # Child attachment shares the family, gets a distinct control number
@@ -58,6 +59,31 @@ def test_parent_and_attachment_share_family_and_have_distinct_controls():
     assert child.text_content == "text-of-numbers.csv"
     assert child.custodian == "Alice"
     assert child.file_hash_sha256 == hashlib.sha256(b"col1,col2\n1,2\n").hexdigest()
+
+
+def test_parent_carries_native_path_for_retry_dedup_children_do_not():
+    # The parent must carry the container's storage path in native_path so the
+    # batch dedup query skips an already-ingested container on a Cloud Tasks
+    # retry; children leave native_path None (parent gates the container).
+    parsed = ParsedMessage(
+        from_="a@x.com",
+        subject="hi",
+        body_text="body",
+        attachments=[("a.txt", b"1")],
+    )
+    docs = build_email_documents(
+        parsed,
+        message_control="PREFIX 000042",
+        production_id=3,
+        source_path="mail/x.eml",
+        custodian=None,
+        msg_bytes=b"raw",
+        native_path="productions/3/raw/mail/x.eml",
+        extract_fn=_fake_extract,
+    )
+    parent, child = docs
+    assert parent.native_path == "productions/3/raw/mail/x.eml"
+    assert child.native_path is None
 
 
 def test_message_with_no_attachments_yields_only_parent():
