@@ -84,3 +84,29 @@ def test_classify_document_does_not_retry_non_retryable_errors(monkeypatch):
     assert client.messages.create.call_count == 1
     assert tokens == 0
     assert result["decision"] == "needs_review"
+
+
+class FakeAPIStatusError(Exception):
+    """Stand-in for an SDK error with a `status_code`, e.g. a revoked API key.
+
+    Real `anthropic.APIStatusError` instances require a synthetic
+    httpx.Response to construct, so tests monkeypatch `_RETRYABLE_ERRORS` to
+    include this plain exception subclass instead.
+    """
+
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def test_classify_document_does_not_retry_non_transient_status_code(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(ai_review, "_RETRYABLE_ERRORS", (FakeAPIStatusError,))
+    client = FakeClient(side_effect=[FakeAPIStatusError("invalid api key", status_code=401)])
+    _patch_client(monkeypatch, client)
+
+    result, tokens = asyncio.run(ai_review.classify_document("criteria", "doc text"))
+
+    assert client.messages.create.call_count == 1
+    assert tokens == 0
+    assert result["decision"] == "needs_review"
