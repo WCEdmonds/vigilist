@@ -53,6 +53,7 @@ def build_email_documents(
     custodian: str | None,
     msg_bytes: bytes,
     *,
+    native_path: str | None = None,
     extract_fn=extract,
     ocr_fn=None,
 ) -> list[Document]:
@@ -60,7 +61,10 @@ def build_email_documents(
 
     Pure: no DB, no storage. ``extract_fn``/``ocr_fn`` are injected so tests can
     avoid Vision OCR and real library calls. The parent's ``family_id`` is the
-    message control number; every attachment shares it.
+    message control number; every attachment shares it. The parent carries
+    ``native_path`` (the container's storage path) so the batch dedup query can
+    skip an already-ingested container on a Cloud Tasks retry; children leave it
+    ``None`` (the parent's presence gates the whole container).
     """
     folder = os.path.dirname(source_path)
     parent_meta = {"File Name": os.path.basename(source_path) or message_control}
@@ -75,7 +79,7 @@ def build_email_documents(
         metadata_=parent_meta,
         title=(parsed.subject[:200] or None),
         text_content=parsed.body_text or None,
-        native_path=None,
+        native_path=native_path,
         image_paths=[],
         family_id=message_control,
         file_name=os.path.basename(source_path) or None,
@@ -244,6 +248,7 @@ def process_native_email(
                     source_path=relative_path,
                     custodian=custodian,
                     msg_bytes=msg_bytes,
+                    native_path=storage_path,
                     ocr_fn=_ocr_jpeg,
                 )
             )
