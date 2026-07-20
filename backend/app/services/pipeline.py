@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models import Document, Production
 from app.services.ai import generate_summaries_batch
+from app.services.audit import log_action, resolve_audit_actor
 from app.services.brief import generate_brief
 from app.services.clustering import cluster_production
 
@@ -69,8 +70,29 @@ async def _run_clustering(production_id: int) -> None:
         logger.exception("Duplicate detection failed for production %s", production_id)
 
 
+async def _log_summary_batch_completed(db, production_id: int, written_count: int) -> None:
+    """Log summary_batch_completed as the production owner, once, when the
+    summaries stage finishes (whether it ran out of rows or gave up after a
+    batch that wrote nothing). Ambient action — no owner means no actor to
+    attribute it to, so we skip logging entirely rather than log with None.
+    """
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        return
+    actor = await resolve_audit_actor(db, prod)
+    if actor is None:
+        return
+    await log_action(
+        db, actor, "summary_batch_completed", "production", str(production_id),
+        production_id=production_id,
+        details={"summarized": written_count},
+    )
+    await db.commit()
+
+
 async def _run_summaries(production_id: int) -> None:
     """Summarize documents that don't have a summary yet, in DB batches."""
+    written_count = 0
     while True:
         async with async_session() as db:
             rows = (
@@ -86,6 +108,7 @@ async def _run_summaries(production_id: int) -> None:
                 )
             ).all()
             if not rows:
+                await _log_summary_batch_completed(db, production_id, written_count)
                 return
             results = await generate_summaries_batch(
                 [(str(r[0]), r[1]) for r in rows]
@@ -97,10 +120,12 @@ async def _run_summaries(production_id: int) -> None:
                     if doc is not None:
                         doc.summary = summary
                         wrote_any = True
+                        written_count += 1
             await db.commit()
             if not wrote_any:
                 # Model returned nothing for a whole batch (no key / all empty
                 # text): stop instead of spinning on the same rows forever.
+                await _log_summary_batch_completed(db, production_id, written_count)
                 return
 
 
@@ -113,6 +138,13 @@ async def _run_brief(production_id: int) -> None:
         if prod is None:
             return
         prod.brief = brief
+        actor = await resolve_audit_actor(db, prod)
+        if actor is not None:
+            await log_action(
+                db, actor, "brief_generated", "production", str(production_id),
+                production_id=production_id,
+                details={"model": brief.get("model")},
+            )
         await db.commit()
 
 
