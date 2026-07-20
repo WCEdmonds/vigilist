@@ -62,6 +62,16 @@ export default function AppHeader({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Esc closes whichever menu is open. Only listens while a menu is open.
+  useEffect(() => {
+    if (openMenu === 'none') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenu('none');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openMenu]);
+
   const gearItems = [
     onOpenShare && { label: 'Share…', action: onOpenShare },
     onOpenSettings && { label: 'Production settings', action: onOpenSettings },
@@ -77,6 +87,13 @@ export default function AppHeader({
         className="command-bar-logo"
         onClick={onLogoClick}
         role={onLogoClick ? 'button' : undefined}
+        tabIndex={onLogoClick ? 0 : undefined}
+        onKeyDown={onLogoClick ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onLogoClick();
+          }
+        } : undefined}
       >
         Vigilist
       </span>
