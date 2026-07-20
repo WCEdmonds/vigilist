@@ -182,3 +182,36 @@ def test_process_pdf_record_assembles_document(monkeypatch):
     assert len(doc.image_paths) == 2
     assert len(uploaded) == 2
     assert errors == []
+
+
+def test_inline_ingest_fails_job_when_no_sources_found(monkeypatch):
+    """Regression: zero PDF sources must fail the job, not strand it.
+
+    With total_files == 0 the batch loop never runs, so nothing finalizes
+    the job — it sat in "processing" forever while the UI showed
+    "0 / 0 total". Seen live when the browser uploaded to a different
+    storage bucket than the backend was configured to read.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.services.ingest import ingest_from_storage
+
+    monkeypatch.setattr(pdf_mod, "list_pdf_sources", lambda production_id: [])
+
+    job = MagicMock()
+    job.source_format = "generic_pdf"
+    job.status = "processing"
+    job.errors = []
+    job.completed_at = None
+
+    db = MagicMock()
+    db.get = AsyncMock(return_value=job)
+    db.commit = AsyncMock()
+
+    asyncio.run(ingest_from_storage(db, "job-1", 7, "SMITH_PROD001"))
+
+    assert job.status == "failed"
+    assert any("No ingestable files" in e for e in job.errors)
+    assert job.completed_at is not None
+    db.commit.assert_awaited()
