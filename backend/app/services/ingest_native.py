@@ -83,6 +83,7 @@ def process_native_record(
         doc.file_type = "pdf"
         doc.source_path = relative_path
         doc.custodian = custodian
+        doc.extraction_status = "ok"
         return doc
 
     # Everything else: dispatch text extraction (images use Vision OCR).
