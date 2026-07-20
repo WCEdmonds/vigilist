@@ -74,7 +74,14 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
             elif content_type == "text/html":
                 html_fallback.append(_decode_part(part))
     else:
-        if msg.get_content_type() == "text/html":
+        # A single-part message can itself be an attachment (an inline image, a
+        # forwarded document, an application/octet-stream body). Route those
+        # through the attachment path so binary content isn't decoded as text.
+        if msg.get_content_disposition() == "attachment" or msg.get_filename():
+            name = msg.get_filename() or "attachment"
+            payload = msg.get_payload(decode=True) or b""
+            attachments.append((name, payload))
+        elif msg.get_content_type() == "text/html":
             html_fallback.append(_decode_part(msg))
         else:
             body_parts.append(_decode_part(msg))
@@ -161,12 +168,16 @@ def _explode_pst(data: bytes) -> list[ParsedMessage]:
         with open(pst_path, "wb") as fh:
             fh.write(data)
 
-        # -e: one .eml file per message; -o: output directory.
+        # -e: one .eml file per message; -o: output directory. readpst's own
+        # stdout/stderr is unused (messages are read from the .eml files it
+        # writes), so discard it rather than buffering it in memory — a large
+        # PST can otherwise emit substantial logging.
         subprocess.run(
             ["readpst", "-e", "-o", out_dir, pst_path],
             check=True,
             timeout=READPST_TIMEOUT,
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         messages: list[ParsedMessage] = []

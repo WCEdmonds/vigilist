@@ -59,6 +59,11 @@ def normalize_date(value: str) -> datetime | None:
     try:
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(v)
+        # parsedate_to_datetime yields a naive datetime for dates without a
+        # timezone offset; treat those as UTC (consistent with the strptime
+        # branch above) rather than letting astimezone assume local time.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
     except Exception:
         pass
