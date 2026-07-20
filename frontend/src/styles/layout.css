@@ -1818,3 +1818,58 @@
     border-top: 1px solid var(--color-neutral-200);
   }
 }
+
+/* ── Fullscreen Review Bar (BatchReview / QCReview headers) ── */
+
+.fullscreen-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--cb-height);
+  padding: 0 var(--space-5);
+  background: var(--color-ink);
+  color: var(--color-parchment-light);
+  flex-shrink: 0;
+}
+
+.fullscreen-bar .fs-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+}
+
+.fullscreen-bar .fs-progress {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  opacity: 0.85;
+}
+
+/* Full-screen overlay base shared by BatchReview's loading/error/main states */
+.br-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  background: var(--color-neutral-50);
+}
+
+/* QC context sidebar section label (Document / Original Reviewer / Current Tags) */
+.qc-section-label {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-neutral-500);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-1);
+}
+
+/* QC header progress track — was a raw rgba(255,255,255,0.2). color-mix keeps it
+   tied to the parchment token instead of a hardcoded white-alpha value. */
+.qc-progress-track {
+  flex: 1;
+  height: 6px;
+  background: color-mix(in srgb, var(--color-parchment-light) 20%, transparent);
+  border-radius: 3px;
+  overflow: hidden;
+  max-width: 300px;
+}
