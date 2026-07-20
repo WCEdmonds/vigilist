@@ -23,7 +23,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [mode, setMode] = useState<'relativity' | 'generic_pdf'>('relativity');
+  const [mode, setMode] = useState<'relativity' | 'generic_pdf' | 'native'>('relativity');
+  const [custodian, setCustodian] = useState('');
   const [modeWarning, setModeWarning] = useState('');
   const [stage, setStage] = useState<Stage>('setup');
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
@@ -60,14 +61,14 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     }
 
     // Auto-detect and pre-select the most likely mode
-    const detected: 'relativity' | 'generic_pdf' = hasDat ? 'relativity' : 'generic_pdf';
+    const detected: 'relativity' | 'generic_pdf' | 'native' = hasDat ? 'relativity' : 'generic_pdf';
     setMode(detected);
     setFiles(selected);
     setError('');
     setModeWarning('');
   };
 
-  const chooseMode = (next: 'relativity' | 'generic_pdf') => {
+  const chooseMode = (next: 'relativity' | 'generic_pdf' | 'native') => {
     setMode(next);
     if (files.length === 0) {
       setModeWarning('');
@@ -163,7 +164,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         setStage('mapping');
       } else {
         setStage('processing');
-        const ingestJob = await startProcessing(production_id, uploadList.length, mode);
+        const ingestJob = await startProcessing(production_id, uploadList.length, mode, {}, custodian);
         setJob(ingestJob);
         pollStatus(ingestJob.id);
       }
@@ -359,7 +360,20 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     >
                       Folder of files (PDFs)
                     </button>
+                    <button
+                      type="button"
+                      className={mode === 'native' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                      onClick={() => chooseMode('native')}
+                    >
+                      Native files
+                    </button>
                   </div>
+                  {mode === 'native' && (
+                    <label style={{ display: 'block', marginTop: 8 }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>Custodian (optional)</span>
+                      <input className="input" value={custodian} onChange={e => setCustodian(e.target.value)} placeholder="e.g. Jane Smith" />
+                    </label>
+                  )}
                   {modeWarning && (
                     <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-warning-700, #92400e)' }}>
                       {modeWarning}
