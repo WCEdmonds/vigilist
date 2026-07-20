@@ -420,10 +420,17 @@ export const analyzeLoadFile = (productionId: number) =>
 export const startProcessing = (
   productionId: number,
   totalFiles: number,
-  sourceFormat: 'relativity' | 'generic_pdf' = 'relativity',
+  sourceFormat: 'relativity' | 'generic_pdf' | 'native' = 'relativity',
   fieldMapping: Record<string, string> = {},
+  custodian: string = '',
 ) =>
-  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat, field_mapping: fieldMapping }));
+  request<IngestJob>('/api/ingest/process', json({
+    production_id: productionId,
+    total_files: totalFiles,
+    source_format: sourceFormat,
+    field_mapping: fieldMapping,
+    custodian,
+  }));
 
 
 export const getIngestStatus = (jobId: string) =>
