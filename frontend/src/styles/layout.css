@@ -60,6 +60,27 @@
   color: var(--color-ink);
 }
 
+/* ── Viewer Bar (DocumentViewer header, ink bar matching .command-bar) ── */
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--cb-height);
+  padding: 0 var(--space-5);
+  background: var(--color-ink);
+  color: var(--color-parchment-light);
+  flex-shrink: 0;
+}
+
+.viewer-bar-logo {
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.01em;
+  color: var(--color-parchment-light);
+}
+
 /* ── Document Nav Bar ── */
 
 .doc-nav {
