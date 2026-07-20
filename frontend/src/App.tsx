@@ -800,7 +800,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       {showManageAccess && (
         <ManageAccess
           productionId={production.id}
-          productionName={production.name}
           onClose={() => setShowManageAccess(false)}
         />
       )}

@@ -1,15 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getProductionAccess, getProductionInvites, inviteUser, revokeAccess } from '../api/client';
 import type { ProductionAccessEntry, PendingInviteEntry } from '../types';
 import { showToast } from './Toast';
 
 interface Props {
   productionId: number;
-  productionName?: string;
   onClose: () => void;
 }
 
-export default function ManageAccess({ productionId, productionName: _productionName, onClose }: Props) {
+export default function ManageAccess({ productionId, onClose }: Props) {
   const [access, setAccess] = useState<ProductionAccessEntry[]>([]);
   const [invites, setInvites] = useState<PendingInviteEntry[]>([]);
   const [email, setEmail] = useState('');
@@ -19,7 +18,7 @@ export default function ManageAccess({ productionId, productionName: _production
   const [loading, setLoading] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const [a, i] = await Promise.all([
         getProductionAccess(productionId),
@@ -27,12 +26,12 @@ export default function ManageAccess({ productionId, productionName: _production
       ]);
       setAccess(a);
       setInvites(i);
-    } catch (e: any) {
-      showToast(`Could not load access list: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e) {
+      showToast(`Could not load access list: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     }
-  };
+  }, [productionId]);
 
-  useEffect(() => { load(); }, [productionId]);
+  useEffect(() => { load(); }, [load]);
 
   const handleInvite = async () => {
     if (!email.trim()) return;
@@ -44,8 +43,8 @@ export default function ManageAccess({ productionId, productionName: _production
       setMessage(res.status === 'granted' ? `Access granted to ${res.email}` : `Invitation sent to ${res.email}`);
       setEmail('');
       await load();
-    } catch (e: any) {
-      setError(e.message || 'Failed to invite');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to invite');
     } finally {
       setLoading(false);
     }
@@ -59,8 +58,8 @@ export default function ManageAccess({ productionId, productionName: _production
     try {
       await revokeAccess(productionId, userId);
       await load();
-    } catch (e: any) {
-      setError(e.message || 'Failed to revoke');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to revoke');
     } finally {
       setRevokingId(null);
     }
@@ -70,7 +69,7 @@ export default function ManageAccess({ productionId, productionName: _production
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-panel" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h3 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Manage Access</h3>
+          <h3 className="modal-title">Manage Access</h3>
           <button className="modal-close-btn" aria-label="Close" onClick={onClose}>&times;</button>
         </div>
 
