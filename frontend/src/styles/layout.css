@@ -1700,6 +1700,12 @@
   .context-rail-tab .rail-tab-label {
     display: none;
   }
+
+  /* The drawer is modal-like at these widths — the bulk bar returns when it closes. */
+  .home-shell.rail-open ~ .floating-bar,
+  .home-shell.rail-open .floating-bar {
+    display: none;
+  }
 }
 
 /* ── Review Workspace (AI lane + human queue/batch lane) ── */
