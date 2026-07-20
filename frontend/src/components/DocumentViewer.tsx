@@ -87,8 +87,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       } else {
         window.alert('Nothing to download — this document has no native file or page images.');
       }
-    } catch (e: any) {
-      window.alert(`Download failed: ${e?.message || 'unknown error'}`);
+    } catch (e) {
+      window.alert(`Download failed: ${e instanceof Error ? e.message : 'unknown error'}`);
     }
   };
 
@@ -103,8 +103,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       const res = await summarizeDocument(docId);
       setSummary(res.summary);
       if (doc) setDoc({ ...doc, summary: res.summary });
-    } catch (e: any) {
-      setSummary(`Error: ${e.message}`);
+    } catch (e) {
+      setSummary(`Error: ${e instanceof Error ? e.message : 'unknown error'}`);
     } finally {
       setSummaryLoading(false);
     }
@@ -121,8 +121,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         // Fallback: search with extracted terms
         onSearch(res.search_terms);
       }
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'unknown error');
     } finally {
       setSimilarLoading(false);
     }
