@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 # Email containers handled by the one-file→many email path (SP4b-1).
 EMAIL_EXTS = {".eml", ".msg", ".pst", ".ost"}
+# PST/OST containers explode into many messages whose raw bytes we do not keep,
+# so their per-message hash comes from a deterministic re-serialization.
+_PST_EXTS = {".pst", ".ost"}
 
 
 def list_native_sources(production_id: int) -> list[dict]:
@@ -233,12 +236,16 @@ def process_native_email(
         return []
 
     multi = len(messages) > 1
+    # A single .eml/.msg IS one message, so its file bytes are the message bytes.
+    # PST/OST containers are exploded into transient .eml files we do not keep, so
+    # every PST message hashes a deterministic re-serialization — regardless of
+    # how many messages the container held (a 1-message PST still isn't its own
+    # file's bytes).
+    is_pst = os.path.splitext(filename)[1].lower() in _PST_EXTS
     docs: list[Document] = []
     for m, parsed in enumerate(messages, start=1):
         message_control = f"{base_control} -{m:04d}" if multi else base_control
-        # For a single .eml/.msg the message bytes ARE the file bytes; for PST
-        # messages we re-serialize the message so the hash is stable per message.
-        msg_bytes = data if not multi else _serialize_message(parsed)
+        msg_bytes = _serialize_message(parsed) if is_pst else data
         try:
             docs.extend(
                 build_email_documents(
@@ -289,6 +296,7 @@ async def ingest_native_batch(
         _finalize_job_if_done,
         _incr_skipped,
         _persist_document,
+        _persist_documents,
         _persist_job_errors,
     )
     from app.services.ingest_pdf import derive_bates_prefix
@@ -330,8 +338,10 @@ async def ingest_native_batch(
                 if not docs:
                     await _incr_skipped(db, job_id)
                     continue
-                for doc in docs:
-                    await _persist_document(db, job_id, doc)
+                # Commit the whole family in one transaction: if it fails
+                # partway, nothing persists, so a retry re-expands the container
+                # cleanly instead of finding a lone parent and skipping it.
+                await _persist_documents(db, job_id, docs)
             else:
                 doc = await asyncio.to_thread(
                     process_native_record,

@@ -405,24 +405,39 @@ async def _persist_job_errors(db: AsyncSession, job_id: str, errors: list[str]) 
     await db.commit()
 
 
-async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> None:
-    """Persist a freshly built Document: flush, set tsvector + status, bump progress."""
-    db.add(doc)
+async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]) -> None:
+    """Persist a group of Documents atomically: one flush + one commit for all.
+
+    Used for email families (parent + attachments), which must commit together —
+    a failure before the single commit leaves nothing persisted, so a Cloud Tasks
+    retry re-expands the whole container cleanly instead of skipping it on a
+    partially-committed parent (whose native_path would satisfy the dedup check).
+    """
+    if not docs:
+        return
+    for doc in docs:
+        db.add(doc)
     await db.flush()
+    for doc in docs:
+        await db.execute(
+            text(
+                "UPDATE documents SET text_search_vector = "
+                "to_tsvector('english', COALESCE(text_content, '')), "
+                "processing_status = 'complete' "
+                "WHERE id = :id"
+            ),
+            {"id": doc.id},
+        )
     await db.execute(
-        text(
-            "UPDATE documents SET text_search_vector = "
-            "to_tsvector('english', COALESCE(text_content, '')), "
-            "processing_status = 'complete' "
-            "WHERE id = :id"
-        ),
-        {"id": doc.id},
-    )
-    await db.execute(
-        text("UPDATE ingest_jobs SET processed_files = processed_files + 1 WHERE id = :jid"),
-        {"jid": job_id},
+        text("UPDATE ingest_jobs SET processed_files = processed_files + :n WHERE id = :jid"),
+        {"n": len(docs), "jid": job_id},
     )
     await db.commit()
+
+
+async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> None:
+    """Persist a single freshly built Document (flush, tsvector + status, progress)."""
+    await _persist_documents(db, job_id, [doc])
 
 
 async def _finalize_job_if_done(
