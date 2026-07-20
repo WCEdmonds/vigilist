@@ -21,6 +21,7 @@ from app.services.ai import (
     generate_summary,
     nl_to_search_query,
 )
+from app.services.audit import log_action
 from app.services.search import search_documents
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,12 @@ async def find_similar(
     # Filter out the source document
     results = [r for r in results if str(r["id"]) != str(doc_id)]
 
+    await log_action(
+        db, user, "similar_docs_requested", "document", str(doc_id),
+        production_id=doc.production_id,
+    )
+    await db.commit()
+
     return {
         "source_id": str(doc_id),
         "search_terms": search_terms,
@@ -176,6 +183,17 @@ async def chat(
             continue
         if doc and doc.production_id in accessible:
             documents.append(doc)
+
+    # Log + commit before streaming starts: the request's db session is torn
+    # down once the StreamingResponse takes over the connection, so anything
+    # not committed by then never persists.
+    production_id = documents[0].production_id if documents else None
+    await log_action(
+        db, user, "ai_chat_started", "production",
+        resource_id=production_id, production_id=production_id,
+        details={"doc_count": len(doc_ids)},
+    )
+    await db.commit()
 
     system = build_chat_system_prompt(documents)
 
