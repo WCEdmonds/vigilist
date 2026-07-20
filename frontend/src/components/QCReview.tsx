@@ -9,7 +9,7 @@ interface Props {
   onClose: () => void;
 }
 
-export default function QCReview({ sampleIds, productionId: _productionId, onClose }: Props) {
+export default function QCReview({ sampleIds, onClose }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [context, setContext] = useState<QCContext | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
@@ -152,12 +152,12 @@ export default function QCReview({ sampleIds, productionId: _productionId, onClo
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', flexDirection: 'column', background: 'var(--color-neutral-50)' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', padding: 'var(--space-3) var(--space-4)', background: 'var(--color-primary-900)', color: 'white', flexShrink: 0 }}>
-        <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>
+      <div className="fullscreen-bar">
+        <span className="fs-title">
           QC Review: {currentIndex + 1} of {sampleIds.length}
         </span>
         {/* Progress bar */}
-        <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.2)', borderRadius: 3, overflow: 'hidden', maxWidth: 300 }}>
+        <div className="qc-progress-track">
           <div
             style={{
               height: '100%',
@@ -168,9 +168,9 @@ export default function QCReview({ sampleIds, productionId: _productionId, onClo
             }}
           />
         </div>
-        <span style={{ fontSize: 'var(--text-xs)', opacity: 0.8 }}>{progressPercent}%</span>
+        <span className="fs-progress">{progressPercent}%</span>
         <button
-          className="btn-header"
+          className="cb-action"
           style={{ marginLeft: 'auto' }}
           onClick={onClose}
         >
@@ -207,7 +207,7 @@ export default function QCReview({ sampleIds, productionId: _productionId, onClo
             <>
               {/* Document info */}
               <div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-1)' }}>
+                <div className="qc-section-label">
                   Document
                 </div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-neutral-800)' }}>
@@ -222,7 +222,7 @@ export default function QCReview({ sampleIds, productionId: _productionId, onClo
 
               {/* Original reviewer */}
               <div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-1)' }}>
+                <div className="qc-section-label">
                   Original Reviewer
                 </div>
                 <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-700)' }}>
@@ -232,7 +232,7 @@ export default function QCReview({ sampleIds, productionId: _productionId, onClo
 
               {/* Current tags */}
               <div>
-                <div style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-neutral-500)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-1)' }}>
+                <div className="qc-section-label">
                   Current Tags
                 </div>
                 {context.current_tags.length === 0 ? (
