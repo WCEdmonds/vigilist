@@ -186,7 +186,7 @@ export default function ContextRail({
   else if (selectedCount > 1) placeholder = `Ask about ${selectedCount} documents…`;
 
   return (
-    <aside className="context-rail">
+    <aside className={`context-rail${!collapsed ? ' is-drawer-open' : ''}`}>
       <div className="rail-header">
         <span className="rail-title">✦ Intelligence</span>
         <button
