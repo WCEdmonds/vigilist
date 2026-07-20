@@ -621,6 +621,11 @@ async def ingest_from_storage(
         else:
             records, _ = bootstrap_ingest_source(production_id)
             total = len(records)
+        # Mirror the Cloud Tasks path's guard: with zero sources the batch
+        # loop below never runs, so nothing would ever finalize the job and
+        # it would sit in "processing" forever.
+        if total == 0:
+            raise FileNotFoundError("No ingestable files found in upload")
         job.total_files = total
         await db.commit()
 
