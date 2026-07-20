@@ -55,6 +55,13 @@ def normalize_date(value: str) -> datetime | None:
             return dt.astimezone(timezone.utc)
         except ValueError:
             continue
+    # Fall back to RFC-822 / email header date parsing (e.g. "Mon, 20 Jul 2026 14:30:00 +0000").
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(v)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        pass
     return None
 
 
