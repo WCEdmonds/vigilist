@@ -51,6 +51,27 @@ def test_parse_eml_no_attachment():
     assert "attached spreadsheet" in parsed.body_text
 
 
+def test_parse_eml_single_part_attachment_is_not_body_text():
+    # A non-multipart message that is itself an attachment (an inline image, a
+    # forwarded file) must go through the attachment path, not be decoded as body.
+    msg = EmailMessage()
+    msg["From"] = "alice@example.com"
+    msg["Subject"] = "photo"
+    msg.set_content(
+        b"\x89PNG\r\n\x1a\n\x00binary",
+        maintype="image",
+        subtype="png",
+        disposition="attachment",
+        filename="photo.png",
+    )
+    parsed = _parse_eml_bytes(msg.as_bytes())
+    assert parsed.body_text == ""
+    assert len(parsed.attachments) == 1
+    name, blob = parsed.attachments[0]
+    assert name == "photo.png"
+    assert blob == b"\x89PNG\r\n\x1a\n\x00binary"
+
+
 def test_expand_email_eml_returns_one_message():
     msgs = expand_email("email.eml", _build_eml())
     assert len(msgs) == 1
@@ -58,9 +79,10 @@ def test_expand_email_eml_returns_one_message():
 
 
 def test_expand_email_bad_bytes_returns_empty_list():
-    assert expand_email("broken.eml", b"\x00\x01not-an-email") == [] or isinstance(
-        expand_email("broken.eml", b"\x00\x01not-an-email"), list
-    )
+    # A malformed .msg makes extract-msg raise; expand_email must swallow it and
+    # return []. (.eml parsing is lenient — the stdlib never raises on garbage —
+    # so .msg is the extension that actually exercises the never-raises contract.)
+    assert expand_email("broken.msg", b"\x00\x01not-an-email") == []
 
 
 def test_expand_email_unknown_extension_returns_empty():
