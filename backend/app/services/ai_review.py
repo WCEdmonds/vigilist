@@ -156,6 +156,13 @@ async def classify_document(
             return result, total_tokens
 
         except retryable as e:
+            status_code = getattr(e, "status_code", None)
+            if status_code is not None and status_code not in (408, 429) and status_code < 500:
+                # Non-transient API error (e.g. 401 invalid key, 400 bad request):
+                # retrying won't help, so give up immediately rather than
+                # burning attempts + backoff on a request that will never succeed.
+                logger.error("Classification failed with non-retryable status %s: %s", status_code, e)
+                break
             logger.warning(
                 "Classification attempt %d/%d failed (retryable): %s",
                 attempt + 1, _CLASSIFY_MAX_ATTEMPTS, e,

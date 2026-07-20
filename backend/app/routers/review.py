@@ -727,8 +727,6 @@ async def _run_classification_batch(
             # decision: skip the upsert so the document stays unclassified and
             # a re-run (POST /run only selects docs with no AIReviewResult row
             # yet) picks it back up.
-            # TODO: rate-limit-aware retry/backoff is future work — for now we
-            # just skip and let the next manual run retry.
             if tokens == 0:
                 failed_count += 1
                 continue

@@ -55,7 +55,7 @@ export const SLIDES: Slide[] = [
           When a production is ingested, AI clusters it into <strong>themes</strong>,
           summarizes every document, and writes a <strong>Production Brief</strong> at the
           top of Home — who's involved, what it spans, what stands out. Click a theme
-          chip to filter the list. Owners can regenerate from the brief card.
+          chip to filter the list. If generation fails, owners can retry it from the card.
         </p>
       </>
     ),
@@ -82,8 +82,8 @@ export const SLIDES: Slide[] = [
       <>
         <p>
           Open any document to page through it, drop pin annotations, write notes, and
-          inspect metadata. <strong>✦ AI tools</strong> in the sidebar summarize the
-          document or find similar ones across the production.
+          inspect metadata. <strong>✦ AI tools</strong> under the sidebar's Metadata tab
+          summarize the document or find similar ones across the production.
         </p>
       </>
     ),
@@ -97,8 +97,8 @@ export const SLIDES: Slide[] = [
         <p>
           The right-hand rail follows your work: with nothing selected, ask the production
           anything; select one document for its summary and quick actions; select several
-          to ask about them together. Collapse it with the ✦ tab — your conversation stays
-          until you switch productions.
+          to ask about them together. Collapse it with the ▸ button — the ✦ tab brings it
+          back. Your conversation stays until you switch productions.
         </p>
       </>
     ),

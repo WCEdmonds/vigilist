@@ -78,7 +78,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // AI chat, docked in the context rail (session-only conversation).
   const chat = useChat();
   const [railCollapsed, setRailCollapsed] = useState(() => {
-    try { return window.localStorage.getItem('vigilist.rail.collapsed') === '1'; } catch { return false; }
+    try {
+      const stored = window.localStorage.getItem('vigilist.rail.collapsed');
+      if (stored !== null) return stored === '1';
+      return window.innerWidth < 1025;
+    } catch { return false; }
   });
   const toggleRail = useCallback(() => {
     setRailCollapsed(prev => {
