@@ -356,11 +356,11 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Header */}
-      <div className="app-header">
-        <button className="btn-header" onClick={onBack}>← Back</button>
-        <span className="logo">Vigilist</span>
-        <div className="user-menu">
-          <button className="btn-header" onClick={handleDownload}>Download File</button>
+      <div className="viewer-bar">
+        <button className="cb-action" onClick={onBack}>← Back</button>
+        <span className="viewer-bar-logo">Vigilist</span>
+        <div className="cb-actions">
+          <button className="cb-action" onClick={handleDownload}>Download File</button>
         </div>
       </div>
 
@@ -459,7 +459,16 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
 
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {rightTab === 'text' && <TextPanel text={doc.text_content} searchQuery={searchQuery} />}
-            {rightTab === 'metadata' && <MetadataPanel doc={doc} />}
+            {rightTab === 'metadata' && (
+              <MetadataPanel
+                doc={doc}
+                onSummarize={handleSummarize}
+                onFindSimilar={onSearch ? handleFindSimilar : undefined}
+                summarizing={summaryLoading}
+                findingSimilar={similarLoading}
+                hasSummary={!!doc.summary}
+              />
+            )}
             {rightTab === 'summary' && (
               <div style={{ padding: 'var(--space-4)', overflow: 'auto', flex: 1, fontSize: 'var(--text-sm)', lineHeight: 'var(--leading-relaxed)' }}>
                 {summaryLoading ? (
@@ -470,20 +479,6 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                   <p style={{ color: 'var(--color-neutral-400)', fontStyle: 'italic' }}>No summary yet.</p>
                 )}
               </div>
-            )}
-          </div>
-
-          {/* AI Tools */}
-          <div style={{ borderTop: '1px solid rgba(44,62,107,0.08)', padding: 'var(--space-2)', display: 'flex', gap: 'var(--space-1-5)', flexWrap: 'wrap' }}>
-            <button className="btn btn-secondary btn-xs" onClick={handleSummarize} disabled={summaryLoading}>
-              <span className="ai-indicator" style={{ padding: '0 3px', fontSize: 8 }}>AI</span>
-              {summaryLoading ? 'Summarizing...' : 'Summarize'}
-            </button>
-            {onSearch && (
-              <button className="btn btn-secondary btn-xs" onClick={handleFindSimilar} disabled={similarLoading}>
-                <span className="ai-indicator" style={{ padding: '0 3px', fontSize: 8 }}>AI</span>
-                {similarLoading ? 'Searching...' : 'Find Similar'}
-              </button>
             )}
           </div>
         </div>
