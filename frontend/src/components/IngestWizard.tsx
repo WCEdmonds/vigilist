@@ -23,7 +23,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [mode, setMode] = useState<'relativity' | 'generic_pdf'>('relativity');
+  const [mode, setMode] = useState<'relativity' | 'generic_pdf' | 'native'>('relativity');
+  const [custodian, setCustodian] = useState('');
   const [modeWarning, setModeWarning] = useState('');
   const [stage, setStage] = useState<Stage>('setup');
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
@@ -53,21 +54,25 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     });
     const pdfCount = selected.filter(f => f.name.toLowerCase().endsWith('.pdf')).length;
 
-    if (!hasDat && pdfCount === 0) {
-      setError('Folder must contain either a DATA/*.dat file (Relativity) or at least one PDF.');
+    if (selected.length === 0) {
+      setError('No files found in the selected folder.');
       setFiles([]);
       return;
     }
 
     // Auto-detect and pre-select the most likely mode
-    const detected: 'relativity' | 'generic_pdf' = hasDat ? 'relativity' : 'generic_pdf';
+    const detected: 'relativity' | 'generic_pdf' | 'native' = hasDat
+      ? 'relativity'
+      : pdfCount > 0
+      ? 'generic_pdf'
+      : 'native';
     setMode(detected);
     setFiles(selected);
     setError('');
-    setModeWarning('');
+    setModeWarning(detected === 'native' ? 'All files will be processed as native documents.' : '');
   };
 
-  const chooseMode = (next: 'relativity' | 'generic_pdf') => {
+  const chooseMode = (next: 'relativity' | 'generic_pdf' | 'native') => {
     setMode(next);
     if (files.length === 0) {
       setModeWarning('');
@@ -82,6 +87,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
       setModeWarning('No DATA/*.dat file found in this folder — Relativity ingest will fail.');
     } else if (next === 'generic_pdf' && pdfCount === 0) {
       setModeWarning('No PDF files found in this folder.');
+    } else if (next === 'native') {
+      setModeWarning('All files will be processed as native documents.');
     } else {
       setModeWarning('');
     }
@@ -163,7 +170,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         setStage('mapping');
       } else {
         setStage('processing');
-        const ingestJob = await startProcessing(production_id, uploadList.length, mode);
+        const ingestJob = await startProcessing(production_id, uploadList.length, mode, {}, custodian);
         setJob(ingestJob);
         pollStatus(ingestJob.id);
       }
@@ -359,7 +366,20 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     >
                       Folder of files (PDFs)
                     </button>
+                    <button
+                      type="button"
+                      className={mode === 'native' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                      onClick={() => chooseMode('native')}
+                    >
+                      Native files
+                    </button>
                   </div>
+                  {mode === 'native' && (
+                    <label style={{ display: 'block', marginTop: 8 }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>Custodian (optional)</span>
+                      <input className="input" value={custodian} onChange={e => setCustodian(e.target.value)} placeholder="e.g. Jane Smith" maxLength={255} />
+                    </label>
+                  )}
                   {modeWarning && (
                     <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-warning-700, #92400e)' }}>
                       {modeWarning}
