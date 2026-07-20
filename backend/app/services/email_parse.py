@@ -137,7 +137,7 @@ def _parse_msg_bytes(data: bytes) -> ParsedMessage:
                 cc=(msg.cc or "").strip(),
                 bcc=(msg.bcc or "").strip(),
                 subject=(msg.subject or "").strip(),
-                date_sent=(msg.date or None),
+                date_sent=(str(msg.date) if msg.date else None),
                 body_text=(msg.body or "").strip(),
                 attachments=attachments,
             )
