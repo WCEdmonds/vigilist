@@ -267,7 +267,7 @@ def _serialize_message(parsed: ParsedMessage) -> bytes:
             f"Subject: {parsed.subject}",
             f"Date: {parsed.date_sent or ''}",
             "",
-            parsed.body_text,
+            parsed.body_text or "",
         ]
     )
     body = header.encode("utf-8", errors="replace")
