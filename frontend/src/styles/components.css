@@ -1301,6 +1301,34 @@ mark {
   }
 }
 
+/* ── Dashboard modal styles ── */
+
+.dash-section-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+  color: var(--color-neutral-600);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dash-stat-label {
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  margin-bottom: 2px;
+}
+
+.dash-stat-value {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.dash-mono-right {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
 /* ── Context rail content ── */
 
 .rail-header {

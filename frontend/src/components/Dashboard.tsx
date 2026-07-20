@@ -43,7 +43,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-panel modal-large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Review Dashboard</h2>
+          <h2 className="modal-title">Review Dashboard</h2>
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
             <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={loading}>
               {loading ? 'Refreshing…' : 'Refresh'}
@@ -72,7 +72,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
 
             {/* Overall Progress */}
             <section>
-              <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-3)', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <h3 className="dash-section-title">
                 Overall Progress
               </h3>
               <div style={{ marginBottom: 'var(--space-3)' }}>
@@ -83,16 +83,16 @@ export default function Dashboard({ productionId, onClose }: Props) {
               <progress value={stats.reviewed_documents} max={stats.total_documents} style={{ width: '100%', marginBottom: 'var(--space-3)' }} />
               <div style={{ display: 'flex', gap: 'var(--space-6)' }}>
                 <div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Total</div>
-                  <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{stats.total_documents.toLocaleString()}</div>
+                  <div className="dash-stat-label">Total</div>
+                  <div className="dash-stat-value">{stats.total_documents.toLocaleString()}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Reviewed</div>
-                  <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--color-success)' }}>{stats.reviewed_documents.toLocaleString()}</div>
+                  <div className="dash-stat-label">Reviewed</div>
+                  <div className="dash-stat-value" style={{ color: 'var(--color-success)' }}>{stats.reviewed_documents.toLocaleString()}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Pending</div>
-                  <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--color-warning)' }}>{stats.pending_documents.toLocaleString()}</div>
+                  <div className="dash-stat-label">Pending</div>
+                  <div className="dash-stat-value" style={{ color: 'var(--color-warning)' }}>{stats.pending_documents.toLocaleString()}</div>
                 </div>
               </div>
             </section>
@@ -100,7 +100,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
             {/* Queue Breakdown */}
             {stats.queue_stats.length > 0 && (
               <section>
-                <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-3)', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <h3 className="dash-section-title">
                   Queue Breakdown
                 </h3>
                 <div style={{ overflowX: 'auto' }}>
@@ -120,10 +120,10 @@ export default function Dashboard({ productionId, onClose }: Props) {
                         return (
                           <tr key={q.queue_id}>
                             <td>{q.name}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{q.total.toLocaleString()}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{q.reviewed.toLocaleString()}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{q.batch_count}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{pct.toFixed(1)}%</td>
+                            <td className="dash-mono-right">{q.total.toLocaleString()}</td>
+                            <td className="dash-mono-right">{q.reviewed.toLocaleString()}</td>
+                            <td className="dash-mono-right">{q.batch_count}</td>
+                            <td className="dash-mono-right">{pct.toFixed(1)}%</td>
                           </tr>
                         );
                       })}
@@ -136,7 +136,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
             {/* Reviewer Stats */}
             {stats.reviewer_stats.length > 0 && (
               <section>
-                <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-3)', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <h3 className="dash-section-title">
                   Reviewer Stats
                 </h3>
                 <div style={{ overflowX: 'auto' }}>
@@ -151,7 +151,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
                       {stats.reviewer_stats.map(r => (
                         <tr key={r.user_id}>
                           <td>{r.email}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{r.reviewed_count.toLocaleString()}</td>
+                          <td className="dash-mono-right">{r.reviewed_count.toLocaleString()}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -163,7 +163,7 @@ export default function Dashboard({ productionId, onClose }: Props) {
             {/* Tag Distribution */}
             {Object.keys(stats.tag_breakdown).length > 0 && (
               <section>
-                <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-3)', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <h3 className="dash-section-title">
                   Tag Distribution
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
@@ -201,25 +201,25 @@ export default function Dashboard({ productionId, onClose }: Props) {
             {/* QC Section */}
             {qcStats.total_decisions > 0 && (
               <section>
-                <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-3)', color: 'var(--color-neutral-600)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <h3 className="dash-section-title">
                   QC Summary
                 </h3>
                 <div style={{ display: 'flex', gap: 'var(--space-6)', marginBottom: 'var(--space-4)' }}>
                   <div>
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Total Decisions</div>
-                    <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{qcStats.total_decisions.toLocaleString()}</div>
+                    <div className="dash-stat-label">Total Decisions</div>
+                    <div className="dash-stat-value">{qcStats.total_decisions.toLocaleString()}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Agree</div>
-                    <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--color-success)' }}>{qcStats.agree_count.toLocaleString()}</div>
+                    <div className="dash-stat-label">Agree</div>
+                    <div className="dash-stat-value" style={{ color: 'var(--color-success)' }}>{qcStats.agree_count.toLocaleString()}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Overturned</div>
-                    <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--color-error)' }}>{qcStats.overturn_count.toLocaleString()}</div>
+                    <div className="dash-stat-label">Overturned</div>
+                    <div className="dash-stat-value" style={{ color: 'var(--color-error)' }}>{qcStats.overturn_count.toLocaleString()}</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 2 }}>Overturn Rate</div>
-                    <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, fontFamily: 'var(--font-mono)', color: qcStats.overturn_rate > 10 ? 'var(--color-error)' : 'var(--color-neutral-700)' }}>
+                    <div className="dash-stat-label">Overturn Rate</div>
+                    <div className="dash-stat-value" style={{ color: qcStats.overturn_rate > 10 ? 'var(--color-error)' : 'var(--color-neutral-700)' }}>
                       {qcStats.overturn_rate.toFixed(1)}%
                     </div>
                   </div>
@@ -240,9 +240,9 @@ export default function Dashboard({ productionId, onClose }: Props) {
                         {qcStats.by_reviewer.map(r => (
                           <tr key={r.reviewer_id}>
                             <td>{r.email}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{r.total.toLocaleString()}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{r.overturns.toLocaleString()}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', color: r.overturn_rate > 10 ? 'var(--color-error)' : undefined }}>
+                            <td className="dash-mono-right">{r.total.toLocaleString()}</td>
+                            <td className="dash-mono-right">{r.overturns.toLocaleString()}</td>
+                            <td className="dash-mono-right" style={{ color: r.overturn_rate > 10 ? 'var(--color-error)' : undefined }}>
                               {r.overturn_rate.toFixed(1)}%
                             </td>
                           </tr>
