@@ -7,6 +7,19 @@ import type {
   SearchResponse, SearchResult, Tag,
 } from '../types';
 
+/**
+ * Base URL for the AI chat stream. In prod the app talks to the backend
+ * through Firebase Hosting's rewrite proxy, which buffers responses and
+ * enforces a hard 60s timeout — a tool-using chat turn can exceed that,
+ * surfacing as an HTTP 502 even though Cloud Run finishes fine. The chat
+ * stream therefore calls the Cloud Run service directly (its CORS config
+ * allows the app's domains), which also restores real token streaming.
+ * Local dev keeps the relative path through the Vite proxy.
+ */
+const CHAT_STREAM_BASE = import.meta.env.PROD
+  ? 'https://vigilist-api-lhxvmrbzoa-uc.a.run.app'
+  : '';
+
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {};
 
@@ -259,7 +272,7 @@ export async function streamChat(
 
   let res: Response;
   try {
-    res = await fetch('/api/ai/chat', {
+    res = await fetch(`${CHAT_STREAM_BASE}/api/ai/chat`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ messages, doc_ids: docIds, production_id: productionId }),
