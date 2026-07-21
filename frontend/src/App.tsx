@@ -667,7 +667,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             d.file_type === 'image' ? 'blue' :
                             'gray'
                           }`} style={{ fontSize: 10, textTransform: 'capitalize' }}>
-                            {d.file_type === 'document' ? 'doc' : d.file_type}
+                            {d.file_type === 'document' ? 'DOC' : d.file_type === 'pdf' ? 'PDF' : d.file_type}
                           </span>
                         </td>
                         <td className="meta-cell">{themeChip(d)}</td>

@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  bulkAcceptResults, createQueue, deleteReviewProject, getProjectStatus, listReviewProjects, listReviewResults,
-  pauseRun, recordDecision, runFull, runSample, updateReviewProject,
+  bulkAcceptResults, createQueue, deleteReviewProject, getClassifyEstimate, getProjectStatus, listReviewProjects,
+  listReviewResults, pauseRun, recordDecision, runFull, runSample, startAutoClassification, updateReviewProject,
 } from '../api/client';
-import type { AIReviewResult, PaginatedReviewResults, ReviewProject } from '../types';
+import type { AIReviewResult, ClassifyEstimate, PaginatedReviewResults, ReviewProject } from '../types';
 import ReviewProjectSetup from './ReviewProjectSetup';
 import { showToast } from './Toast';
 
 interface Props {
   productionId: number;
+  /** Documents in the production — bounds the setup form's sample slider. */
+  docCount: number;
+  /** The production's case description; enables the one-click relevance pass. */
+  caseContext?: string | null;
   onViewDocument: (docId: string, excerpts?: string[]) => void;
   /** Called after a queue is successfully created from a results slice. */
   onQueueCreated?: () => void;
@@ -30,7 +34,7 @@ function getCategoryStyle(categories: { name: string; color: string; description
   };
 }
 
-export default function AIReviewLane({ productionId, onViewDocument, onQueueCreated }: Props) {
+export default function AIReviewLane({ productionId, docCount, caseContext, onViewDocument, onQueueCreated }: Props) {
   const [projects, setProjects] = useState<ReviewProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [activeProject, setActiveProject] = useState<ReviewProject | null>(null);
@@ -46,6 +50,10 @@ export default function AIReviewLane({ productionId, onViewDocument, onQueueCrea
   const [bulkThreshold, setBulkThreshold] = useState(80);
   const [bulkAccepting, setBulkAccepting] = useState(false);
 
+  // One-click initial relevance pass (empty state): cost estimate + starter.
+  const [estimate, setEstimate] = useState<ClassifyEstimate | null>(null);
+  const [startingPass, setStartingPass] = useState(false);
+
   // Queue from this slice
   const [showQueueForm, setShowQueueForm] = useState(false);
   const [queueDecision, setQueueDecision] = useState('relevant');
@@ -56,6 +64,27 @@ export default function AIReviewLane({ productionId, onViewDocument, onQueueCrea
   useEffect(() => {
     listReviewProjects(productionId).then(setProjects).catch(() => {});
   }, [productionId]);
+
+  // Fetch the classification cost estimate for the empty-state offer. Only
+  // relevant while there are no projects and a case description exists.
+  useEffect(() => {
+    if (projects.length > 0 || !caseContext) return;
+    getClassifyEstimate(productionId).then(setEstimate).catch(() => {});
+  }, [productionId, projects.length, caseContext]);
+
+  const handleStartRelevancePass = async () => {
+    setStartingPass(true);
+    try {
+      await startAutoClassification(productionId);
+      const updated = await listReviewProjects(productionId);
+      setProjects(updated);
+      if (updated.length > 0) setActiveProjectId(updated[0].id);
+    } catch (e) {
+      showToast(`Could not start the relevance pass: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
+    } finally {
+      setStartingPass(false);
+    }
+  };
 
   // Sync activeProject from projects list when activeProjectId changes
   useEffect(() => {
@@ -284,9 +313,36 @@ export default function AIReviewLane({ productionId, onViewDocument, onQueueCrea
         {/* Center: Results queue */}
         <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-3)' }}>
           {!activeProject ? (
-            <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-neutral-400)' }}>
-              Select a review project or create a new one
-            </div>
+            projects.length === 0 && caseContext ? (
+              <div style={{ maxWidth: 480, margin: 'var(--space-8) auto', textAlign: 'center' }}>
+                <div style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-2)' }}>
+                  <span className="brief-ai-mark">✦</span>
+                </div>
+                <h2 style={{ margin: '0 0 var(--space-2)', fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>
+                  Run the initial relevance pass
+                </h2>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-600)', marginBottom: 'var(--space-3)' }}>
+                  The AI classifies every document against your case description — relevant,
+                  key document, not relevant, or needs review. You vet each call, and accepted
+                  suggestions become ordinary tags.
+                </p>
+                {estimate && (
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-3)' }}>
+                    {estimate.doc_count} documents · estimated cost ${estimate.est_usd.toFixed(2)}
+                  </p>
+                )}
+                <button className="btn btn-primary" onClick={handleStartRelevancePass} disabled={startingPass}>
+                  {startingPass ? 'Starting…' : '✦ Start relevance pass'}
+                </button>
+                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', marginTop: 'var(--space-3)' }}>
+                  Or create a custom review project with your own criteria and categories.
+                </p>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-neutral-400)' }}>
+                Select a review project or create a new one
+              </div>
+            )
           ) : (
             <>
               {/* Project header */}
@@ -514,7 +570,7 @@ export default function AIReviewLane({ productionId, onViewDocument, onQueueCrea
         )}
       </div>
 
-      {showSetup && <ReviewProjectSetup productionId={productionId} onCreated={handleProjectCreated} onCancel={() => setShowSetup(false)} />}
+      {showSetup && <ReviewProjectSetup productionId={productionId} docCount={docCount} onCreated={handleProjectCreated} onCancel={() => setShowSetup(false)} />}
     </div>
   );
 }
