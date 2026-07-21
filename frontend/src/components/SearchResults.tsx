@@ -14,16 +14,15 @@ const COLOR_MAP: Record<string, string> = {
   purple: 'badge-purple', gray: 'badge-gray', blue: 'badge-blue',
 };
 
-export default function SearchResults({ results, total, onSelect, selectedIds, onToggleSelect }: Props) {
+export default function SearchResults({ results, onSelect, selectedIds, onToggleSelect }: Props) {
   if (results.length === 0) {
     return <div className="empty-state" style={{ padding: 'var(--space-8)' }}>No results found</div>;
   }
 
+  // The count lives in the section header's badge — repeating it here read
+  // as clutter.
   return (
     <div>
-      <div style={{ padding: 'var(--space-2) 0', fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)' }}>
-        {total} result{total !== 1 ? 's' : ''}
-      </div>
       {results.map(r => (
         <div key={r.id} className="result-item" onClick={() => onSelect(r.id)}>
           <div className="result-header">

@@ -1278,8 +1278,25 @@ mark {
 .brief-notable-row {
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-1) 0;
+  padding: var(--space-1) var(--space-1-5);
   font-size: var(--text-xs);
+  /* Rows are buttons that open the document — strip button chrome, keep an
+     affordance on hover. */
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+.brief-notable-row:hover {
+  background: rgba(44, 62, 107, 0.05);
+}
+.brief-notable-row:hover .brief-notable-bates {
+  color: var(--color-ink);
+  text-decoration: underline;
 }
 
 .brief-notable-bates {
