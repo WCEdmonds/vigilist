@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ref, uploadBytesResumable } from 'firebase/storage';
 import { firebaseStorage, auth } from '../firebase';
-import { analyzeLoadFile, createProductionForIngest, getClassifyEstimate, getIngestStatus, startAutoClassification, startProcessing } from '../api/client';
-import type { ProposedColumn } from '../api/client';
+import { analyzeLoadFile, createProductionForIngest, getClassifyEstimate, getIngestStatus, getIntakeSummary, startAutoClassification, startProcessing } from '../api/client';
+import type { IntakeSummary, ProposedColumn } from '../api/client';
 import { showToast } from './Toast';
 import type { ClassifyEstimate, IngestJob } from '../types';
 
@@ -40,6 +40,21 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [classifyEstimateFailed, setClassifyEstimateFailed] = useState(false);
   const [shouldClassify, setShouldClassify] = useState(true);
   const [startingClassification, setStartingClassification] = useState(false);
+  const [intakeSummary, setIntakeSummary] = useState<IntakeSummary | null>(null);
+
+  // Email containers (.eml/.msg/.pst) expand into parent + attachment
+  // families during native ingest — counted so the wizard can say so.
+  const emailContainerCount = files.filter(f => /\.(eml|msg|pst)$/i.test(f.name)).length;
+
+  // The post-ingest receipt: what intake actually created.
+  useEffect(() => {
+    if (stage !== 'complete' || !job?.production_id) return;
+    let cancelled = false;
+    getIntakeSummary(job.production_id)
+      .then(s => { if (!cancelled) setIntakeSummary(s); })
+      .catch(() => { /* receipt is best-effort — the basic counts still show */ });
+    return () => { cancelled = true; };
+  }, [stage, job?.production_id]);
 
   // Set webkitdirectory attribute via ref (React doesn't support it as a prop)
   useEffect(() => {
@@ -433,7 +448,30 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                       <input className="input" value={custodian} onChange={e => setCustodian(e.target.value)} placeholder="e.g. Jane Smith" maxLength={255} />
                     </label>
                   )}
-                  {modeWarning && (
+                  {mode === 'native' && (
+                    <div style={{
+                      marginTop: 'var(--space-2)', padding: 'var(--space-2) var(--space-3)',
+                      fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)',
+                      background: 'var(--color-neutral-50)', border: '1px solid rgba(44, 62, 107, 0.1)',
+                      borderRadius: 'var(--radius-md)', lineHeight: 1.5,
+                    }}>
+                      {emailContainerCount > 0 ? (
+                        <>
+                          <strong>{emailContainerCount} email container{emailContainerCount === 1 ? '' : 's'}</strong> (.eml/.msg/.pst)
+                          detected — each expands into its message plus attachments as a linked{' '}
+                          <strong>document family</strong>, and reply threads are stitched together
+                          automatically. Other files are processed as native documents.
+                        </>
+                      ) : (
+                        <>
+                          Files are processed as native documents. Any email containers
+                          (.eml/.msg/.pst) expand into message + attachment families with
+                          reply threads stitched automatically.
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {modeWarning && mode !== 'native' && (
                     <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-warning-700, #92400e)' }}>
                       {modeWarning}
                     </div>
@@ -458,6 +496,12 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                       multiple
                     />
                   </div>
+                </div>
+
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', lineHeight: 1.5 }}>
+                  <span className="brief-ai-mark">✦</span> After ingest, the AI reads the production
+                  automatically: themes, per-document summaries, and a Production Brief on Home.
+                  Near-duplicates and email threads are detected in the background.
                 </div>
 
                 {error && (
@@ -560,6 +604,36 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                   {job?.processed_files} documents ingested
                   {job?.skipped_files ? ` · ${job.skipped_files} skipped` : ''}
                   {job?.errors && job.errors.length > 0 && ` · ${job.errors.length} warnings`}
+                </div>
+                {intakeSummary && (
+                  <div style={{
+                    display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 'var(--space-2)',
+                    marginBottom: 'var(--space-4)', textAlign: 'left',
+                  }}>
+                    {([
+                      ['Documents', intakeSummary.documents],
+                      ['Custodians', intakeSummary.custodians],
+                      ['Email families', intakeSummary.email_families],
+                      ['Threads', intakeSummary.threads],
+                      ['Inclusive emails', intakeSummary.inclusive_emails],
+                      ['Duplicate groups', intakeSummary.duplicate_groups],
+                    ] as [string, number][])
+                      .filter(([label, n]) => n > 0 || label === 'Documents')
+                      .map(([label, n]) => (
+                        <div key={label} style={{
+                          padding: 'var(--space-1-5) var(--space-3)',
+                          background: 'var(--color-neutral-50)', border: '1px solid rgba(44, 62, 107, 0.1)',
+                          borderRadius: 'var(--radius-md)',
+                        }}>
+                          <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--color-ink)', fontVariantNumeric: 'tabular-nums' }}>{n}</div>
+                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>{label}</div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', marginBottom: 'var(--space-4)' }}>
+                  <span className="brief-ai-mark">✦</span> Themes, summaries, the Production Brief,
+                  and near-duplicate detection continue in the background.
                 </div>
                 {caseContext.trim() !== '' && !classifyEstimateFailed && !classifyEstimate && (
                   <div style={{

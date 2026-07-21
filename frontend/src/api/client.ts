@@ -453,6 +453,19 @@ export const startProcessing = (
 export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
   request(`/api/productions/${productionId}/pipeline`);
 
+export interface IntakeSummary {
+  documents: number;
+  custodians: number;
+  email_families: number;
+  family_documents: number;
+  threads: number;
+  inclusive_emails: number;
+  duplicate_groups: number;
+}
+
+export const getIntakeSummary = (productionId: number): Promise<IntakeSummary> =>
+  request(`/api/productions/${productionId}/intake-summary`);
+
 export const runPipeline = (productionId: number, force = false) =>
   request<{ started: boolean }>(`/api/productions/${productionId}/pipeline/run`, {
     method: 'POST',

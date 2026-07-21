@@ -14,6 +14,7 @@ from app.services.audit import log_action
 from app.services.claims import sync_user_claims
 from app.services.email import send_access_granted_email, send_invite_email
 from app.schemas import (
+    IntakeSummaryOut,
     InviteRequest,
     PendingInviteOut,
     PipelineStatusOut,
@@ -169,6 +170,55 @@ async def get_pipeline(
         case_context=prod.case_context,
         doc_count=counts[0],
         summarized_count=counts[1],
+    )
+
+
+@router.get("/{production_id}/intake-summary", response_model=IntakeSummaryOut)
+async def get_intake_summary(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """What intake created for this production — the ingest wizard's receipt.
+
+    Counts are live, so duplicate groups (detected asynchronously by the
+    ambient pipeline) may still read 0 right after ingest completes.
+    """
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+    await get_user_role_for_production(db, user, production_id)
+
+    from app.models import DuplicateGroup
+
+    doc_counts = (
+        await db.execute(
+            select(
+                func.count(Document.id),
+                func.count(func.distinct(Document.custodian)),
+                func.count(func.distinct(Document.family_id)),
+                func.count(Document.family_id),
+                func.count(func.distinct(Document.thread_id)),
+                func.count(Document.id).filter(Document.is_inclusive.is_(True)),
+            ).where(Document.production_id == production_id)
+        )
+    ).one()
+    dup_groups = (
+        await db.execute(
+            select(func.count(DuplicateGroup.id)).where(
+                DuplicateGroup.production_id == production_id
+            )
+        )
+    ).scalar_one()
+
+    return IntakeSummaryOut(
+        documents=doc_counts[0],
+        custodians=doc_counts[1],
+        email_families=doc_counts[2],
+        family_documents=doc_counts[3],
+        threads=doc_counts[4],
+        inclusive_emails=doc_counts[5],
+        duplicate_groups=dup_groups,
     )
 
 
