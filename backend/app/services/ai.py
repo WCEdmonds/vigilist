@@ -59,6 +59,60 @@ How to work:
 _CHAT_DOC_CHAR_LIMIT = 12000
 
 
+# Per-excerpt budget for retrieved chunks in production-grounded chat. Chunks
+# are already small; this is a backstop against oversized outliers.
+_CHAT_CHUNK_CHAR_LIMIT = 2000
+
+
+def build_production_chat_system_prompt(
+    production, excerpts: list[dict]
+) -> str:
+    """System prompt for the no-documents-attached state: chat grounded in the
+    production itself — its case description, brief overview, and the chunks
+    retrieved for the user's question.
+
+    `excerpts` items: {"bates": str, "title": str | None, "content": str}.
+    """
+    parts: list[str] = [CHAT_SYSTEM_PROMPT, "", f"# Production: {production.name}"]
+
+    case_context = (production.case_context or "").strip()
+    if case_context:
+        parts.append(f"## About this case\n{case_context}")
+
+    overview = ((production.brief or {}).get("overview") or "").strip()
+    if overview:
+        parts.append(f"## Production brief overview\n{overview}")
+
+    if excerpts:
+        excerpt_blocks: list[str] = []
+        for ex in excerpts:
+            header = f"### {ex['bates']}"
+            if ex.get("title"):
+                header += f" — {ex['title']}"
+            excerpt_blocks.append(f"{header}\n{ex['content'][:_CHAT_CHUNK_CHAR_LIMIT]}")
+        parts.append(
+            "## Retrieved excerpts\n"
+            "The following excerpts were retrieved from the production as the most "
+            "relevant to the user's question. They are excerpts, not whole documents — "
+            "the production may contain more on this topic.\n\n"
+            + "\n\n".join(excerpt_blocks)
+        )
+        parts.append(
+            "Ground your answer in these excerpts and cite documents by Bates number. "
+            "If they don't cover the question, say what's missing and suggest what to "
+            "search for or which documents to attach."
+        )
+    else:
+        parts.append(
+            "No excerpts could be retrieved for this question. Answer from the case "
+            "description and brief overview where possible, be explicit that you have "
+            "not read the underlying documents, and suggest searches or documents to "
+            "attach for a grounded answer."
+        )
+
+    return "\n\n".join(parts)
+
+
 def build_chat_system_prompt(documents: list) -> str:
     """Build the chat system prompt, embedding any attached document text as context."""
     if not documents:
@@ -258,4 +312,23 @@ async def generate_titles_batch(texts: list[tuple[str, str | None]]) -> dict[str
 
     tasks = [_gen(doc_id, text) for doc_id, text in texts]
     results = await asyncio.gather(*tasks)
+    return dict(results)
+
+
+async def generate_summaries_batch(texts: list[tuple[str, str | None]]) -> dict[str, str | None]:
+    """Generate summaries for (doc_id, text) pairs with bounded concurrency.
+
+    Skips empty texts without a model call. Returns {doc_id: summary or None}.
+    """
+    semaphore = asyncio.Semaphore(2)
+
+    async def _gen(doc_id: str, text: str | None) -> tuple[str, str | None]:
+        if not text or not text.strip():
+            return doc_id, None
+        async with semaphore:
+            summary = await generate_summary(text)
+            await asyncio.sleep(0.5)
+        return doc_id, summary
+
+    results = await asyncio.gather(*(_gen(d, t) for d, t in texts))
     return dict(results)

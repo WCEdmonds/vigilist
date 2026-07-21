@@ -8,18 +8,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import Document, User
+from app.models import Document, Production, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.ai import (
     build_chat_system_prompt,
+    build_production_chat_system_prompt,
     extract_similar_terms,
     generate_summary,
     nl_to_search_query,
 )
 from app.services.ai_chat import stream_chat_events
 from app.services.ai_tools import TOOLS, run_tool, tool_use_summary
+from app.services.audit import log_action
 from app.services.search import search_documents
+from app.services.semantic_search import top_chunks_for_query
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -118,6 +121,12 @@ async def find_similar(
     # Filter out the source document
     results = [r for r in results if str(r["id"]) != str(doc_id)]
 
+    await log_action(
+        db, user, "similar_docs_requested", "document", str(doc_id),
+        production_id=doc.production_id,
+    )
+    await db.commit()
+
     return {
         "source_id": str(doc_id),
         "search_terms": search_terms,
@@ -137,6 +146,9 @@ async def chat(
     Request body:
       - messages: [{ "role": "user" | "assistant", "content": str }, ...]
       - doc_ids:  optional list of document UUIDs to attach as context.
+      - production_id: optional production to ground the chat in when no
+        documents are attached ("ask the production" — relevant chunks are
+        retrieved for the latest user message).
 
     Responses stream as Server-Sent Events with JSON payloads:
       { "type": "delta", "text": str } | { "type": "done" } | { "type": "error", "message": str }
@@ -173,7 +185,39 @@ async def chat(
         if doc and doc.production_id in accessible:
             documents.append(doc)
 
-    system = build_chat_system_prompt(documents)
+    # With no documents attached, ground the chat in the production itself:
+    # retrieve the chunks closest to the user's question plus the case
+    # description and brief overview. Retrieval is best-effort — on any
+    # failure the prompt degrades to case-context-only.
+    production_id = documents[0].production_id if documents else None
+    if documents:
+        system = build_chat_system_prompt(documents)
+    else:
+        production = None
+        try:
+            raw_pid = int(body.get("production_id"))
+        except (TypeError, ValueError):
+            raw_pid = None
+        if raw_pid is not None and raw_pid in accessible:
+            production = await db.get(Production, raw_pid)
+        if production:
+            production_id = production.id
+            excerpts = await top_chunks_for_query(
+                db, production.id, messages[-1]["content"]
+            )
+            system = build_production_chat_system_prompt(production, excerpts)
+        else:
+            system = build_chat_system_prompt([])
+
+    # Log + commit before streaming starts: the request's db session is torn
+    # down once the StreamingResponse takes over the connection, so anything
+    # not committed by then never persists.
+    await log_action(
+        db, user, "ai_chat_started", "production",
+        resource_id=production_id, production_id=production_id,
+        details={"doc_count": len(doc_ids)},
+    )
+    await db.commit()
 
     import anthropic
 

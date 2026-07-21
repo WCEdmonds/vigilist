@@ -47,3 +47,4 @@ firebase-adminsdk*.json
 
 # Playwright MCP scratch
 .playwright-mcp/
+.superpowers/

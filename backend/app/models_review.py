@@ -3,9 +3,10 @@
 import uuid
 
 from sqlalchemy import (
-    Column, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text,
     UniqueConstraint, func,
 )
+from sqlalchemy.sql import text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -24,6 +25,7 @@ class ReviewProject(Base):
     sample_size = Column(Integer, nullable=False, default=50)
     agreement_threshold = Column(Float, nullable=False, default=0.80)
     status = Column(String(20), nullable=False, default="draft")
+    is_primary = Column(Boolean, nullable=False, server_default=text("false"))
     total_documents = Column(Integer, nullable=False, default=0)
     processed_documents = Column(Integer, nullable=False, default=0)
     total_cost_tokens = Column(Integer, nullable=False, default=0)

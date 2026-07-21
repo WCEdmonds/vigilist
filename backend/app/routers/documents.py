@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Annotation, Document, DocumentTag, Note, User
+from app.models_review import ReviewProject, AIReviewResult
 
 # Pin colors used by both the viewer overlay and the burned-in PDF pins.
 PDF_PIN_COLORS: dict[str, tuple[int, int, int]] = {
@@ -37,6 +38,22 @@ FILE_TYPE_EXTENSIONS = {
 }
 
 
+def cluster_label_map(rows) -> dict[str, dict]:
+    """(document_id, cluster_id, label) tuples -> {doc_id_str: {cluster_id, cluster_label}}."""
+    return {
+        str(doc_id): {"cluster_id": cluster_id, "cluster_label": label}
+        for doc_id, cluster_id, label in rows
+    }
+
+
+def ai_decision_map(rows) -> dict[str, dict]:
+    """(document_id, ai_decision, confidence_score, attorney_decision) tuples -> {doc_id_str: {ai_decision, ai_confidence, ai_decided}}."""
+    return {
+        str(doc_id): {"ai_decision": ai_decision, "ai_confidence": confidence, "ai_decided": bool(attorney_decision)}
+        for doc_id, ai_decision, confidence, attorney_decision in rows
+    }
+
+
 @router.get("", response_model=PaginatedDocuments)
 async def list_documents(
     production_id: int | None = None,
@@ -45,6 +62,7 @@ async def list_documents(
     file_type: str | None = Query(None, description="Filter by file type: video, audio, pdf, office, image, email, native, images_only"),
     sort: str = Query("bates", pattern="^(bates|recent|size)$"),
     cluster_id: int | None = None,
+    ai_decision: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -98,6 +116,39 @@ async def list_documents(
             .where(DocumentClusterAssignment.cluster_id == cluster_id)
         ))
 
+    # Get primary project for ai_decision filtering
+    primary_project_id = None
+    if production_id and ai_decision:
+        primary_project_result = await db.execute(
+            select(ReviewProject.id).where(
+                ReviewProject.production_id == production_id,
+                ReviewProject.is_primary == True
+            )
+        )
+        primary_project_id = primary_project_result.scalar_one_or_none()
+
+    if ai_decision:
+        if primary_project_id:
+            # Filter by ai_decision via EXISTS subquery
+            query = query.where(Document.id.in_(
+                select(AIReviewResult.document_id)
+                .where(
+                    AIReviewResult.project_id == primary_project_id,
+                    AIReviewResult.ai_decision == ai_decision
+                )
+            ))
+            count_query = count_query.where(Document.id.in_(
+                select(AIReviewResult.document_id)
+                .where(
+                    AIReviewResult.project_id == primary_project_id,
+                    AIReviewResult.ai_decision == ai_decision
+                )
+            ))
+        else:
+            # No primary project exists, return empty page
+            query = query.where(False)
+            count_query = count_query.where(False)
+
     if sort == "recent":
         # Sort by most recent activity (view, tag, note, annotation)
         from app.models import AuditLog
@@ -138,6 +189,52 @@ async def list_documents(
         )
         ann_counts = dict(ac_result.all())
 
+    # Get cluster assignments for these docs
+    from app.models import DocumentClusterAssignment, DocumentCluster
+    cluster_rows = []
+    if doc_ids:
+        cluster_rows = (
+            await db.execute(
+                select(
+                    DocumentClusterAssignment.document_id,
+                    DocumentClusterAssignment.cluster_id,
+                    DocumentCluster.label,
+                )
+                .join(DocumentCluster, DocumentCluster.id == DocumentClusterAssignment.cluster_id)
+                .where(DocumentClusterAssignment.document_id.in_(doc_ids))
+            )
+        ).all()
+    clusters_by_doc = cluster_label_map(cluster_rows)
+
+    # Get AI decision enrichment for these docs
+    # Get primary project if not already retrieved (only happens when ai_decision filter is NOT set)
+    if production_id and primary_project_id is None and not ai_decision:
+        primary_project_result = await db.execute(
+            select(ReviewProject.id).where(
+                ReviewProject.production_id == production_id,
+                ReviewProject.is_primary == True
+            )
+        )
+        primary_project_id = primary_project_result.scalar_one_or_none()
+
+    ai_decisions_by_doc = {}
+    if doc_ids and primary_project_id:
+        ai_rows = (
+            await db.execute(
+                select(
+                    AIReviewResult.document_id,
+                    AIReviewResult.ai_decision,
+                    AIReviewResult.confidence_score,
+                    AIReviewResult.attorney_decision,
+                )
+                .where(
+                    AIReviewResult.project_id == primary_project_id,
+                    AIReviewResult.document_id.in_(doc_ids)
+                )
+            )
+        ).all()
+        ai_decisions_by_doc = ai_decision_map(ai_rows)
+
     return PaginatedDocuments(
         documents=[
             DocumentSummary(
@@ -153,6 +250,11 @@ async def list_documents(
                 tags=[TagOut.model_validate(dt.tag) for dt in d.tags],
                 note_count=note_counts.get(d.id, 0),
                 annotation_count=ann_counts.get(d.id, 0),
+                cluster_id=(clusters_by_doc.get(str(d.id)) or {}).get("cluster_id"),
+                cluster_label=(clusters_by_doc.get(str(d.id)) or {}).get("cluster_label"),
+                ai_decision=(ai_decisions_by_doc.get(str(d.id)) or {}).get("ai_decision"),
+                ai_confidence=(ai_decisions_by_doc.get(str(d.id)) or {}).get("ai_confidence"),
+                ai_decided=(ai_decisions_by_doc.get(str(d.id)) or {}).get("ai_decided", False),
             )
             for d in docs
         ],

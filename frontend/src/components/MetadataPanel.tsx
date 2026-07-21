@@ -3,9 +3,14 @@ import type { DocumentDetail } from '../types';
 
 interface Props {
   doc: DocumentDetail;
+  onSummarize: () => void;
+  onFindSimilar?: () => void;
+  summarizing: boolean;
+  findingSimilar: boolean;
+  hasSummary: boolean;
 }
 
-export default function MetadataPanel({ doc }: Props) {
+export default function MetadataPanel({ doc, onSummarize, onFindSimilar, summarizing, findingSimilar, hasSummary }: Props) {
   const [open, setOpen] = useState(true);
 
   const fields: [string, string][] = [
@@ -41,6 +46,24 @@ export default function MetadataPanel({ doc }: Props) {
           </table>
         </div>
       )}
+
+      <div style={{ borderTop: '1px solid var(--color-neutral-200)' }}>
+        <div className="panel-header">
+          <span className="brief-ai-mark">✦</span> AI tools
+        </div>
+        <div style={{ padding: 'var(--space-3)', display: 'flex', gap: 'var(--space-1-5)', flexWrap: 'wrap' }}>
+          {!hasSummary && (
+            <button className="btn btn-secondary btn-xs" onClick={onSummarize} disabled={summarizing}>
+              <span className="brief-ai-mark">✦</span> {summarizing ? 'Summarizing…' : 'Summarize'}
+            </button>
+          )}
+          {onFindSimilar && (
+            <button className="btn btn-secondary btn-xs" onClick={onFindSimilar} disabled={findingSimilar}>
+              <span className="brief-ai-mark">✦</span> {findingSimilar ? 'Finding…' : 'Find similar'}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

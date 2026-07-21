@@ -2,26 +2,29 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
-import AIAgent, { type AttachedDoc } from './components/AIAgent';
-import AIReviewPage from './components/AIReviewPage';
-import CorpusAnalysis from './components/CorpusAnalysis';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
-import QueueManager from './components/QueueManager';
+import ProductionSettings from './components/ProductionSettings';
+import ReviewWorkspace from './components/ReviewWorkspace';
 import BatchReview from './components/BatchReview';
 import Dashboard from './components/Dashboard';
-import SearchBar from './components/SearchBar';
+import AppHeader from './components/AppHeader';
 import SearchResults from './components/SearchResults';
-import TopicGroups from './components/TopicGroups';
+import ProductionBrief from './components/ProductionBrief';
 import { ToastContainer, showToast } from './components/Toast';
 import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
-import UserAvatar from './components/UserAvatar';
+import OnboardingGuide from './components/OnboardingGuide';
+import ContextRail from './components/ContextRail';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
+import { useOnboarding } from './hooks/useOnboarding';
+import { useChat } from './hooks/useChat';
+import { SLIDES } from './onboarding/slides';
+import { detectSearchMode, type SearchMode } from './utils/searchMode';
 import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
@@ -33,12 +36,14 @@ type ViewMode = 'list' | 'grid';
 
 interface HomeProps {
   production: ProductionInfo;
+  productions: ProductionInfo[];
+  onSelectProduction: (p: ProductionInfo) => void;
   onSwitchProduction: () => void;
   onIngestComplete: () => void;
+  onOpenGuide: () => void;
 }
 
-function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
-  const { user, logout } = useAuth();
+function Home({ production, productions, onSelectProduction, onSwitchProduction, onIngestComplete, onOpenGuide }: HomeProps) {
   const initialUrl = useMemo(() => getInitialUrlState(), []);
   const [viewDocId, setViewDocId] = useState<string | null>(initialUrl.doc ?? null);
   const [searchQuery, setSearchQuery] = useState(initialUrl.q ?? '');
@@ -49,7 +54,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [docPage, setDocPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(!!initialUrl.q);
-  const [lastSearchMode, setLastSearchMode] = useState<'fulltext' | 'semantic'>('fulltext');
+  const [lastSearchMode, setLastSearchMode] = useState<SearchMode>('fulltext');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
@@ -57,39 +62,55 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
   const [filterTagId, setFilterTagId] = useState<number | null>(null);
   const [filterFileType, setFilterFileType] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('bates');
+  const [filterAiDecision, setFilterAiDecision] = useState<string>('');
 
   const [showManageAccess, setShowManageAccess] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
-  const [showQueueManager, setShowQueueManager] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(
     initialUrl.batch ? Number(initialUrl.batch) : null,
   );
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
-  const [showAIReview, setShowAIReview] = useState(initialUrl.view === 'ai');
-  const [showCorpusAnalysis, setShowCorpusAnalysis] = useState(initialUrl.view === 'analysis');
+  const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
 
-  // AI Agent chat (session-only) — floating launcher + "Send to AI Agent".
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatDocs, setChatDocs] = useState<AttachedDoc[]>([]);
-
-  // Attach the currently-selected documents to the AI agent and open the panel.
-  const sendSelectionToAgent = useCallback(() => {
-    const labelFor = (id: string): string => {
-      const fromSearch = searchResults.find(r => r.id === id);
-      if (fromSearch) return fromSearch.bates_begin;
-      const fromDocs = documents.find(d => d.id === id);
-      return fromDocs?.bates_begin ?? id.slice(0, 8);
-    };
-    const docs: AttachedDoc[] = Array.from(selectedIds).map(id => ({ id, label: labelFor(id) }));
-    setChatDocs(prev => {
-      // Merge with anything already attached, de-duplicating by id.
-      const seen = new Set(prev.map(d => d.id));
-      return [...prev, ...docs.filter(d => !seen.has(d.id))];
+  // AI chat, docked in the context rail (session-only conversation). The
+  // production id lets doc-less questions be grounded in the production
+  // ("ask the production") via server-side retrieval.
+  const chat = useChat(production.id);
+  const [railCollapsed, setRailCollapsed] = useState(() => {
+    try {
+      // Below 1025px the rail is an overlay drawer — starting it open would
+      // hide the whole page, so the stored desktop preference doesn't apply.
+      if (window.innerWidth < 1025) return true;
+      const stored = window.localStorage.getItem('vigilist.rail.collapsed');
+      if (stored !== null) return stored === '1';
+      return false;
+    } catch { return false; }
+  });
+  const toggleRail = useCallback(() => {
+    setRailCollapsed(prev => {
+      const next = !prev;
+      try { window.localStorage.setItem('vigilist.rail.collapsed', next ? '1' : '0'); } catch { /* storage unavailable */ }
+      return next;
     });
-    setChatOpen(true);
-  }, [selectedIds, searchResults, documents]);
+  }, []);
+  const [askFocusToken, setAskFocusToken] = useState(0);
+  const focusChat = useCallback(() => {
+    setRailCollapsed(prev => {
+      if (prev) {
+        try { window.localStorage.setItem('vigilist.rail.collapsed', '0'); } catch { /* storage unavailable */ }
+      }
+      return false;
+    });
+    setAskFocusToken(t => t + 1);
+  }, []);
+
+  const handleAsk = useCallback((question: string) => {
+    focusChat();
+    chat.send(question);
+  }, [chat, focusChat]);
 
   // Mirror the key bits of state back into the URL so a refresh lands
   // the user on the same page (doc viewer, batch review, search, etc.).
@@ -98,7 +119,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showAIReview ? 'ai' : showCorpusAnalysis ? 'analysis' : undefined,
+    view: showReview ? 'review' : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -114,21 +135,25 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
 
   const [perPage, setPerPage] = useState(50);
 
+  const refreshClusters = useCallback(() => {
+    getClusters(production.id).then(setClusters).catch(e => console.warn('getClusters failed:', e));
+  }, [production.id]);
+
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
-    getClusters(production.id).then(setClusters).catch(e => console.warn('getClusters failed:', e));
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId]);
+    refreshClusters();
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId, refreshClusters, filterAiDecision]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, filterClusterId ?? undefined);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, filterClusterId ?? undefined, filterAiDecision || undefined);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
-    } catch (e: unknown) {
+    } catch (e) {
       showToast(`Could not load documents: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
@@ -137,20 +162,14 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
 
   const [lastMetadata, setLastMetadata] = useState<Record<string, string> | undefined>(undefined);
 
-  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: 'fulltext' | 'semantic') => {
+  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => {
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
     setLastMetadata(metadata);
 
-    // Use forced mode if provided, otherwise auto-detect
-    const mode = forceMode ?? (
-      query.length > 40
-        || /\b(what|where|who|when|why|how|which|find|show|any|all)\b/i.test(query)
-        || query.includes('?')
-      ? 'semantic' : 'fulltext'
-    );
+    const mode = forceMode ?? detectSearchMode(query);
     setLastSearchMode(mode);
 
     try {
@@ -160,7 +179,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
-    } catch (e: unknown) {
+    } catch (e) {
       showToast(`Search failed: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
@@ -204,7 +223,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       showToast(`Tagged ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
       if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
       else loadDocuments(docPage);
-    } catch (e: unknown) {
+    } catch (e) {
       showToast(`Could not apply tag: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setBulkTagging(false);
@@ -225,7 +244,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       showToast(`Created tag "${name}" and applied to ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
       if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
       else loadDocuments(docPage);
-    } catch (e: unknown) {
+    } catch (e) {
       showToast(`Could not create tag: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setBulkTagging(false);
@@ -244,32 +263,87 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       showToast(`Downloaded ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
-    } catch (e: unknown) {
+    } catch (e) {
       showToast(`Could not build download: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setBulkDownloading(false);
     }
   };
 
-  // Build the current doc ID list for nav (search results or filtered docs)
-  const currentDocIds = hasSearched
-    ? searchResults.map(r => r.id)
-    : documents.map(d => d.id);
+  const handleRandomDoc = async () => {
+    try {
+      const { getRandomDocument } = await import('./api/client');
+      const { id } = await getRandomDocument(production.id);
+      setViewDocId(id);
+    } catch (e) {
+      showToast(
+        e instanceof Error && e.message.includes('404')
+          ? 'No documents in this production yet.'
+          : `Could not pick a random document: ${e instanceof Error ? e.message : 'unknown error'}`,
+        'error',
+      );
+    }
+  };
 
-  const displayDocs = documents;
-  const totalPages = Math.ceil(docTotal / perPage);
+  const themeIndexById = useMemo(() => {
+    const m = new Map<number, number>();
+    clusters.forEach((c, i) => m.set(c.id, (i % 8) + 1));
+    return m;
+  }, [clusters]);
 
-  // Full-screen sub-views are computed (not early-returned) so the floating AI
-  // Agent panel rendered below stays mounted across all of them — its
-  // session-only conversation must survive navigation to the doc viewer, AI
-  // review, corpus analysis, and batch review.
-  let fullScreenView: ReactNode = null;
-  if (showAIReview) {
-    fullScreenView = <AIReviewPage productionId={production.id} onViewDocument={(id) => { setShowAIReview(false); setViewDocId(id); }} onBack={() => setShowAIReview(false)} />;
-  } else if (showCorpusAnalysis) {
-    fullScreenView = <CorpusAnalysis productionId={production.id} onViewDocument={(id) => { setShowCorpusAnalysis(false); setViewDocId(id); }} onFilterCluster={() => {}} onBack={() => setShowCorpusAnalysis(false)} />;
-  } else if (activeBatchId) {
-    fullScreenView = (
+  const themeChip = (d: DocumentSummary) => {
+    if (d.cluster_id == null || !themeIndexById.has(d.cluster_id)) return null;
+    const active = filterClusterId === d.cluster_id;
+    return (
+      <button
+        type="button"
+        className={`doc-theme-chip${active ? ' is-active' : ''}`}
+        style={{ background: `var(--theme-${themeIndexById.get(d.cluster_id)})` }}
+        onClick={e => { e.stopPropagation(); setFilterClusterId(active ? null : d.cluster_id!); }}
+        title={d.cluster_label || 'Theme'}
+      >
+        {d.cluster_label || 'Theme'}
+      </button>
+    );
+  };
+
+  const aiMarker = (d: DocumentSummary) => {
+    if (!d.ai_decision || d.ai_decided) return null;
+    const label = d.ai_decision.replace(/_/g, ' ');
+    const color =
+      d.ai_decision === 'key_document' ? 'var(--color-primary-400)' :
+      d.ai_decision === 'relevant' ? 'var(--color-success)' :
+      d.ai_decision === 'needs_review' ? 'var(--color-warning)' :
+      'var(--color-neutral-400)';
+    return (
+      <span className="ai-marker" style={{ color }}>
+        <span className="ai-marker-star">✦</span> {label} {d.ai_confidence ?? 0}%
+      </span>
+    );
+  };
+
+  // Re-fetch the doc list (or re-run the active search) after leaving the
+  // review workspace, since markers/tags may have changed there. Called from
+  // event handlers only — never from a render-time effect.
+  const refreshList = () => {
+    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+    else loadDocuments(docPage);
+  };
+
+  // Review workspace full-screen mode (AI lane + human queue/batch lane)
+  if (showReview) {
+    return (
+      <ReviewWorkspace
+        production={production}
+        onViewDocument={(id) => { setShowReview(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setShowReview(false); refreshList(); }}
+      />
+    );
+  }
+
+  // Batch review full-screen mode
+  if (activeBatchId) {
+    return (
       <BatchReview
         batchId={activeBatchId}
         onClose={() => setActiveBatchId(null)}
@@ -279,8 +353,16 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         }}
       />
     );
-  } else if (viewDocId) {
-    fullScreenView = (
+  }
+
+  // Build the current doc ID list for nav (search results or filtered docs)
+  const currentDocIds = hasSearched
+    ? searchResults.map(r => r.id)
+    : documents.map(d => d.id);
+
+  // Document viewer mode
+  if (viewDocId) {
+    return (
       <DocumentViewer
         docId={viewDocId}
         onNavigate={setViewDocId}
@@ -299,77 +381,40 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
     );
   }
 
+  const displayDocs = documents;
+  const totalPages = Math.ceil(docTotal / perPage);
+
   return (
-    <>
-      {fullScreenView ?? (
-      <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
-      {/* Header */}
-      <div className="app-header">
-        <span className="logo" onClick={clearSearch}>
-          Vigilist
-        </span>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44, 62, 107, 0.25)', margin: '0 2px' }}>/</span>
-        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink)', cursor: 'pointer', marginRight: 'var(--space-3)' }} onClick={onSwitchProduction}>
-          {production.name}
-        </span>
-        <div className="desktop-only" style={{ display: 'flex', gap: 4, background: 'rgba(44, 62, 107, 0.05)', borderRadius: 'var(--radius-md)', padding: 3 }}>
-          {production.is_owner && (
-            <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowManageAccess(true)}>Share</button>
-          )}
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => setShowAIReview(true)}>
-            <span className="ai-indicator" style={{ padding: '0 4px', fontSize: 9 }}>AI</span>
-            Smart Review
-          </button>
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowQueueManager(true)}>Review Queues</button>
-          <button className="btn-header" style={{ background: 'rgba(255,255,255,0.7)' }} onClick={() => setShowDashboard(true)}>Dashboard</button>
-        </div>
-        <div className="user-menu">
-          <span className="desktop-only" style={{ display: 'contents' }}>
-            {production.is_owner && (
-              <button className="btn-header" onClick={() => setShowAuditLog(true)}>Audit Log</button>
-            )}
-            <button className="btn-header" onClick={() => setShowIngestWizard(true)}>+ Ingest</button>
-          </span>
-          <UserAvatar name={user?.displayName ?? null} email={user?.email ?? ''} photoUrl={user?.photoURL} size={26} />
-          <span className="desktop-only" style={{ color: 'var(--color-ink)', fontWeight: 500 }}>{user?.displayName || user?.email}</span>
-          <button className="btn-header" onClick={logout}>Sign out</button>
-        </div>
-      </div>
+    <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
+      <AppHeader
+        production={production}
+        productions={productions}
+        onSelectProduction={onSelectProduction}
+        onShowAllProductions={onSwitchProduction}
+        onSearch={handleSearch}
+        onLogoClick={clearSearch}
+        initialQuery={searchQuery}
+        onAsk={handleAsk}
+        onOpenReview={() => setShowReview(true)}
+        onOpenDashboard={() => setShowDashboard(true)}
+        onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
+        onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
+        onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}
+        onOpenIngest={() => setShowIngestWizard(true)}
+        onOpenGuide={onOpenGuide}
+        onRandomDoc={handleRandomDoc}
+      />
 
       {/* Content */}
-      <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <div style={{ flex: 1 }}>
-            <SearchBar onSearch={handleSearch} initialQuery={searchQuery} />
-          </div>
-          <button
-            className="btn btn-primary desktop-only"
-            onClick={async () => {
-              try {
-                const { getRandomDocument } = await import('./api/client');
-                const { id } = await getRandomDocument(production.id);
-                setViewDocId(id);
-              } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : '';
-                showToast(
-                  msg.includes('404')
-                    ? 'No documents in this production yet.'
-                    : `Could not pick a random document: ${msg || 'unknown error'}`,
-                  'error',
-                );
-              }
-            }}
-            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
-          >
-            I'm Feeling Lucky
-          </button>
-        </div>
-
-        <TopicGroups
+      <div className={`home-shell${railCollapsed ? '' : ' rail-open'}`}>
+        <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
+        <ProductionBrief
+          production={production}
           clusters={clusters}
           activeClusterId={filterClusterId}
-          onSelect={setFilterClusterId}
-          onOpenAnalysis={() => setShowCorpusAnalysis(true)}
+          onSelectCluster={setFilterClusterId}
+          onViewDocument={setViewDocId}
+          onPipelineSettled={refreshClusters}
         />
 
         {/* My Review Batches */}
@@ -462,7 +507,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType) && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterAiDecision) && (
           <div>
             <div className="section-header">
               <h2 className="section-title">
@@ -501,6 +546,20 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                   <option value="image">Image (PNG/JPG)</option>
                   <option value="native">All native files</option>
                 </select>
+                <label htmlFor="filter-ai" className="visually-hidden">Filter by AI decision</label>
+                <select
+                  id="filter-ai"
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 120 }}
+                  value={filterAiDecision}
+                  onChange={e => { setFilterAiDecision(e.target.value); setDocPage(1); }}
+                >
+                  <option value="">AI: All</option>
+                  <option value="relevant">AI: Relevant</option>
+                  <option value="key_document">AI: Key document</option>
+                  <option value="not_relevant">AI: Not relevant</option>
+                  <option value="needs_review">AI: Needs review</option>
+                </select>
                 <label htmlFor="sort-by" className="visually-hidden">Sort order</label>
                 <select
                   id="sort-by"
@@ -513,8 +572,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                   <option value="recent">Sort: Recent</option>
                   <option value="size">Sort: Size</option>
                 </select>
-                {(filterTagId || filterFileType) && (
-                  <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setDocPage(1); }}>
+                {(filterTagId || filterFileType || filterAiDecision) && (
+                  <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setFilterAiDecision(''); setDocPage(1); }}>
                     Clear filters
                   </button>
                 )}
@@ -541,7 +600,7 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
             </div>
 
             {viewMode === 'list' ? (
-              <div className="card" style={{ overflow: 'hidden' }}>
+              <div className="card" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
                 <table className="doc-table">
                   <thead>
                     <tr>
@@ -561,6 +620,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                       <th>Bates Range</th>
                       <th>Title</th>
                       <th style={{ width: 80 }}>Type</th>
+                      <th>Theme</th>
+                      <th>AI</th>
                       <th>Pages</th>
                       <th>Tags</th>
                       <th>Notes</th>
@@ -609,9 +670,11 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                             d.file_type === 'image' ? 'blue' :
                             'gray'
                           }`} style={{ fontSize: 10, textTransform: 'capitalize' }}>
-                            {d.file_type === 'document' ? 'doc' : d.file_type}
+                            {d.file_type === 'document' ? 'DOC' : d.file_type === 'pdf' ? 'PDF' : d.file_type}
                           </span>
                         </td>
+                        <td className="meta-cell">{themeChip(d)}</td>
+                        <td className="meta-cell">{aiMarker(d)}</td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -661,6 +724,8 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
                             {tag.name}
                           </span>
                         ))}
+                        {themeChip(d)}
+                        {aiMarker(d)}
                       </div>
                     </div>
                   </div>
@@ -719,13 +784,31 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
             </button>
           </div>
         )}
+        </div>
+        <ContextRail
+          production={production}
+          chat={chat}
+          collapsed={railCollapsed}
+          onToggleCollapsed={toggleRail}
+          autoFocusToken={askFocusToken}
+          selectedIds={selectedIds}
+          documents={documents}
+          searchResults={searchResults}
+          onViewDocument={setViewDocId}
+          onSimilarResults={(label, results) => {
+            setSearchQuery(label);
+            setHasSearched(true);
+            setSearchResults(results);
+            setSearchTotal(results.length);
+          }}
+          onAttached={focusChat}
+        />
       </div>
 
       {/* Manage access modal */}
       {showManageAccess && (
         <ManageAccess
           productionId={production.id}
-          productionName={production.name}
           onClose={() => setShowManageAccess(false)}
         />
       )}
@@ -738,17 +821,20 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
         />
       )}
 
+      {showSettings && (
+        <ProductionSettings
+          production={production}
+          onClose={() => setShowSettings(false)}
+          onSaved={(updated) => { onSelectProduction(updated); setShowSettings(false); }}
+        />
+      )}
+
       {/* Ingest wizard modal */}
       {showIngestWizard && (
         <IngestWizard
           onClose={() => setShowIngestWizard(false)}
           onComplete={() => { setShowIngestWizard(false); onIngestComplete(); }}
         />
-      )}
-
-      {/* Queue manager modal */}
-      {showQueueManager && (
-        <QueueManager productionId={production.id} onClose={() => setShowQueueManager(false)} />
       )}
 
       {/* Dashboard modal */}
@@ -774,14 +860,6 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
             disabled={bulkDownloading}
           >
             {bulkDownloading ? 'Preparing…' : 'Download'}
-          </button>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={sendSelectionToAgent}
-            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <span className="ai-indicator" style={{ fontSize: 9, padding: '0 4px' }}>AI</span>
-            Send to AI Agent
           </button>
           <div style={{ position: 'relative' }}>
             <button
@@ -848,33 +926,6 @@ function Home({ production, onSwitchProduction, onIngestComplete }: HomeProps) {
       )}
 
     </div>
-      )}
-
-      {/* Floating AI Agent launcher — hidden while the panel is open. Rendered
-          outside the view switch so it persists across the doc viewer, AI
-          review, corpus, and batch views. */}
-      {!chatOpen && (
-        <button
-          className="ai-agent-fab"
-          onClick={() => setChatOpen(true)}
-          aria-label="Open AI Agent"
-          title="AI Agent"
-        >
-          <span className="ai-indicator" style={{ fontSize: 13, padding: '2px 7px', background: 'transparent', color: '#fff', boxShadow: 'none' }}>AI</span>
-        </button>
-      )}
-
-      {/* AI Agent chat panel — kept mounted across all views so the session
-          conversation survives navigation. Citations open in-app; the chat
-          floats above the opened document. */}
-      <AIAgent
-        open={chatOpen}
-        onClose={() => setChatOpen(false)}
-        attachedDocs={chatDocs}
-        onRemoveDoc={(id) => setChatDocs(prev => prev.filter(d => d.id !== id))}
-        onOpenDocument={(id) => setViewDocId(id)}
-      />
-    </>
   );
 }
 
@@ -897,7 +948,7 @@ function AppRouter() {
       if (fromUrl) setActiveProduction(fromUrl);
       else if (prods.length === 1) setActiveProduction(prods[0]);
       else if (prods.length === 0) setActiveProduction(null);
-    } catch (e: unknown) {
+    } catch (e) {
       showToast(`Could not load productions: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setProdLoading(false);
@@ -911,6 +962,18 @@ function AppRouter() {
     loadProductions();
   };
 
+  const { user } = useAuth();
+  const { open: guideOpen, close: closeGuide, dismissForever, reopen: openGuide } = useOnboarding(user?.uid);
+
+  // Someone with zero productions is about to ingest and become an owner —
+  // they are exactly who needs the owner slide.
+  const showOwnerSlides = productions.length === 0 || productions.some(p => p.is_owner);
+  const slides = useMemo(
+    () => SLIDES.filter(s => showOwnerSlides || !s.ownerOnly),
+    [showOwnerSlides],
+  );
+
+  // Don't show the guide over a loading spinner.
   if (prodLoading) {
     return (
       <div className="loading-fullscreen">
@@ -920,42 +983,49 @@ function AppRouter() {
     );
   }
 
+  let content: ReactNode;
   if (productions.length === 0) {
-    return (
-      <>
-        <WelcomePage onIngest={() => setShowIngestWizard(true)} />
-        {showIngestWizard && (
-          <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
-        )}
-        <ToastContainer />
-      </>
+    content = <WelcomePage onIngest={() => setShowIngestWizard(true)} />;
+  } else if (!activeProduction) {
+    content = (
+      <ProductionPicker
+        productions={productions}
+        onSelect={setActiveProduction}
+        onIngest={() => setShowIngestWizard(true)}
+        onDeleted={loadProductions}
+      />
     );
-  }
-
-  if (!activeProduction) {
-    return (
-      <>
-        <ProductionPicker
-          productions={productions}
-          onSelect={setActiveProduction}
-          onIngest={() => setShowIngestWizard(true)}
-          onDeleted={loadProductions}
-        />
-        {showIngestWizard && (
-          <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
-        )}
-        <ToastContainer />
-      </>
+  } else {
+    content = (
+      <Home
+        key={activeProduction.id}
+        production={activeProduction}
+        productions={productions}
+        onSelectProduction={setActiveProduction}
+        onSwitchProduction={() => setActiveProduction(null)}
+        onIngestComplete={handleIngestComplete}
+        onOpenGuide={openGuide}
+      />
     );
   }
 
   return (
     <>
-      <Home
-        production={activeProduction}
-        onSwitchProduction={() => setActiveProduction(null)}
-        onIngestComplete={handleIngestComplete}
-      />
+      {content}
+      {/* Only the WelcomePage and ProductionPicker branches ever rendered this
+          wizard. `Home` renders its own from its own state, so guarding on
+          !activeProduction keeps a minimized in-flight ingest from surviving into
+          Home and doubling up with Home's instance. */}
+      {showIngestWizard && !activeProduction && (
+        <IngestWizard onClose={() => setShowIngestWizard(false)} onComplete={handleIngestComplete} />
+      )}
+      {guideOpen && (
+        <OnboardingGuide
+          slides={slides}
+          onClose={closeGuide}
+          onDismissForever={dismissForever}
+        />
+      )}
       <ToastContainer />
     </>
   );
@@ -1001,5 +1071,5 @@ function AppContent() {
     </div>
   );
   if (!user) return <AuthPage />;
-  return <AppRouter />;
+  return <AppRouter key={user.uid} />;
 }

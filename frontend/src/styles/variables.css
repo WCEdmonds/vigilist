@@ -8,8 +8,10 @@
   --color-parchment-warm: #f2ede5;
   --color-card: #ffffff;
   --color-card-hover: #faf7f2;
+  /* Ivory: an elevated warm-white surface that reads as "paper laid on the
+     parchment desk" — for flagship panels that must stand off the page bg. */
+  --color-ivory: #fffdf8;
   --color-rule: #8b7355;
-  --color-margin: rgba(183, 28, 28, 0.06);
 
   /* ── Brand (ink-blue) ── */
   --color-brand-50: rgba(44, 62, 107, 0.04);
@@ -75,6 +77,20 @@
   --color-purple-600: #381e87;
   --color-purple-700: #2c166e;
 
+  /* ── Accent (brass — avatar chip, warm highlights) ── */
+  --color-brass: #c49a4a;
+  --color-brass-soft: rgba(196, 154, 74, 0.18);
+
+  /* ── Theme hues (cluster chips, brief donut) — muted archival palette ── */
+  --theme-1: #5b6e9e;
+  --theme-2: #8a6d4f;
+  --theme-3: #6d8a71;
+  --theme-4: #9e6a5b;
+  --theme-5: #7a6a95;
+  --theme-6: #5f8a8a;
+  --theme-7: #a3855c;
+  --theme-8: #85607a;
+
   /* ── Typography ── */
   --font-sans: 'Libre Franklin', 'Segoe UI', system-ui, sans-serif;
   --font-serif: 'Cormorant Garamond', Garamond, 'Times New Roman', serif;
@@ -133,7 +149,8 @@
   --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
 
   /* ── Layout ── */
-  --header-height: 52px;
   --nav-height: 44px;
   --sidebar-width: 400px;
+  --rail-width: 380px;
+  --cb-height: 52px;
 }

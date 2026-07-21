@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  deleteReviewProject, getProjectStatus, listReviewProjects, listReviewResults,
-  pauseRun, recordDecision, runFull, runSample,
+  bulkAcceptResults, createQueue, deleteReviewProject, getClassifyEstimate, getProjectStatus, listReviewProjects,
+  listReviewResults, pauseRun, recordDecision, runFull, runSample, startAutoClassification, updateReviewProject,
 } from '../api/client';
-import type { AIReviewResult, PaginatedReviewResults, ReviewProject } from '../types';
+import type { AIReviewResult, ClassifyEstimate, PaginatedReviewResults, ReviewProject } from '../types';
 import ReviewProjectSetup from './ReviewProjectSetup';
+import { showToast } from './Toast';
 
 interface Props {
   productionId: number;
+  /** Documents in the production — bounds the setup form's sample slider. */
+  docCount: number;
+  /** The production's case description; enables the one-click relevance pass. */
+  caseContext?: string | null;
   onViewDocument: (docId: string, excerpts?: string[]) => void;
-  onBack: () => void;
+  /** Called after a queue is successfully created from a results slice. */
+  onQueueCreated?: () => void;
 }
 
 const CAT_COLORS: Record<string, string> = {
@@ -28,7 +34,7 @@ function getCategoryStyle(categories: { name: string; color: string; description
   };
 }
 
-export default function AIReviewPage({ productionId, onViewDocument, onBack }: Props) {
+export default function AIReviewLane({ productionId, docCount, caseContext, onViewDocument, onQueueCreated }: Props) {
   const [projects, setProjects] = useState<ReviewProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [activeProject, setActiveProject] = useState<ReviewProject | null>(null);
@@ -40,10 +46,45 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
   const [decisionNote, setDecisionNote] = useState('');
   const pollRef = useRef<number | null>(null);
 
+  // Bulk accept
+  const [bulkThreshold, setBulkThreshold] = useState(80);
+  const [bulkAccepting, setBulkAccepting] = useState(false);
+
+  // One-click initial relevance pass (empty state): cost estimate + starter.
+  const [estimate, setEstimate] = useState<ClassifyEstimate | null>(null);
+  const [startingPass, setStartingPass] = useState(false);
+
+  // Queue from this slice
+  const [showQueueForm, setShowQueueForm] = useState(false);
+  const [queueDecision, setQueueDecision] = useState('relevant');
+  const [queueName, setQueueName] = useState('AI relevant ≥80%');
+  const [queueCreating, setQueueCreating] = useState(false);
+
   // Load projects
   useEffect(() => {
     listReviewProjects(productionId).then(setProjects).catch(() => {});
   }, [productionId]);
+
+  // Fetch the classification cost estimate for the empty-state offer. Only
+  // relevant while there are no projects and a case description exists.
+  useEffect(() => {
+    if (projects.length > 0 || !caseContext) return;
+    getClassifyEstimate(productionId).then(setEstimate).catch(() => {});
+  }, [productionId, projects.length, caseContext]);
+
+  const handleStartRelevancePass = async () => {
+    setStartingPass(true);
+    try {
+      await startAutoClassification(productionId);
+      const updated = await listReviewProjects(productionId);
+      setProjects(updated);
+      if (updated.length > 0) setActiveProjectId(updated[0].id);
+    } catch (e) {
+      showToast(`Could not start the relevance pass: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
+    } finally {
+      setStartingPass(false);
+    }
+  };
 
   // Sync activeProject from projects list when activeProjectId changes
   useEffect(() => {
@@ -132,18 +173,34 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
 
   const handleDecision = async (decision: string) => {
     if (!selectedResult) return;
-    const updated = await recordDecision(selectedResult.id, decision, decisionNote || undefined);
-    setResults(prev => prev ? {
-      ...prev,
-      results: prev.results.map(r => r.id === updated.id ? updated : r),
-    } : prev);
-    setSelectedResult(updated);
-    setDecisionNote('');
-    // Auto-advance to next unreviewed
-    if (results) {
-      const nextIdx = results.results.findIndex(r => r.id === selectedResult.id) + 1;
-      const next = results.results.slice(nextIdx).find(r => !r.attorney_decision);
-      if (next) setSelectedResult(next);
+    try {
+      const updated = await recordDecision(selectedResult.id, decision, decisionNote || undefined);
+      setResults(prev => prev ? {
+        ...prev,
+        results: prev.results.map(r => r.id === updated.id ? updated : r),
+      } : prev);
+      setSelectedResult(updated);
+      setDecisionNote('');
+      // Auto-advance to next unreviewed
+      if (results) {
+        const nextIdx = results.results.findIndex(r => r.id === selectedResult.id) + 1;
+        const next = results.results.slice(nextIdx).find(r => !r.attorney_decision);
+        if (next) setSelectedResult(next);
+      }
+    } catch {
+      showToast('Could not record decision', 'error');
+    }
+  };
+
+  const handleMakePrimary = async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    try {
+      await updateReviewProject(productionId, id, { is_primary: true });
+      const updated = await listReviewProjects(productionId);
+      setProjects(updated);
+      showToast('Primary project updated', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not update primary project', 'error');
     }
   };
 
@@ -151,6 +208,50 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
     await deleteReviewProject(productionId, id);
     setProjects(prev => prev.filter(p => p.id !== id));
     if (activeProjectId === id) { setActiveProjectId(null); setResults(null); setSelectedResult(null); }
+  };
+
+  const handleBulkAccept = async () => {
+    if (!activeProject) return;
+    setBulkAccepting(true);
+    try {
+      const { accepted } = await bulkAcceptResults(productionId, activeProject.id, bulkThreshold);
+      showToast(`Accepted ${accepted} suggestions`, 'success');
+      await fetchResults();
+      const updated = await listReviewProjects(productionId);
+      setProjects(updated);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Bulk accept failed', 'error');
+    } finally {
+      setBulkAccepting(false);
+    }
+  };
+
+  const openQueueForm = () => {
+    const decision = queueDecision || 'relevant';
+    setQueueName(`AI ${decision} ≥80%`);
+    setShowQueueForm(true);
+  };
+
+  const handleQueueDecisionChange = (decision: string) => {
+    setQueueDecision(decision);
+    setQueueName(`AI ${decision} ≥80%`);
+  };
+
+  const handleCreateQueueFromSlice = async () => {
+    if (!activeProject) return;
+    setQueueCreating(true);
+    try {
+      await createQueue(productionId, queueName.trim() || `AI ${queueDecision} ≥80%`, '', '', {
+        ai: { project_id: activeProject.id, decision: queueDecision, min_confidence: 80, exclude_decided: true },
+      });
+      showToast(`Queue "${queueName.trim() || queueDecision}" created`, 'success');
+      setShowQueueForm(false);
+      onQueueCreated?.();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not create queue', 'error');
+    } finally {
+      setQueueCreating(false);
+    }
   };
 
   const isProcessing = activeProject && ['sampling', 'running'].includes(activeProject.status);
@@ -161,11 +262,13 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
   const agreementRate = results?.agreement_rate;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      {/* Header */}
-      <div className="app-header">
-        <button className="btn-header" onClick={onBack}>← Back</button>
-        <span className="logo">Smart Review</span>
+    <div className="review-lane" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Lane toolbar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--color-neutral-200)',
+      }}>
+        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-neutral-500)' }}>Smart Review</span>
         <button className="btn btn-primary btn-sm" onClick={() => setShowSetup(true)}>
           + New Review Project
         </button>
@@ -183,11 +286,19 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
               background: activeProjectId === p.id ? 'var(--color-neutral-100)' : 'transparent',
               marginBottom: 'var(--space-1)',
             }}>
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{p.name}</div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', display: 'flex', gap: 'var(--space-2)' }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                {p.name}
+                {p.is_primary && <span className="badge badge-blue">Primary</span>}
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                 <span style={{ textTransform: 'capitalize' }}>{p.status.replace(/_/g, ' ')}</span>
                 {p.decision_breakdown && (
                   <span>{Object.values(p.decision_breakdown).reduce((a, b) => a + b, 0)} docs</span>
+                )}
+                {!p.is_primary && (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={e => handleMakePrimary(e, p.id)}>
+                    Make primary
+                  </button>
                 )}
               </div>
             </div>
@@ -202,9 +313,36 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
         {/* Center: Results queue */}
         <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-3)' }}>
           {!activeProject ? (
-            <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-neutral-400)' }}>
-              Select a review project or create a new one
-            </div>
+            projects.length === 0 && caseContext ? (
+              <div style={{ maxWidth: 480, margin: 'var(--space-8) auto', textAlign: 'center' }}>
+                <div style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-2)' }}>
+                  <span className="brief-ai-mark">✦</span>
+                </div>
+                <h2 style={{ margin: '0 0 var(--space-2)', fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>
+                  Run the initial relevance pass
+                </h2>
+                <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-600)', marginBottom: 'var(--space-3)' }}>
+                  The AI classifies every document against your case description — relevant,
+                  key document, not relevant, or needs review. You vet each call, and accepted
+                  suggestions become ordinary tags.
+                </p>
+                {estimate && (
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-3)' }}>
+                    {estimate.doc_count} documents · estimated cost ${estimate.est_usd.toFixed(2)}
+                  </p>
+                )}
+                <button className="btn btn-primary" onClick={handleStartRelevancePass} disabled={startingPass}>
+                  {startingPass ? 'Starting…' : '✦ Start relevance pass'}
+                </button>
+                <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', marginTop: 'var(--space-3)' }}>
+                  Or create a custom review project with your own criteria and categories.
+                </p>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-neutral-400)' }}>
+                Select a review project or create a new one
+              </div>
+            )
           ) : (
             <>
               {/* Project header */}
@@ -231,6 +369,55 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
                 )}
                 <button className="btn btn-ghost btn-sm" style={{ color: 'var(--color-danger-500)' }}
                   onClick={() => handleDelete(activeProject.id)}>Delete</button>
+              </div>
+
+              {/* Results header: bulk accept + queue-from-slice */}
+              <div style={{
+                display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-3)',
+                padding: 'var(--space-2) var(--space-3)', marginBottom: 'var(--space-3)',
+                background: 'var(--color-neutral-50)', border: '1px solid var(--color-neutral-200)', borderRadius: 'var(--radius-md)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+                  <span>Bulk accept &ge;</span>
+                  <input
+                    type="number" className="input" min={0} max={100}
+                    value={bulkThreshold}
+                    onChange={e => setBulkThreshold(Math.max(1, Number(e.target.value) || 0))}
+                    style={{ width: 64, padding: '2px 6px' }}
+                  />
+                  <span>%</span>
+                  <button className="btn btn-secondary btn-sm" disabled={bulkAccepting} onClick={handleBulkAccept}>
+                    {bulkAccepting ? 'Accepting…' : 'Bulk accept'}
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                  {!showQueueForm ? (
+                    <button className="btn btn-ghost btn-sm" onClick={openQueueForm}>
+                      &rarr; Queue from this slice
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+                      <select className="input" value={queueDecision} onChange={e => handleQueueDecisionChange(e.target.value)} style={{ padding: '2px 6px' }}>
+                        {activeProject.categories.map(c => (
+                          <option key={c.name} value={c.name}>{c.name}</option>
+                        ))}
+                        {!activeProject.categories.some(c => c.name === 'relevant') && (
+                          <option value="relevant">relevant</option>
+                        )}
+                      </select>
+                      <input
+                        type="text" className="input" value={queueName}
+                        onChange={e => setQueueName(e.target.value)}
+                        style={{ width: 200, padding: '2px 6px' }}
+                      />
+                      <button className="btn btn-primary btn-sm" disabled={queueCreating} onClick={handleCreateQueueFromSlice}>
+                        {queueCreating ? 'Creating…' : 'Create'}
+                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setShowQueueForm(false)}>Cancel</button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Progress bar */}
@@ -286,7 +473,7 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
                   </div>
                   {r.attorney_decision && (
                     <span style={{ fontSize: 'var(--text-xs)', color: r.attorney_decision === 'agree' ? 'var(--color-success-600)' : 'var(--color-warning-600)' }}>
-                      {r.attorney_decision === 'agree' ? '\u2713' : '\u270E'}
+                      {r.attorney_decision === 'agree' ? '✓' : '✎'}
                     </span>
                   )}
                 </div>
@@ -383,7 +570,7 @@ export default function AIReviewPage({ productionId, onViewDocument, onBack }: P
         )}
       </div>
 
-      {showSetup && <ReviewProjectSetup productionId={productionId} onCreated={handleProjectCreated} onCancel={() => setShowSetup(false)} />}
+      {showSetup && <ReviewProjectSetup productionId={productionId} docCount={docCount} onCreated={handleProjectCreated} onCancel={() => setShowSetup(false)} />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentFamily, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
-import type { Annotation, DocumentDetail, DocumentTagEntry, DuplicateEntry, FamilyMember, FamilyThread } from '../types';
+import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
+import type { Annotation, DocumentDetail, DocumentTagEntry, DuplicateEntry } from '../types';
 import DocumentNav from './DocumentNav';
 import ImagePanel from './ImagePanel';
 import NativeViewer, { type MediaPlayerHandle } from './NativeViewer';
@@ -11,29 +11,6 @@ import TextPanel from './TextPanel';
 import AnnotationPopover from './AnnotationPopover';
 import AnnotationSidebar from './AnnotationSidebar';
 
-const TIER_RANK: Record<string, number> = { hash: 0, exact: 1, similar: 2 };
-const tierRank = (t: string): number => TIER_RANK[t] ?? 9;
-
-const FamilyList = ({ label, items, onNavigate }: {
-  label: string; items: FamilyMember[]; onNavigate: (id: string) => void;
-}) => {
-  if (items.length === 0) return null;
-  return (
-    <div style={{ flex: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderTop: '1px solid rgba(44,62,107,0.08)' }}>
-      <div className="panel-header">{label} ({items.length})</div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2)' }}>
-        {items.map(m => (
-          <div key={m.document_id} onClick={() => onNavigate(m.document_id)}
-            style={{ padding: 'var(--space-1-5)', cursor: 'pointer', fontSize: 'var(--text-xs)', borderBottom: '1px solid rgba(44,62,107,0.06)' }}>
-            <div style={{ fontWeight: 600 }}>{m.bates_begin}</div>
-            <div style={{ color: 'rgba(44,62,107,0.5)' }}>{m.title || 'No title'}</div>
-            {m.is_inclusive && <span className="badge badge-gray" style={{ fontSize: 9 }}>Inclusive</span>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
 
 interface Props {
   docId: string;
@@ -59,7 +36,6 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [similarLoading, setSimilarLoading] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateEntry[]>([]);
-  const [family, setFamily] = useState<FamilyThread>({ family: [], thread: [] });
   const [imageRotation, setImageRotation] = useState(0);
   const [mediaTime, setMediaTime] = useState<number | null>(null);
   const mediaRef = useRef<MediaPlayerHandle>(null);
@@ -79,7 +55,6 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     setCenterTab('images');
     setAnnotations([]);
     setDuplicates([]);
-    setFamily({ family: [], thread: [] });
     setPopover(null);
     getDocument(docId).then(d => {
       setDoc(d);
@@ -88,7 +63,6 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     getDocumentNav(docId).then(nav => setNextId(nav.next_id)).catch(e => console.warn('getDocumentNav failed:', e));
     listAnnotations(docId).then(setAnnotations).catch(e => console.warn('listAnnotations failed:', e));
     getDocumentDuplicates(docId).then(setDuplicates).catch(e => console.warn('getDocumentDuplicates failed:', e));
-    getDocumentFamily(docId).then(setFamily).catch(e => console.warn('getDocumentFamily failed:', e));
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {
@@ -113,7 +87,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       } else {
         window.alert('Nothing to download — this document has no native file or page images.');
       }
-    } catch (e: unknown) {
+    } catch (e) {
       window.alert(`Download failed: ${e instanceof Error ? e.message : 'unknown error'}`);
     }
   };
@@ -129,7 +103,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
       const res = await summarizeDocument(docId);
       setSummary(res.summary);
       if (doc) setDoc({ ...doc, summary: res.summary });
-    } catch (e: unknown) {
+    } catch (e) {
       setSummary(`Error: ${e instanceof Error ? e.message : 'unknown error'}`);
     } finally {
       setSummaryLoading(false);
@@ -147,8 +121,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         // Fallback: search with extracted terms
         onSearch(res.search_terms);
       }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'An error occurred');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'unknown error');
     } finally {
       setSimilarLoading(false);
     }
@@ -382,11 +356,11 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Header */}
-      <div className="app-header">
-        <button className="btn-header" onClick={onBack}>← Back</button>
-        <span className="logo">Vigilist</span>
-        <div className="user-menu">
-          <button className="btn-header" onClick={handleDownload}>Download File</button>
+      <div className="viewer-bar">
+        <button className="cb-action" onClick={onBack}>← Back</button>
+        <span className="viewer-bar-logo">Vigilist</span>
+        <div className="cb-actions">
+          <button className="cb-action" onClick={handleDownload}>Download File</button>
         </div>
       </div>
 
@@ -429,7 +403,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
               <div style={{ flex: 0, minHeight: 60, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderTop: '1px solid rgba(44,62,107,0.08)' }}>
                 <div className="panel-header">Duplicates ({duplicates.length})</div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2)' }}>
-                  {[...duplicates].sort((a, b) => tierRank(a.type) - tierRank(b.type)).map(d => (
+                  {duplicates.map(d => (
                     <div
                       key={d.document_id}
                       onClick={() => onNavigate(d.document_id)}
@@ -438,24 +412,13 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                       <div style={{ fontWeight: 600 }}>{d.bates_begin}</div>
                       <div style={{ color: 'rgba(44,62,107,0.5)' }}>{d.title || 'No title'}</div>
                       <span className="badge badge-gray" style={{ fontSize: 9 }}>
-                        {d.type === 'hash'
-                          ? 'Identical file'
-                          : d.type === 'exact'
-                            ? `Near-identical text · ${Math.round(d.similarity * 100)}%`
-                            : `Similar · ${Math.round(d.similarity * 100)}%`}
+                        {d.type === 'exact' ? 'Exact' : 'Similar'} · {Math.round(d.similarity * 100)}%
                       </span>
-                      {d.custodian && (
-                        <div style={{ color: 'rgba(44,62,107,0.5)', fontSize: 9 }}>
-                          Custodian: {d.custodian}
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
               </div>
             )}
-            <FamilyList label="Family" items={family.family} onNavigate={onNavigate} />
-            <FamilyList label="Thread" items={family.thread} onNavigate={onNavigate} />
           </div>
         </div>
 
@@ -496,7 +459,16 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
 
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {rightTab === 'text' && <TextPanel text={doc.text_content} searchQuery={searchQuery} />}
-            {rightTab === 'metadata' && <MetadataPanel doc={doc} />}
+            {rightTab === 'metadata' && (
+              <MetadataPanel
+                doc={doc}
+                onSummarize={handleSummarize}
+                onFindSimilar={onSearch ? handleFindSimilar : undefined}
+                summarizing={summaryLoading}
+                findingSimilar={similarLoading}
+                hasSummary={!!doc.summary}
+              />
+            )}
             {rightTab === 'summary' && (
               <div style={{ padding: 'var(--space-4)', overflow: 'auto', flex: 1, fontSize: 'var(--text-sm)', lineHeight: 'var(--leading-relaxed)' }}>
                 {summaryLoading ? (
@@ -507,20 +479,6 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                   <p style={{ color: 'var(--color-neutral-400)', fontStyle: 'italic' }}>No summary yet.</p>
                 )}
               </div>
-            )}
-          </div>
-
-          {/* AI Tools */}
-          <div style={{ borderTop: '1px solid rgba(44,62,107,0.08)', padding: 'var(--space-2)', display: 'flex', gap: 'var(--space-1-5)', flexWrap: 'wrap' }}>
-            <button className="btn btn-secondary btn-xs" onClick={handleSummarize} disabled={summaryLoading}>
-              <span className="ai-indicator" style={{ padding: '0 3px', fontSize: 8 }}>AI</span>
-              {summaryLoading ? 'Summarizing...' : 'Summarize'}
-            </button>
-            {onSearch && (
-              <button className="btn btn-secondary btn-xs" onClick={handleFindSimilar} disabled={similarLoading}>
-                <span className="ai-indicator" style={{ padding: '0 3px', fontSize: 8 }}>AI</span>
-                {similarLoading ? 'Searching...' : 'Find Similar'}
-              </button>
             )}
           </div>
         </div>
