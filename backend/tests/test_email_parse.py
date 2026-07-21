@@ -105,6 +105,39 @@ def test_expand_email_msg_roundtrip():
     assert msgs[0].subject  # a real .msg fixture has a subject
 
 
+def _build_eml_with_threading() -> bytes:
+    # Use raw bytes so the folded References header (with \r\n + space) is
+    # preserved exactly — EmailMessage (new policy) rejects embedded CRLFs.
+    return (
+        b"From: alice@example.com\r\n"
+        b"To: bob@example.com\r\n"
+        b"Subject: Re: Q3 numbers\r\n"
+        b"Date: Mon, 20 Jul 2026 14:30:00 +0000\r\n"
+        b"Message-ID: <msg-2@example.com>\r\n"
+        b"In-Reply-To: <msg-1@example.com>\r\n"
+        b"References: <msg-0@example.com>\r\n"
+        b" <msg-1@example.com>\r\n"
+        b"Content-Type: text/plain; charset=\"utf-8\"\r\n"
+        b"\r\n"
+        b"See below.\r\n"
+    )
+
+
+def test_parse_eml_captures_threading_headers():
+    parsed = _parse_eml_bytes(_build_eml_with_threading())
+    assert parsed.message_id == "<msg-2@example.com>"
+    assert parsed.in_reply_to == "<msg-1@example.com>"
+    # References whitespace/newlines collapse to single-space-joined ids.
+    assert parsed.references == "<msg-0@example.com> <msg-1@example.com>"
+
+
+def test_parse_eml_without_threading_headers_yields_empty_strings():
+    parsed = _parse_eml_bytes(_build_eml(with_attachment=False))
+    assert parsed.message_id == ""
+    assert parsed.in_reply_to == ""
+    assert parsed.references == ""
+
+
 @pytest.mark.skipif(shutil.which("readpst") is None, reason="readpst not installed")
 def test_expand_email_pst_integration():
     import os

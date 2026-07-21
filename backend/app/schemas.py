@@ -496,3 +496,9 @@ class ClusterOut(BaseModel):
 class PropagateTagRequest(BaseModel):
     tag_id: int
     relationship_type: Literal["duplicate", "family", "thread"]
+
+
+class ThreadStats(BaseModel):
+    threads: int
+    inclusive: int
+    messages: int

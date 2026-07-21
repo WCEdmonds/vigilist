@@ -97,6 +97,9 @@ def build_email_documents(
         email_bcc=(parsed.bcc or None),
         email_subject=(parsed.subject or None),
         date_sent=normalize_date(parsed.date_sent) if parsed.date_sent else None,
+        message_id=(parsed.message_id or None),
+        in_reply_to=(parsed.in_reply_to or None),
+        email_references=(parsed.references or None),
     )
 
     docs: list[Document] = [parent]
