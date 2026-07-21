@@ -51,6 +51,7 @@ async def create_production_for_ingest(
     production = Production(
         name=production_name,
         description=description,
+        case_context=(body.get("case_context") or "").strip() or None,
         owner_id=user.id,
         organization_id=org_id,
     )
@@ -262,6 +263,22 @@ async def process_batch_handler(
         logger.exception("Ingest batch failed")
         raise HTTPException(status_code=500, detail=f"Ingest batch failed: {e}")
 
+    return {"ok": True}
+
+
+@router.post("/ingest/run-pipeline")
+async def run_pipeline_handler(
+    body: dict,
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker: run the ambient AI pipeline for one production."""
+    production_id = body.get("production_id")
+    if not production_id:
+        raise HTTPException(status_code=400, detail="production_id required")
+    force = bool(body.get("force"))
+    from app.services.pipeline import run_ambient_pipeline
+
+    await run_ambient_pipeline(int(production_id), force)
     return {"ok": True}
 
 

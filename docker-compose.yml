@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:16
+    # pgvector build of postgres:16 — clustering/semantic search need the
+    # vector extension locally just like Neon provides it in prod.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: vigilist
       POSTGRES_USER: vigilist

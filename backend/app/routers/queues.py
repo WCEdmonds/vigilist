@@ -191,9 +191,12 @@ async def create_queue_batches(
     if not queue or queue.production_id != production_id:
         raise HTTPException(status_code=404, detail="Queue not found")
 
-    batches = await create_batches(
-        db, queue, batch_size=body.batch_size, reviewer_id=body.reviewer_id
-    )
+    try:
+        batches = await create_batches(
+            db, queue, batch_size=body.batch_size, reviewer_id=body.reviewer_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid queue filters: {exc}")
 
     # Resolve reviewer email if a reviewer was assigned
     reviewer_email: str | None = None

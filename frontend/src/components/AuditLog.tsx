@@ -20,6 +20,15 @@ export default function AuditLog({ productionId, onClose }: Props) {
       .then(res => { setLogs(res.logs); setTotal(res.total); });
   }, [page, productionId, actionFilter]);
 
+  // Esc closes, matching the other modals.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const totalPages = Math.ceil(total / perPage);
 
   const handleExportCsv = async () => {
@@ -42,7 +51,7 @@ export default function AuditLog({ productionId, onClose }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-panel modal-large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)' }}>Audit Log</h2>
+          <h2 className="modal-title">Audit Log</h2>
           <button className="modal-close-btn" aria-label="Close" onClick={onClose}>&times;</button>
         </div>
 
@@ -61,6 +70,15 @@ export default function AuditLog({ productionId, onClose }: Props) {
             <option value="user_login">Login</option>
             <option value="user_invited">User Invited</option>
             <option value="access_revoked">Access Revoked</option>
+            <option value="ai_chat_started">AI Chat Started</option>
+            <option value="similar_docs_requested">Find Similar</option>
+            <option value="brief_generated">Brief Generated</option>
+            <option value="summary_batch_completed">Summaries Completed</option>
+            <option value="classification_run">Classification Run</option>
+            <option value="ai_suggestion_accepted">AI Suggestion Accepted</option>
+            <option value="ai_suggestion_overridden">AI Suggestion Overridden</option>
+            <option value="ai_suggestions_bulk_accepted">Bulk Accept</option>
+            <option value="pipeline_run_requested">Pipeline Run</option>
           </select>
           <button className="btn btn-secondary" onClick={handleExportCsv}>
             Export CSV

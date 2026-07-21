@@ -1,17 +1,70 @@
 import math
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BatchDocument, Document, DocumentTag, ReviewBatch, ReviewQueue
+from app.models_review import AIReviewResult
 from app.services.search import search_documents
+
+
+def build_ai_filter_conditions(ai: dict) -> dict:
+    """Normalize and validate AI-slice queue filter.
+
+    Fills defaults for min_confidence (0) and exclude_decided (True).
+    Coerces project_id and min_confidence to int.
+    Raises ValueError if project_id or decision is missing.
+    """
+    if "project_id" not in ai:
+        raise ValueError("project_id is required")
+    if "decision" not in ai:
+        raise ValueError("decision is required")
+
+    return {
+        "project_id": int(ai["project_id"]),
+        "decision": ai["decision"],
+        "min_confidence": int(ai.get("min_confidence", 0)),
+        "exclude_decided": ai.get("exclude_decided", True),
+    }
 
 
 async def get_queue_document_ids(
     db: AsyncSession, queue: ReviewQueue
 ) -> list[str]:
-    """Resolve a queue's query/filters into a list of document IDs."""
-    if queue.query or queue.filters:
+    """Resolve a queue's query/filters into a list of document IDs.
+
+    When queue.filters.get("ai") is present, the AI slice takes precedence
+    over queue.query — the AI filter's conditions are used exclusively.
+    """
+    # Check if AI slice filter exists
+    if queue.filters and queue.filters.get("ai"):
+        ai_filter = build_ai_filter_conditions(queue.filters["ai"])
+
+        # Build query conditions
+        conditions = [
+            AIReviewResult.project_id == ai_filter["project_id"],
+            AIReviewResult.ai_decision == ai_filter["decision"],
+            AIReviewResult.confidence_score >= ai_filter["min_confidence"],
+        ]
+
+        if ai_filter["exclude_decided"]:
+            conditions.append(AIReviewResult.attorney_decision.is_(None))
+
+        # Query AIReviewResult joined with Document, intersect with production
+        result = await db.execute(
+            select(Document.id)
+            .join(AIReviewResult, AIReviewResult.document_id == Document.id)
+            .where(
+                and_(
+                    Document.production_id == queue.production_id,
+                    *conditions,
+                )
+            )
+            .order_by(Document.bates_begin)
+        )
+        return [str(row[0]) for row in result.all()]
+
+    elif queue.query or queue.filters:
         # Use the search service — pass production_id as both the filter and the
         # accessible list (this is a service-to-service call, RBAC already checked by caller)
         results, _ = await search_documents(

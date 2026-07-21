@@ -142,6 +142,11 @@ class DocumentSummary(BaseModel):
     tags: list[TagOut] = []
     note_count: int = 0
     annotation_count: int = 0
+    cluster_id: int | None = None
+    cluster_label: str | None = None
+    ai_decision: str | None = None
+    ai_confidence: int | None = None
+    ai_decided: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -243,8 +248,22 @@ class ProductionWithAccess(BaseModel):
     owner_id: str | None
     is_owner: bool = False
     created_at: datetime
+    document_count: int = 0
+    case_context: str | None = None
+    has_brief: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class ProductionUpdate(BaseModel):
+    description: str | None = None
+    case_context: str | None = None
+
+
+class PipelineStatusOut(BaseModel):
+    status: dict | None = None
+    brief: dict | None = None
+    case_context: str | None = None
 
 
 class ProductionAccessOut(BaseModel):
@@ -496,6 +515,12 @@ class ClusterOut(BaseModel):
 class PropagateTagRequest(BaseModel):
     tag_id: int
     relationship_type: Literal["duplicate", "family", "thread"]
+
+
+class ClusterDocumentOut(BaseModel):
+    document_id: str
+    bates_begin: str
+    title: str | None = None
 
 
 class ThreadStats(BaseModel):

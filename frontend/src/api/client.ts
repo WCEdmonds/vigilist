@@ -1,9 +1,9 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  AIReviewResult, Annotation, BatchDocument, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
   FamilyThread,
   IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
-  ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
+  PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag,
 } from '../types';
 
@@ -48,12 +48,13 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
 }
 
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number) {
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
   if (fileType) params.set('file_type', fileType);
   if (clusterId) params.set('cluster_id', String(clusterId));
+  if (aiDecision) params.set('ai_decision', aiDecision);
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
 
@@ -122,7 +123,9 @@ export async function fetchDocumentPdf(docId: string): Promise<Blob> {
     try {
       const body = await res.json();
       if (body?.detail) detail = body.detail;
-    } catch {}
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
     throw new Error(detail);
   }
   return res.blob();
@@ -146,7 +149,9 @@ export async function fetchBulkZip(docIds: string[]): Promise<Blob> {
     try {
       const body = await res.json();
       if (body?.detail) detail = body.detail;
-    } catch {}
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
     throw new Error(detail);
   }
   return res.blob();
@@ -223,11 +228,6 @@ export const deleteSavedSearch = (id: number) =>
 export const summarizeDocument = (docId: string) =>
   request<{ summary: string; cached: boolean }>(`/api/ai/summarize/${docId}`, { method: 'POST' });
 
-export const nlSearch = (query: string) =>
-  request<{ original_query: string; structured_query: string; results: unknown[]; total: number }>(
-    '/api/ai/nl-search', json({ query })
-  );
-
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -248,6 +248,7 @@ export async function streamChat(
     onToolResult?: (evt: { name: string; ok: boolean; summary: string }) => void;
   },
   signal?: AbortSignal,
+  productionId?: number,
 ): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const currentUser = auth.currentUser;
@@ -261,7 +262,7 @@ export async function streamChat(
     res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ messages, doc_ids: docIds }),
+      body: JSON.stringify({ messages, doc_ids: docIds, production_id: productionId }),
       signal,
     });
   } catch (e: unknown) {
@@ -275,7 +276,9 @@ export async function streamChat(
     try {
       const body = await res.json();
       if (body?.detail) detail = body.detail;
-    } catch {}
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
     handlers.onError(detail);
     return;
   }
@@ -306,12 +309,14 @@ export async function streamChat(
           else if (evt.type === 'tool_result') handlers.onToolResult?.({ name: evt.name, ok: !!evt.ok, summary: evt.summary });
           else if (evt.type === 'error') handlers.onError(evt.message || 'The AI service failed to respond.');
         } catch {
-          // Ignore malformed frames.
+          /* Ignore malformed frames */
         }
       }
     }
   } catch (e: unknown) {
-    if (!(e instanceof Error && e.name === 'AbortError')) handlers.onError(e instanceof Error ? e.message : 'Stream interrupted');
+    if (!(e instanceof Error && e.name === 'AbortError')) {
+      handlers.onError(e instanceof Error ? e.message : 'Stream interrupted');
+    }
   }
 }
 
@@ -396,8 +401,8 @@ export async function getAuditLogs(
 
 // ── Ingest ──
 
-export const createProductionForIngest = (productionName: string, description: string) =>
-  request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description }));
+export const createProductionForIngest = (productionName: string, description: string, caseContext: string) =>
+  request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description, case_context: caseContext }));
 
 export interface ProposedColumn {
   source_name: string;
@@ -432,6 +437,25 @@ export const startProcessing = (
     custodian,
   }));
 
+export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
+  request(`/api/productions/${productionId}/pipeline`);
+
+export const runPipeline = (productionId: number, force = false) =>
+  request<{ started: boolean }>(`/api/productions/${productionId}/pipeline/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+
+export const updateProduction = (productionId: number, data: { description?: string; case_context?: string }): Promise<ProductionInfo> =>
+  request(`/api/productions/${productionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
+export const getClusterDocuments = (productionId: number, clusterId: number, limit = 5): Promise<ClusterDocument[]> =>
+  request(`/api/productions/${productionId}/clusters/${clusterId}/documents?limit=${limit}`);
 
 export const getIngestStatus = (jobId: string) =>
   request<IngestJob>(`/api/ingest/${jobId}/status`);
@@ -533,6 +557,12 @@ export const createReviewProject = (productionId: number, data: { name: string; 
   request<ReviewProject>(`/api/review/projects/${productionId}`, json(data));
 
 
+export const updateReviewProject = (productionId: number, projectId: number, data: { name?: string; prompt_text?: string; sample_size?: number; agreement_threshold?: number; is_primary?: boolean }) =>
+  request<ReviewProject>(`/api/review/projects/${productionId}/${projectId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+
 export const deleteReviewProject = (productionId: number, projectId: number) =>
   request(`/api/review/projects/${productionId}/${projectId}`, { method: 'DELETE' });
 
@@ -568,16 +598,20 @@ export const recordDecision = (resultId: number, decision: string, note?: string
     body: JSON.stringify({ decision, note }),
   });
 
+export const getClassifyEstimate = (productionId: number): Promise<ClassifyEstimate> =>
+  request(`/api/review/estimate/${productionId}`);
+
+export const startAutoClassification = (productionId: number) =>
+  request(`/api/review/auto-classify/${productionId}`, { method: 'POST' });
+
+export const bulkAcceptResults = (productionId: number, projectId: number, minConfidence: number): Promise<{ accepted: number }> =>
+  request(`/api/review/projects/${productionId}/${projectId}/bulk-accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ min_confidence: minConfidence }),
+  });
 
 // ── Intelligence ──
-
-export function detectDuplicates(productionId: number): Promise<{ status: string; exact_groups: number; similar_groups: number; total_documents_grouped: number }> {
-  return request(`/api/productions/${productionId}/detect-duplicates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-}
-
-export function clusterProduction(productionId: number): Promise<{ status: string; clusters: ClusterInfo[] }> {
-  return request(`/api/productions/${productionId}/cluster`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-}
 
 export function getClusters(productionId: number): Promise<ClusterInfo[]> {
   return request<ClusterInfo[]>(`/api/productions/${productionId}/clusters`);

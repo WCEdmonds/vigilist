@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { ref, uploadBytesResumable } from 'firebase/storage';
 import { firebaseStorage, auth } from '../firebase';
-import { createProductionForIngest, startProcessing, analyzeLoadFile, getIngestStatus } from '../api/client';
+import { analyzeLoadFile, createProductionForIngest, getClassifyEstimate, getIngestStatus, startAutoClassification, startProcessing } from '../api/client';
 import type { ProposedColumn } from '../api/client';
-import type { IngestJob } from '../types';
+import { showToast } from './Toast';
+import type { ClassifyEstimate, IngestJob } from '../types';
 
 interface Props {
   onClose: () => void;
@@ -22,6 +23,7 @@ const CANONICAL_FIELDS = [
 export default function IngestWizard({ onClose, onComplete }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [caseContext, setCaseContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [mode, setMode] = useState<'relativity' | 'generic_pdf' | 'native'>('relativity');
   const [custodian, setCustodian] = useState('');
@@ -34,6 +36,10 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [mappingProdId, setMappingProdId] = useState<number | null>(null);
   const totalFilesRef = useRef<number>(0);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const [classifyEstimate, setClassifyEstimate] = useState<ClassifyEstimate | null>(null);
+  const [classifyEstimateFailed, setClassifyEstimateFailed] = useState(false);
+  const [shouldClassify, setShouldClassify] = useState(true);
+  const [startingClassification, setStartingClassification] = useState(false);
 
   // Set webkitdirectory attribute via ref (React doesn't support it as a prop)
   useEffect(() => {
@@ -115,7 +121,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     try {
       // Phase 1: Create production in backend to get real production_id
       // This also syncs Firebase custom claims so we can write to Storage
-      const { production_id } = await createProductionForIngest(name.trim(), description.trim());
+      const { production_id } = await createProductionForIngest(name.trim(), description.trim(), caseContext.trim());
 
       // Refresh the Firebase token to pick up the new custom claims
       const currentUser = auth.currentUser;
@@ -214,6 +220,35 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
       }
     };
     poll();
+  };
+
+  // Fetch the classification cost estimate once the ingest reaches 'complete'.
+  useEffect(() => {
+    if (stage !== 'complete' || !job?.production_id) return;
+    let cancelled = false;
+    setClassifyEstimate(null);
+    setClassifyEstimateFailed(false);
+    setShouldClassify(true);
+    getClassifyEstimate(job.production_id)
+      .then(est => { if (!cancelled) setClassifyEstimate(est); })
+      .catch(() => { if (!cancelled) setClassifyEstimateFailed(true); });
+    return () => { cancelled = true; };
+  }, [stage, job?.production_id]);
+
+  const handleViewProduction = async () => {
+    if (shouldClassify && classifyEstimate && job?.production_id) {
+      setStartingClassification(true);
+      try {
+        await startAutoClassification(job.production_id);
+        showToast('Classification started', 'success');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Failed to start classification', 'error');
+      } finally {
+        setStartingClassification(false);
+      }
+    }
+    onComplete();
+    onClose();
   };
 
   const formatEta = (seconds: number) => {
@@ -346,6 +381,24 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     Description (optional)
                   </label>
                   <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief description" />
+                </div>
+                <div>
+                  <label className="input-label" htmlFor="ingest-case-context">
+                    About this case <span className="brief-ai-mark">✦</span>
+                  </label>
+                  <p className="input-hint">
+                    A few sentences: what the case is about and what makes a document
+                    relevant. The AI uses this to brief your team and, later, to
+                    classify documents. You can edit it anytime in Production settings.
+                  </p>
+                  <textarea
+                    id="ingest-case-context"
+                    className="input"
+                    rows={4}
+                    value={caseContext}
+                    onChange={e => setCaseContext(e.target.value)}
+                    placeholder="e.g. Product-liability suit over the March 2024 recall. Relevant: anything about the recall decision, board discussions, or customer injuries."
+                  />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -508,8 +561,41 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                   {job?.skipped_files ? ` · ${job.skipped_files} skipped` : ''}
                   {job?.errors && job.errors.length > 0 && ` · ${job.errors.length} warnings`}
                 </div>
-                <button className="btn btn-primary" onClick={() => { onComplete(); onClose(); }}>
-                  View Production
+                {caseContext.trim() !== '' && !classifyEstimateFailed && !classifyEstimate && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 'var(--space-2)', justifyContent: 'center',
+                    fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-4)',
+                  }}>
+                    <span className="spinner spinner-sm" />
+                    Estimating cost…
+                  </div>
+                )}
+                {caseContext.trim() !== '' && !classifyEstimateFailed && classifyEstimate && (
+                  <label
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)',
+                      textAlign: 'left', marginBottom: 'var(--space-4)', padding: 'var(--space-2) var(--space-3)',
+                      background: 'var(--color-brass-soft)', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={shouldClassify}
+                      onChange={e => setShouldClassify(e.target.checked)}
+                      style={{ marginTop: 3, cursor: 'pointer' }}
+                    />
+                    <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-700)' }}>
+                      <span className="brief-ai-mark">✦</span> Classify all {classifyEstimate.doc_count} documents
+                      against your case description — est. ${classifyEstimate.est_usd.toFixed(2)}
+                    </span>
+                  </label>
+                )}
+                <button
+                  className="btn btn-primary"
+                  onClick={handleViewProduction}
+                  disabled={startingClassification}
+                >
+                  {startingClassification ? 'Starting classification…' : 'View Production'}
                 </button>
               </div>
             )}

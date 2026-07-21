@@ -1,11 +1,44 @@
 """AI-powered document classification for review workflows."""
 
+import asyncio
 import json
 import logging
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# The Anthropic SDK's transient/retryable error types, resolved lazily (on
+# first use) and cached here. classify_document catches this tuple rather
+# than importing `anthropic.RateLimitError` etc. directly for two reasons:
+#   1. It keeps the `anthropic` SDK off the module's import path, matching
+#      the existing lazy-import-inside-the-function convention below.
+#   2. It makes retry behavior testable without constructing real SDK error
+#      instances (RateLimitError & friends require a synthetic httpx.Response
+#      to build) — tests just monkeypatch this module attribute to a plain
+#      exception type, e.g. `(ValueError,)`.
+# Falls back to an empty tuple (nothing treated as retryable) if the SDK
+# can't be imported for some reason, so classify_document still degrades to
+# its existing immediate-sentinel behavior.
+_RETRYABLE_ERRORS: tuple[type[BaseException], ...] | None = None
+
+
+def _retryable_errors() -> tuple[type[BaseException], ...]:
+    global _RETRYABLE_ERRORS
+    if _RETRYABLE_ERRORS is None:
+        try:
+            import anthropic
+            _RETRYABLE_ERRORS = (
+                anthropic.RateLimitError,
+                anthropic.APIStatusError,
+                anthropic.APIConnectionError,
+            )
+        except Exception:
+            _RETRYABLE_ERRORS = ()
+    return _RETRYABLE_ERRORS
+
+
+_CLASSIFY_MAX_ATTEMPTS = 3
 
 DEFAULT_CATEGORIES = [
     {"name": "relevant", "color": "green", "description": "Supports our case theory or relates to key issues"},
@@ -96,25 +129,49 @@ async def classify_document(
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     prompt = build_classification_prompt(review_criteria, document_text, cats)
+    retryable = _retryable_errors()
 
-    try:
-        response = await client.messages.create(
-            model=model,
-            max_tokens=1000,
-            system=build_system_prompt(cats),
-            messages=[{"role": "user", "content": prompt}],
-        )
+    # Bounded retry: transient SDK errors (rate limits, API-side 5xx,
+    # connection drops) get a few attempts with backoff before we give up.
+    # Any other exception is treated as non-retryable and falls straight
+    # through to the sentinel — the worker's `tokens == 0` contract is
+    # unchanged either way.
+    for attempt in range(_CLASSIFY_MAX_ATTEMPTS):
+        try:
+            response = await client.messages.create(
+                model=model,
+                max_tokens=1000,
+                system=build_system_prompt(cats),
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-        raw_text = ""
-        for block in response.content:
-            if block.type == "text":
-                raw_text = block.text
+            raw_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    raw_text = block.text
+                    break
+
+            total_tokens = response.usage.input_tokens + response.usage.output_tokens
+            result = parse_classification_response(raw_text)
+            return result, total_tokens
+
+        except retryable as e:
+            status_code = getattr(e, "status_code", None)
+            if status_code is not None and status_code not in (408, 429) and status_code < 500:
+                # Non-transient API error (e.g. 401 invalid key, 400 bad request):
+                # retrying won't help, so give up immediately rather than
+                # burning attempts + backoff on a request that will never succeed.
+                logger.error("Classification failed with non-retryable status %s: %s", status_code, e)
                 break
+            logger.warning(
+                "Classification attempt %d/%d failed (retryable): %s",
+                attempt + 1, _CLASSIFY_MAX_ATTEMPTS, e,
+            )
+            if attempt < _CLASSIFY_MAX_ATTEMPTS - 1:
+                await asyncio.sleep(2 * (attempt + 1))
+        except Exception as e:
+            logger.error("Classification failed: %s", e)
+            return parse_classification_response("{}"), 0
 
-        total_tokens = response.usage.input_tokens + response.usage.output_tokens
-        result = parse_classification_response(raw_text)
-        return result, total_tokens
-
-    except Exception as e:
-        logger.error("Classification failed: %s", e)
-        return parse_classification_response("{}"), 0
+    logger.error("Classification failed after %d retryable attempts", _CLASSIFY_MAX_ATTEMPTS)
+    return parse_classification_response("{}"), 0
