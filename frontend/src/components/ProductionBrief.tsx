@@ -226,7 +226,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
     return () => { cancelled = true; };
   }, [expanded, clusters, production.id]);
 
-  const handleRunPipeline = useCallback(async () => {
+  const handleRunPipeline = useCallback(async (force = false) => {
     // ~30s grace period (6 ticks at the 5s poll interval) for the worker to
     // pick up the enqueued job and write its first status. `starting` is
     // cleared by `loadPipeline` once real status takes over (see above) —
@@ -235,7 +235,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
     graceRef.current = 6;
     setStarting(true);
     try {
-      await runPipeline(production.id);
+      await runPipeline(production.id, force);
       await loadPipeline();
     } catch (e) {
       showToast(`Could not start brief generation: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
@@ -327,6 +327,18 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
             <span className="brief-ai-mark">✦</span> Production Brief
           </h3>
           <span className="brief-generated-date">{generatedDate}</span>
+          {production.is_owner && (
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => handleRunPipeline(true)}
+              disabled={starting}
+              aria-label="Regenerate brief and themes"
+              title="Regenerate brief and themes"
+            >
+              ↻
+            </button>
+          )}
           <button type="button" className="btn-icon" onClick={toggleCollapsed} aria-label="Collapse brief" aria-expanded={true}>
             ▾
           </button>
@@ -441,7 +453,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
           </h3>
         </div>
         <p className="brief-overview">Brief generation failed.</p>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={handleRunPipeline} disabled={starting}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRunPipeline()} disabled={starting}>
           {starting ? 'Retrying…' : 'Retry'}
         </button>
       </div>
@@ -459,7 +471,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
           </h3>
         </div>
         <p className="brief-overview">AI will cluster, summarize, and brief this production.</p>
-        <button type="button" className="btn btn-primary btn-sm" onClick={handleRunPipeline} disabled={starting}>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => handleRunPipeline()} disabled={starting}>
           {starting ? 'Starting…' : 'Generate'}
         </button>
       </div>
