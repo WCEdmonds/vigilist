@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getClusterDocuments, getPipeline, runPipeline } from '../api/client';
+import { getByBates, getClusterDocuments, getPipeline, runPipeline } from '../api/client';
 import { showToast } from './Toast';
 import type { ClusterDocument, ClusterInfo, PipelineInfo, PipelineStageState, PipelineStatus, ProductionInfo } from '../types';
 
@@ -400,10 +400,22 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
           <div className="brief-notable">
             <div className="brief-notable-title">Notable documents</div>
             {brief.notable_documents.map((nd, i) => (
-              <div key={i} className="brief-notable-row">
+              <button
+                key={i}
+                type="button"
+                className="brief-notable-row"
+                onClick={async () => {
+                  try {
+                    const found = await getByBates(nd.bates);
+                    onViewDocument(found.id);
+                  } catch {
+                    showToast(`Could not find ${nd.bates} in this production`, 'error');
+                  }
+                }}
+              >
                 <span className="brief-notable-bates">{nd.bates}</span>
                 <span className="brief-notable-reason">{nd.reason}</span>
-              </div>
+              </button>
             ))}
           </div>
         )}

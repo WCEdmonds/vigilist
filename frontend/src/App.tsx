@@ -81,9 +81,12 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const chat = useChat(production.id);
   const [railCollapsed, setRailCollapsed] = useState(() => {
     try {
+      // Below 1025px the rail is an overlay drawer — starting it open would
+      // hide the whole page, so the stored desktop preference doesn't apply.
+      if (window.innerWidth < 1025) return true;
       const stored = window.localStorage.getItem('vigilist.rail.collapsed');
       if (stored !== null) return stored === '1';
-      return window.innerWidth < 1025;
+      return false;
     } catch { return false; }
   });
   const toggleRail = useCallback(() => {

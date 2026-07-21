@@ -20,6 +20,15 @@ export default function AuditLog({ productionId, onClose }: Props) {
       .then(res => { setLogs(res.logs); setTotal(res.total); });
   }, [page, productionId, actionFilter]);
 
+  // Esc closes, matching the other modals.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const totalPages = Math.ceil(total / perPage);
 
   const handleExportCsv = async () => {
