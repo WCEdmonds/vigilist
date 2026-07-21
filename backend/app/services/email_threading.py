@@ -14,11 +14,11 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import Document
-from app.schemas import ThreadStats
+# NOTE: keep module-level imports to the stdlib only. The pure engine
+# (compute_thread_assignments / ThreadMsg) is imported by the SP4b-2 backfill
+# migration, which runs under a minimal deps set (sqlalchemy/asyncpg/alembic/
+# pgvector) with NO pydantic. The DB/schema imports that derive_threads needs
+# live inside the function so importing this module never pulls in pydantic.
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +202,13 @@ async def derive_threads(db: "AsyncSession", production_id: int) -> ThreadStats:
     overwrites SP3 load-file thread_id on other document types. Idempotent and
     best-effort — logs and returns zeroed stats on failure rather than raising.
     """
+    # Imported locally (not at module scope) so the backfill migration can
+    # import the pure engine without pydantic/full app deps being present.
+    from sqlalchemy import select, text
+
+    from app.models import Document
+    from app.schemas import ThreadStats
+
     try:
         result = await db.execute(
             select(
