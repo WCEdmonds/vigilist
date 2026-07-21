@@ -1,0 +1,64 @@
+name: Backend migrations check
+
+# Reproduces the deploy's migration step on every PR so migration problems are
+# caught at PR time instead of failing `alembic upgrade head` against prod Neon.
+# Two real prod-deploy failures motivated this:
+#   1. A migration importing a module that pulled in pydantic — fails under the
+#      minimal deps the deploy installs (no pydantic).
+#   2. Divergent alembic heads (parallel branches) — `upgrade head` can't resolve.
+# Running the exact minimal deps + `alembic upgrade head` against a real Postgres
+# catches both (and any broken migration), plus we assert a single head.
+
+on:
+  pull_request:
+    paths:
+      - 'backend/alembic/**'
+      - 'backend/app/models.py'
+      - '.github/workflows/backend-migrations-check.yml'
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vigilist
+          POSTGRES_PASSWORD: vigilist_dev
+          POSTGRES_DB: vigilist
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      VIGILIST_DATABASE_URL: postgresql+asyncpg://vigilist:vigilist_dev@localhost:5432/vigilist
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install the SAME minimal deps the deploy uses (no pydantic/app deps)
+        run: pip install -q "sqlalchemy[asyncio]" asyncpg alembic pgvector
+
+      - name: Assert a single alembic head
+        working-directory: backend
+        run: |
+          HEADS=$(alembic heads 2>/dev/null | grep -c '(head)')
+          echo "alembic head count: $HEADS"
+          if [ "$HEADS" -ne 1 ]; then
+            echo "::error::Expected exactly 1 alembic head, found $HEADS. Add a merge migration (alembic merge -m '...' <head1> <head2>)."
+            alembic heads
+            exit 1
+          fi
+
+      - name: Run migrations up / down / up against Postgres
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
