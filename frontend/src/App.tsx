@@ -597,7 +597,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             </div>
 
             {viewMode === 'list' ? (
-              <div className="card" style={{ overflow: 'hidden' }}>
+              <div className="card" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
                 <table className="doc-table">
                   <thead>
                     <tr>

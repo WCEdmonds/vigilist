@@ -75,7 +75,7 @@ def _kmeans(X: np.ndarray, k: int, max_iter: int = 30) -> np.ndarray:
 
 
 async def _generate_cluster_label(doc_texts: list[str]) -> str:
-    """Use Claude to generate a 3-5 word topic label from representative texts."""
+    """Use Claude to generate a 2-4 word topic label from representative texts."""
     from app.config import settings
     if not settings.anthropic_api_key:
         return "Unlabeled"
@@ -90,10 +90,12 @@ async def _generate_cluster_label(doc_texts: list[str]) -> str:
             max_tokens=30,
             messages=[{
                 "role": "user",
-                "content": f"Generate a concise 3-5 word topic label for these related legal documents. Respond with ONLY the label, no quotes.\n\n{excerpts}",
+                # Labels render as compact chips in the document list — long
+                # ones truncate, so brevity is a display constraint.
+                "content": f"Generate a topic label of 2-4 short words (under 30 characters) for these related legal documents. Respond with ONLY the label, no quotes.\n\n{excerpts}",
             }],
         )
-        return response.content[0].text.strip()[:100]
+        return response.content[0].text.strip()[:60]
     except Exception as e:
         logger.warning("Cluster labeling failed: %s", e)
         return "Unlabeled"
