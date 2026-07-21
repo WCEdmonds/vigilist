@@ -49,7 +49,7 @@ export default function ReviewProjectSetup({ productionId, docCount, onCreated, 
         categories: categories.filter(c => c.name.trim()),
       });
       onCreated(project);
-    } catch (e) {
+    } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to create project');
     } finally {
       setLoading(false);

@@ -18,3 +18,7 @@ google-cloud-vision>=3.7
 resend>=2.0
 datasketch>=1.6
 pymupdf>=1.24
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=0.6.23
+extract-msg>=0.48

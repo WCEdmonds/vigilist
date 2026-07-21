@@ -1,6 +1,7 @@
 import { auth } from '../firebase';
 import type {
   AIReviewResult, Annotation, BatchDocument, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  FamilyThread,
   IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag,
@@ -240,7 +241,12 @@ export interface ChatMessage {
 export async function streamChat(
   messages: ChatMessage[],
   docIds: string[],
-  handlers: { onDelta: (text: string) => void; onError: (message: string) => void },
+  handlers: {
+    onDelta: (text: string) => void;
+    onError: (message: string) => void;
+    onToolUse?: (evt: { name: string; summary: string }) => void;
+    onToolResult?: (evt: { name: string; ok: boolean; summary: string }) => void;
+  },
   signal?: AbortSignal,
   productionId?: number,
 ): Promise<void> {
@@ -299,6 +305,8 @@ export async function streamChat(
         try {
           const evt = JSON.parse(payload);
           if (evt.type === 'delta' && typeof evt.text === 'string') handlers.onDelta(evt.text);
+          else if (evt.type === 'tool_use') handlers.onToolUse?.({ name: evt.name, summary: evt.summary });
+          else if (evt.type === 'tool_result') handlers.onToolResult?.({ name: evt.name, ok: !!evt.ok, summary: evt.summary });
           else if (evt.type === 'error') handlers.onError(evt.message || 'The AI service failed to respond.');
         } catch {
           /* Ignore malformed frames */
@@ -396,12 +404,38 @@ export async function getAuditLogs(
 export const createProductionForIngest = (productionName: string, description: string, caseContext: string) =>
   request<{ production_id: number; production_name: string }>('/api/ingest/create', json({ production_name: productionName, description, case_context: caseContext }));
 
+export interface ProposedColumn {
+  source_name: string;
+  samples: string[];
+  target: string | null;
+  confidence: number;
+  source: 'alias' | 'ai' | 'unmapped';
+}
+
+export const analyzeLoadFile = (productionId: number) =>
+  request<{
+    format: { encoding: string; delimiter: string };
+    columns: ProposedColumn[];
+    sample_rows: Record<string, string>[];
+    total_rows: number;
+  }>(
+    '/api/ingest/analyze', json({ production_id: productionId }),
+  );
+
 export const startProcessing = (
   productionId: number,
   totalFiles: number,
-  sourceFormat: 'relativity' | 'generic_pdf' = 'relativity',
+  sourceFormat: 'relativity' | 'generic_pdf' | 'native' = 'relativity',
+  fieldMapping: Record<string, string> = {},
+  custodian: string = '',
 ) =>
-  request<IngestJob>('/api/ingest/process', json({ production_id: productionId, total_files: totalFiles, source_format: sourceFormat }));
+  request<IngestJob>('/api/ingest/process', json({
+    production_id: productionId,
+    total_files: totalFiles,
+    source_format: sourceFormat,
+    field_mapping: fieldMapping,
+    custodian,
+  }));
 
 export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
   request(`/api/productions/${productionId}/pipeline`);
@@ -585,5 +619,9 @@ export function getClusters(productionId: number): Promise<ClusterInfo[]> {
 
 export function getDocumentDuplicates(docId: string): Promise<DuplicateEntry[]> {
   return request<DuplicateEntry[]>(`/api/documents/${docId}/duplicates`);
+}
+
+export function getDocumentFamily(docId: string): Promise<FamilyThread> {
+  return request<FamilyThread>(`/api/documents/${docId}/family`);
 }
 

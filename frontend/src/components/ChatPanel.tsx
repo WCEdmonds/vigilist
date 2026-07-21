@@ -89,6 +89,16 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
         {chat.streaming && (
           <div className="ai-agent-msg ai-agent-msg-assistant">
             <div className="ai-agent-msg-role">✦ AI</div>
+            {chat.activity.length > 0 && (
+              <div className="ai-agent-activity">
+                {chat.activity.map((a, i) => (
+                  <div key={i} className={`ai-agent-activity-row${a.ok === false ? ' is-error' : ''}`}>
+                    <span className="ai-agent-activity-icon">{a.ok === undefined ? '⋯' : a.ok ? '✓' : '✕'}</span>
+                    {a.summary}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="ai-agent-msg-content">
               {chat.streamingText ? renderChatMarkdown(chat.streamingText) : (
                 <span className="ai-agent-typing"><span /><span /><span /></span>
