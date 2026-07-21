@@ -271,6 +271,17 @@ class PipelineStatusOut(BaseModel):
     doc_count: int = 0
 
 
+class IntakeSummaryOut(BaseModel):
+    """The post-ingest receipt: what intake actually created."""
+    documents: int = 0
+    custodians: int = 0
+    email_families: int = 0
+    family_documents: int = 0
+    threads: int = 0
+    inclusive_emails: int = 0
+    duplicate_groups: int = 0
+
+
 class ProductionAccessOut(BaseModel):
     id: int
     user_id: str
