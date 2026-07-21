@@ -39,18 +39,9 @@ body::before {
   );
 }
 
-/* Red margin line */
-body::after {
-  content: '';
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  left: 72px;
-  width: 1px;
-  background: var(--color-margin);
-  pointer-events: none;
-  z-index: 0;
-}
+/* The notebook "red margin line" (a fixed vertical rule at left: 72px) was
+   removed here — against real layouts it cut through cards and read as a
+   rendering artifact rather than a design choice. */
 
 /* Ensure all content sits above the texture */
 #root {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
+import AppHeader from './AppHeader';
 import { deleteProduction } from '../api/client';
-import { useAuth } from '../hooks/useAuth';
 import type { ProductionInfo } from '../types';
 
 interface Props {
@@ -10,18 +10,26 @@ interface Props {
   onDeleted?: () => void;
 }
 
+const dateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+const formatAdded = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : `added ${dateFmt.format(d)}`;
+};
+
 export default function ProductionPicker({ productions, onSelect, onIngest, onDeleted }: Props) {
-  const { user, logout } = useAuth();
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleDelete = async (p: ProductionInfo) => {
     setDeletingId(p.id);
+    setDeleteError(null);
     try {
       await deleteProduction(p.id);
       onDeleted?.();
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Delete failed');
+      setDeleteError(e instanceof Error ? e.message : 'Delete failed');
     } finally {
       setDeletingId(null);
       setConfirmId(null);
@@ -29,88 +37,56 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--color-neutral-50)' }}>
-      <div className="app-header">
-        <span className="logo">Vigilist</span>
-        <div className="user-menu">
-          <button className="btn-header" onClick={onIngest}>+ Ingest</button>
-          <span style={{ opacity: 0.7 }}>{user?.displayName || user?.email}</span>
-          <button className="btn-header" onClick={logout}>Sign out</button>
-        </div>
-      </div>
+    <div className="case-desk">
+      <AppHeader productions={productions} onOpenIngest={onIngest} />
 
-      <div className="content-area" style={{ paddingTop: 'var(--space-8)' }}>
-        <h2 className="section-title" style={{ marginBottom: 'var(--space-6)', textAlign: 'center' }}>
-          Select a Production
-        </h2>
+      <div className="content-area case-desk-content">
+        <h1 className="case-desk-title">Your productions</h1>
+        <p className="case-desk-sub">Pick a production to continue its review.</p>
+        {deleteError && <p className="case-desk-error" role="alert">{deleteError}</p>}
 
-        <div className="production-grid">
+        <div className="case-desk-grid">
           {productions.map(p => (
-            <div key={p.id} style={{ position: 'relative' }}>
-              <button
-                type="button"
-                className="production-card card"
-                onClick={() => onSelect(p)}
-              >
-                <div className="production-card-name">{p.name}</div>
-                {p.description && <div className="production-card-desc">{p.description}</div>}
-                <div className="production-card-meta">
-                  {p.is_owner ? (
-                    <span className="badge badge-blue">Owner</span>
-                  ) : (
-                    <span className="badge badge-gray">Shared</span>
+            <div key={p.id} className="case-card-wrap">
+              <button type="button" className="case-card card" onClick={() => onSelect(p)}>
+                <div className="case-card-name">{p.name}</div>
+                {p.description && <div className="case-card-desc">{p.description}</div>}
+                {/* Phase 2 slot: one-line AI theme summary from the production brief. */}
+                <div className="case-card-meta">
+                  <span>{(p.document_count ?? 0).toLocaleString()} document{(p.document_count ?? 0) === 1 ? '' : 's'}</span>
+                  {formatAdded(p.created_at) && (
+                    <>
+                      <span className="case-card-dot">·</span>
+                      <span>{formatAdded(p.created_at)}</span>
+                    </>
                   )}
+                </div>
+                <div className="case-card-badges">
+                  {p.is_owner
+                    ? <span className="badge badge-blue">Owner</span>
+                    : <span className="badge badge-gray">Shared</span>}
                 </div>
               </button>
 
               {p.is_owner && (
                 <button
                   type="button"
+                  className="case-card-delete"
                   onClick={() => setConfirmId(p.id)}
                   title="Delete production"
-                  aria-label="Delete production"
-                  style={{
-                    position: 'absolute',
-                    top: 8,
-                    right: 8,
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'rgba(44,62,107,0.35)',
-                    cursor: 'pointer',
-                    fontSize: 16,
-                    padding: '4px 8px',
-                    borderRadius: 4,
-                    lineHeight: 1,
-                    zIndex: 1,
-                  }}
+                  aria-label={`Delete production ${p.name}`}
                 >
                   ×
                 </button>
               )}
 
               {confirmId === p.id && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    background: 'rgba(255,255,255,0.96)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: 'var(--radius-lg)',
-                    padding: 'var(--space-4)',
-                    gap: 'var(--space-3)',
-                    zIndex: 2,
-                  }}
-                >
-                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-ink)', textAlign: 'center' }}>
-                    Delete "{p.name}"?
-                  </div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', textAlign: 'center' }}>
+                <div className="case-card-confirm">
+                  <div className="case-card-confirm-title">Delete "{p.name}"?</div>
+                  <div className="case-card-confirm-body">
                     This permanently removes all documents, tags, notes, and uploaded files. Cannot be undone.
                   </div>
-                  <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                  <div className="case-card-confirm-actions">
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
@@ -132,6 +108,12 @@ export default function ProductionPicker({ productions, onSelect, onIngest, onDe
               )}
             </div>
           ))}
+
+          <button type="button" className="case-card case-card-new card" onClick={onIngest}>
+            <div className="case-card-new-plus">＋</div>
+            <div className="case-card-new-label">Ingest a production</div>
+            <div className="case-card-desc">Load a new document production into Vigilist.</div>
+          </button>
         </div>
       </div>
     </div>

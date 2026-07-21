@@ -19,6 +19,11 @@ from app.utils.parsers import parse_dat, parse_opt
 
 logger = logging.getLogger(__name__)
 
+# Strong references to detached local (non-Cloud-Tasks) pipeline tasks — without
+# this, asyncio only holds a weak reference to a fire-and-forget task, and it
+# can be garbage-collected mid-run.
+_pipeline_tasks: set = set()
+
 # Known DAT field names that map to document columns
 FIELD_MAP = {
     "Begin Bates": "bates_begin",
@@ -505,6 +510,22 @@ async def _finalize_job_if_done(
         except Exception:
             logger.exception("thread derivation skipped for production %s", production_id)
 
+        # Ambient AI pipeline (clustering -> summaries -> brief). Best-effort:
+        # never blocks ingest completion. Prod fans out via Cloud Tasks so the
+        # long-running work doesn't ride on this request; locally we detach.
+        try:
+            from app.services import tasks as task_service
+            from app.services.pipeline import run_ambient_pipeline
+
+            if task_service.is_configured():
+                task_service.enqueue_pipeline(production_id)
+            else:
+                task = asyncio.create_task(run_ambient_pipeline(production_id))
+                _pipeline_tasks.add(task)
+                task.add_done_callback(_pipeline_tasks.discard)
+        except Exception:
+            logger.exception("Failed to start ambient pipeline for production %s", production_id)
+
 
 async def ingest_batch(
     db: AsyncSession,
@@ -715,6 +736,11 @@ async def ingest_from_storage(
             records, _ = bootstrap_ingest_source(production_id)
             total = len(records)
             batch_step = INGEST_BATCH_SIZE
+        # Mirror the Cloud Tasks path's guard: with zero sources the batch
+        # loop below never runs, so nothing would ever finalize the job and
+        # it would sit in "processing" forever.
+        if total == 0:
+            raise FileNotFoundError("No ingestable files found in upload")
         job.total_files = total
         await db.commit()
 

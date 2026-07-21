@@ -4,6 +4,8 @@ import type { ReviewProject } from '../types';
 
 interface Props {
   productionId: number;
+  /** Documents in the production — bounds the sample-size slider. */
+  docCount: number;
   onCreated: (project: ReviewProject) => void;
   onCancel: () => void;
 }
@@ -17,10 +19,20 @@ const DEFAULT_CATEGORIES = [
 
 const COLOR_OPTIONS = ['green', 'blue', 'red', 'yellow', 'gray'];
 
-export default function ReviewProjectSetup({ productionId, onCreated, onCancel }: Props) {
+const SWATCH_COLORS: Record<string, string> = {
+  green: 'var(--color-success-600)',
+  blue: 'var(--color-brand-600)',
+  red: 'var(--color-danger-600)',
+  yellow: 'var(--color-warning-600)',
+  gray: 'var(--color-neutral-500)',
+};
+
+export default function ReviewProjectSetup({ productionId, docCount, onCreated, onCancel }: Props) {
+  const sampleMin = Math.min(10, Math.max(1, docCount));
+  const sampleMax = Math.max(docCount, sampleMin);
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [sampleSize, setSampleSize] = useState(50);
+  const [sampleSize, setSampleSize] = useState(() => Math.min(50, sampleMax));
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES.map(c => ({ ...c })));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -38,7 +50,7 @@ export default function ReviewProjectSetup({ productionId, onCreated, onCancel }
       });
       onCreated(project);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'An error occurred');
+      setError(e instanceof Error ? e.message : 'Failed to create project');
     } finally {
       setLoading(false);
     }
@@ -87,14 +99,29 @@ export default function ReviewProjectSetup({ productionId, onCreated, onCancel }
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
               {categories.map((cat, i) => (
                 <div key={i} style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                  <select className="input" value={cat.color} style={{ width: 80 }}
-                    onChange={e => {
-                      const updated = [...categories];
-                      updated[i] = { ...updated[i], color: e.target.value };
-                      setCategories(updated);
-                    }}>
-                    {COLOR_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <div role="radiogroup" aria-label="Category color" style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    {COLOR_OPTIONS.map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        role="radio"
+                        aria-checked={cat.color === c}
+                        aria-label={c}
+                        title={c}
+                        onClick={() => {
+                          const updated = [...categories];
+                          updated[i] = { ...updated[i], color: c };
+                          setCategories(updated);
+                        }}
+                        style={{
+                          width: 18, height: 18, borderRadius: '50%', cursor: 'pointer', padding: 0,
+                          background: SWATCH_COLORS[c],
+                          border: cat.color === c ? '2px solid var(--color-ink)' : '2px solid transparent',
+                          boxShadow: cat.color === c ? '0 0 0 2px var(--color-card), 0 0 0 3px var(--color-ink)' : 'none',
+                        }}
+                      />
+                    ))}
+                  </div>
                   <input className="input" value={cat.name} placeholder="Category name" style={{ width: 140 }}
                     onChange={e => {
                       const updated = [...categories];
@@ -125,14 +152,27 @@ export default function ReviewProjectSetup({ productionId, onCreated, onCancel }
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            <label htmlFor="sample-size" style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
               Sample Size
             </label>
-            <input className="input" type="number" value={sampleSize} onChange={e => setSampleSize(Number(e.target.value))}
-              min={10} max={200} style={{ width: 100 }} />
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', marginLeft: 'var(--space-2)' }}>
-              documents for initial sample analysis
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+              <input
+                id="sample-size"
+                type="range"
+                min={sampleMin}
+                max={sampleMax}
+                value={sampleSize}
+                onChange={e => setSampleSize(Number(e.target.value))}
+                style={{ flex: 1, accentColor: 'var(--color-ink)' }}
+              />
+              <span style={{ fontSize: 'var(--text-sm)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                <strong>{sampleSize}</strong>
+                <span style={{ color: 'var(--color-neutral-500)' }}> of {docCount} documents</span>
+              </span>
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-400)', marginTop: 'var(--space-1)' }}>
+              The AI classifies this many documents first so you can vet its judgment before running the full set.
+            </div>
           </div>
 
           {error && (

@@ -12,6 +12,48 @@ from app.services.embeddings import embed_query
 logger = logging.getLogger(__name__)
 
 
+async def top_chunks_for_query(
+    db: AsyncSession,
+    production_id: int,
+    query: str,
+    limit: int = 8,
+) -> list[dict]:
+    """Retrieve the closest chunks in a production for grounding AI chat.
+
+    Returns [{"bates": str, "title": str | None, "content": str}, ...] ranked
+    by cosine distance. Returns [] when embeddings are unavailable (no Voyage
+    key, no chunks yet) or retrieval fails — callers degrade gracefully.
+    """
+    try:
+        query_embedding = await asyncio.to_thread(embed_query, query)
+    except Exception:
+        logger.warning("Chat grounding: query embedding failed", exc_info=True)
+        return []
+    if not query_embedding:
+        return []
+
+    distance = DocumentChunk.embedding.cosine_distance(query_embedding).label("distance")
+    chunk_q = (
+        select(Document.bates_begin, Document.title, DocumentChunk.content)
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .where(Document.production_id == production_id)
+        .order_by(distance)
+        .limit(limit)
+    )
+    try:
+        rows = (await db.execute(chunk_q)).all()
+    except Exception:
+        logger.warning("Chat grounding: chunk retrieval failed", exc_info=True)
+        # A failed statement poisons the transaction; roll back so later
+        # work on this session (audit logging) still succeeds.
+        await db.rollback()
+        return []
+    return [
+        {"bates": bates, "title": title, "content": content}
+        for bates, title, content in rows
+    ]
+
+
 async def semantic_search(
     db: AsyncSession,
     query: str,

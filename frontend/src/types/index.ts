@@ -1,3 +1,8 @@
+export interface AttachedDoc {
+  id: string;
+  label: string;
+}
+
 export interface Tag {
   id: number;
   name: string;
@@ -46,6 +51,11 @@ export interface DocumentSummary {
   processing_status: string;
   tags: Tag[];
   note_count: number;
+  cluster_id?: number | null;
+  cluster_label?: string | null;
+  ai_decision?: string | null;
+  ai_confidence?: number | null;
+  ai_decided?: boolean;
 }
 
 export interface DocumentDetail {
@@ -98,6 +108,9 @@ export interface ProductionInfo {
   owner_id: string | null;
   is_owner: boolean;
   created_at: string;
+  document_count: number;
+  case_context?: string | null;
+  has_brief?: boolean;
 }
 
 export interface ProductionAccessEntry {
@@ -258,6 +271,14 @@ export interface ReviewProject {
   updated_at: string;
   sample_agreement_rate: number | null;
   decision_breakdown: Record<string, number> | null;
+  is_primary?: boolean;
+}
+
+export interface ClassifyEstimate {
+  doc_count: number;
+  est_input_tokens: number;
+  est_output_tokens: number;
+  est_usd: number;
 }
 
 export interface AIReviewResult {
@@ -317,4 +338,35 @@ export interface FamilyMember {
 export interface FamilyThread {
   family: FamilyMember[];
   thread: FamilyMember[];
+}
+
+export interface ProductionBriefData {
+  overview: string;
+  key_players: string[];
+  date_range: string | null;
+  notable_documents: { bates: string; reason: string }[];
+  generated_at: string;
+  model: string;
+}
+
+export type PipelineStageState = 'pending' | 'running' | 'done' | 'failed';
+
+export interface PipelineStatus {
+  clustering?: PipelineStageState;
+  summaries?: PipelineStageState;
+  brief?: PipelineStageState;
+  errors?: Record<string, string>;
+  updated_at?: string;
+}
+
+export interface PipelineInfo {
+  status: PipelineStatus | null;
+  brief: ProductionBriefData | null;
+  case_context: string | null;
+}
+
+export interface ClusterDocument {
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
 }
