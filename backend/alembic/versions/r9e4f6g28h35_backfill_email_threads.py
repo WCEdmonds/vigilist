@@ -18,14 +18,18 @@ def upgrade():
 
     with op.get_context().autocommit_block():
         conn = op.get_bind()
+        # Only derive over docs we own: derived thread_ids are "T-…"; SP3
+        # load-file thread_ids never are, so a load-file email (whose "Type"
+        # column can also promote to file_type 'email') is left untouched.
+        _SCOPE = "file_type = 'email' AND (thread_id IS NULL OR thread_id LIKE 'T-%')"
         prod_rows = conn.execute(sa.text(
-            "SELECT DISTINCT production_id FROM documents WHERE file_type = 'email'"
+            f"SELECT DISTINCT production_id FROM documents WHERE {_SCOPE}"
         )).fetchall()
         for prod_row in prod_rows:
             production_id = prod_row._mapping["production_id"]
             rows = conn.execute(sa.text(
                 "SELECT id, message_id, in_reply_to, email_references, email_subject, date_sent "
-                "FROM documents WHERE production_id = :pid AND file_type = 'email'"
+                f"FROM documents WHERE production_id = :pid AND {_SCOPE}"
             ), {"pid": production_id}).fetchall()
             if not rows:
                 continue

@@ -210,6 +210,12 @@ async def derive_threads(db: "AsyncSession", production_id: int) -> ThreadStats:
             ).where(
                 Document.production_id == production_id,
                 Document.file_type == "email",
+                # Only derive over docs we own: our thread_ids are "T-…"; SP3
+                # load-file thread_ids are never "T-…", so a load-file email
+                # (whose "Type" column can also promote to file_type "email")
+                # is left untouched. NULL threads are ours to fill; "T-…"
+                # threads are ours to recompute.
+                (Document.thread_id.is_(None)) | (Document.thread_id.like("T-%")),
             )
         )
         rows = result.all()
