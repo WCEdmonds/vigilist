@@ -521,3 +521,9 @@ class ClusterDocumentOut(BaseModel):
     document_id: str
     bates_begin: str
     title: str | None = None
+
+
+class ThreadStats(BaseModel):
+    threads: int
+    inclusive: int
+    messages: int
