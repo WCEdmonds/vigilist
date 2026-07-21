@@ -300,6 +300,11 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
           {clusters.length > 0 && (
             <div className="brief-chips">
               {clusters.map((c, i) => {
+                // Unlabeled clusters (AI found no genuine common thread) get
+                // no chip — a "Cluster N" chip implies a theme that isn't
+                // there. Color index stays position-based so chips match the
+                // document rows' badges.
+                if (!c.label) return null;
                 const isActive = activeClusterId === c.id;
                 const dimmed = activeClusterId !== null && !isActive;
                 return (
@@ -310,7 +315,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
                     style={{ background: `var(--theme-${(i % 8) + 1})` }}
                     onClick={() => onSelectCluster(isActive ? null : c.id)}
                   >
-                    {c.label || `Cluster ${c.cluster_index + 1}`}
+                    {c.label}
                   </button>
                 );
               })}
@@ -357,6 +362,9 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
         {clusters.length > 0 && (
           <div className="brief-chips">
             {clusters.map((c, i) => {
+              // Same rule as the collapsed state: no chip for clusters the
+              // AI judged to have no genuine common thread.
+              if (!c.label) return null;
               const isActive = activeClusterId === c.id;
               const dimmed = activeClusterId !== null && !isActive;
               return (
@@ -367,7 +375,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
                   style={{ background: `var(--theme-${(i % 8) + 1})` }}
                   onClick={() => onSelectCluster(isActive ? null : c.id)}
                 >
-                  {c.label || `Cluster ${c.cluster_index + 1}`}
+                  {c.label}
                 </button>
               );
             })}
@@ -391,9 +399,9 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
               <ThemeDonut clusters={clusters} />
             </div>
             <div className="brief-expand-docs">
-              {clusters.map(c => (
+              {clusters.filter(c => c.label).map(c => (
                 <div key={c.id} className="brief-theme-docs">
-                  <div className="brief-theme-label">{c.label || `Cluster ${c.cluster_index + 1}`}</div>
+                  <div className="brief-theme-label">{c.label}</div>
                   {(themeDocs[c.id] ?? []).map(d => (
                     <button
                       key={d.document_id}
