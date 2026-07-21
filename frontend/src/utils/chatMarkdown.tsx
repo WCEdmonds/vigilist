@@ -35,11 +35,14 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
       // send users off-app).
       out.push(anyLink[1]);
     } else if (token.startsWith('**')) {
-      out.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+      // Recurse: models routinely put doc citations inside bold runs
+      // (**[BATES](doc:…) — description**); without recursion the link
+      // renders as raw markup.
+      out.push(<strong key={key}>{renderInline(token.slice(2, -2), key)}</strong>);
     } else if (token.startsWith('`')) {
       out.push(<code key={key}>{token.slice(1, -1)}</code>);
     } else {
-      out.push(<em key={key}>{token.slice(1, -1)}</em>);
+      out.push(<em key={key}>{renderInline(token.slice(1, -1), key)}</em>);
     }
     last = idx + token.length;
   }
