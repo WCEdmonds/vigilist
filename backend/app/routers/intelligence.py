@@ -13,7 +13,7 @@ from app.models import (
 from app.routers.auth import get_current_user
 from app.schemas import (
     ClusterDocumentOut, ClusterOut, DuplicateEntryOut, FamilyMemberOut,
-    FamilyThreadOut, PropagateTagRequest,
+    FamilyThreadOut, PropagateTagRequest, ThreadStats,
 )
 from app.services.audit import log_action
 
@@ -271,3 +271,22 @@ async def propagate_tag(
 
     await db.commit()
     return {"tagged_count": tagged}
+
+
+@router.post("/productions/{production_id}/rethread", response_model=ThreadStats)
+async def rethread_endpoint(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    from app.services.email_threading import derive_threads
+    stats = await derive_threads(db, production_id)
+
+    await log_action(db, user, "threads_derived", "production", str(production_id),
+                     production_id=production_id, details=stats.model_dump())
+    await db.commit()
+    return stats
