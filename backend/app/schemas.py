@@ -484,6 +484,42 @@ class AnnotationOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RedactionCreate(BaseModel):
+    page_num: int
+    x_pct: float
+    y_pct: float
+    w_pct: float
+    h_pct: float
+    reason_code: str
+    note: str | None = None
+
+
+class RedactionUpdate(BaseModel):
+    x_pct: float | None = None
+    y_pct: float | None = None
+    w_pct: float | None = None
+    h_pct: float | None = None
+    reason_code: str | None = None
+    note: str | None = None
+
+
+class RedactionOut(BaseModel):
+    id: int
+    document_id: UUID
+    page_num: int
+    x_pct: float
+    y_pct: float
+    w_pct: float
+    h_pct: float
+    reason_code: str
+    note: str | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
 # ── Intelligence ──
 
 class DuplicateEntryOut(BaseModel):
