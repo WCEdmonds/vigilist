@@ -116,12 +116,18 @@ def _spread_sample(ordered: list, k: int) -> list:
 _LABEL_SAMPLE_SIZE = 8
 
 
-async def _generate_cluster_label(doc_lines: list[str]) -> str:
-    """Use Claude to generate a 2-4 word topic label covering all sampled docs.
+# How many titles to show the labeler at most; beyond this, an even spread.
+_TITLE_CAP = 200
 
-    `doc_lines` are per-document "Title — snippet" strings sampled from
-    across the cluster (centroid to edge), so the model labels the common
-    denominator rather than the flavor of the centroid documents.
+
+async def _generate_cluster_label(titles: list[str], sample_lines: list[str]) -> str:
+    """Label one cluster, or decide it has no honest label.
+
+    Primary path: show the labeler the titles of (up to _TITLE_CAP of) ALL
+    member documents and ask for a category that genuinely covers them —
+    or an explicit "None" verdict, which the caller stores as no label at
+    all. Falls back to the title+snippet spread sample when most documents
+    have no title to judge by.
     """
     from app.config import settings
     if not settings.anthropic_api_key:
@@ -130,28 +136,45 @@ async def _generate_cluster_label(doc_lines: list[str]) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    excerpts = "\n---\n".join(doc_lines[:_LABEL_SAMPLE_SIZE])
+    titled = [t for t in titles if t]
+    # Labels render as compact chips in the document list — long ones
+    # truncate, so brevity is a display constraint in both prompts.
+    if len(titled) >= max(3, len(titles) // 2):
+        listing = "\n".join(f"- {t}" for t in _spread_sample(titled, _TITLE_CAP))
+        content = (
+            "Below are the titles of the documents in ONE cluster from a "
+            "legal document production. Every document in the cluster will "
+            "display your answer as its theme badge. If they share a genuine "
+            "common category, respond with the most specific 2-4 word label "
+            "(under 30 characters) that covers essentially all of them — "
+            "widen the category rather than naming the most common type. If "
+            "there is NO genuine common thread, respond with exactly: None. "
+            f"Respond with ONLY the label or None, no quotes.\n\n{listing}"
+        )
+    else:
+        excerpts = "\n---\n".join(sample_lines[:_LABEL_SAMPLE_SIZE])
+        content = (
+            "These documents were sampled from across ONE cluster of "
+            "related legal documents. Every document in the cluster will "
+            "display your answer as its theme badge, so name the most "
+            "specific 2-4 word category (under 30 characters) that covers "
+            "essentially ALL of the sampled documents — widen the category "
+            "rather than naming the most common type. If they share no "
+            "genuine common thread, or the text is illegible, respond with "
+            "exactly: None. Respond with ONLY the label or None, no "
+            f"quotes.\n\n{excerpts}"
+        )
+
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=30,
-            messages=[{
-                "role": "user",
-                # Labels render as compact chips in the document list — long
-                # ones truncate, so brevity is a display constraint.
-                "content": (
-                    "These documents were sampled from across ONE cluster of "
-                    "related legal documents. Generate a topic label of 2-4 "
-                    "short words (under 30 characters) describing what ALL of "
-                    "them have in common — prefer the general category over "
-                    "the specifics of any single document. If they share no "
-                    "discernible topic, or the text is illegible, respond "
-                    "with exactly: Unlabeled. Respond with ONLY the label, "
-                    f"no quotes.\n\n{excerpts}"
-                ),
-            }],
+            messages=[{"role": "user", "content": content}],
         )
-        return _sanitize_label(response.content[0].text)
+        raw = response.content[0].text.strip()
+        if raw.strip('."\' ').lower() in ("none", "unlabeled"):
+            return "Unlabeled"
+        return _sanitize_label(raw)
     except Exception as e:
         logger.warning("Cluster labeling failed: %s", e)
         return "Unlabeled"
@@ -227,22 +250,32 @@ async def cluster_production(
         if not member_ids:
             continue
 
-        # Sample documents across the whole cluster, centroid to edge, so
-        # the label reflects the common denominator rather than whatever
-        # flavor happens to sit at the center.
+        # Sample documents across the cluster so the label reflects its
+        # breadth — but only the closest 80% (the far edge is where k-means
+        # dumps outliers, and letting them into the sample made the labeler
+        # give up with "Unlabeled"), and only docs with usable signal.
         mask = labels == k
         centroid = X[mask].mean(axis=0)
         dists = np.linalg.norm(X[mask] - centroid, axis=1)
         sorted_idx = np.argsort(dists)
         ordered_ids = [member_ids[i] for i in sorted_idx]
-        rep_ids = _spread_sample(ordered_ids, _LABEL_SAMPLE_SIZE)
+        core_n = max(_LABEL_SAMPLE_SIZE, int(len(ordered_ids) * 0.8))
+        core_ids = ordered_ids[:core_n]
+        with_signal = [
+            d for d in core_ids
+            if doc_titles.get(d) or len(doc_texts.get(d, "").strip()) >= 80
+        ]
+        rep_ids = _spread_sample(with_signal or core_ids, _LABEL_SAMPLE_SIZE)
         rep_lines = []
         for d in rep_ids:
             title = doc_titles.get(d, "")
             snippet = doc_texts.get(d, "")[:200].replace("\n", " ").strip()
-            rep_lines.append(f"{title} — {snippet}" if title else snippet)
+            line = f"{title} — {snippet}" if title else snippet
+            if line.strip():
+                rep_lines.append(line)
 
-        label = await _generate_cluster_label(rep_lines)
+        member_titles = [doc_titles.get(d, "") for d in member_ids]
+        label = await _generate_cluster_label(member_titles, rep_lines)
 
         cluster = DocumentCluster(
             production_id=production_id,

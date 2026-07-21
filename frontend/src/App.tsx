@@ -305,7 +305,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   }, [clusters]);
 
   const themeChip = (d: DocumentSummary) => {
-    if (d.cluster_id == null || !themeIndexById.has(d.cluster_id)) return null;
+    // No label means the AI judged the cluster to have no genuine common
+    // thread — showing a placeholder badge would imply a theme that isn't
+    // there, so these rows get no badge. (The brief's chips still expose the
+    // cluster as "Cluster N" for filtering.)
+    if (d.cluster_id == null || !themeIndexById.has(d.cluster_id) || !d.cluster_label) return null;
     const active = filterClusterId === d.cluster_id;
     return (
       <button
@@ -313,9 +317,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         className={`doc-theme-chip${active ? ' is-active' : ''}`}
         style={{ background: `var(--theme-${themeIndexById.get(d.cluster_id)})` }}
         onClick={e => { e.stopPropagation(); setFilterClusterId(active ? null : d.cluster_id!); }}
-        title={d.cluster_label || 'Theme'}
+        title={d.cluster_label}
       >
-        {d.cluster_label || 'Theme'}
+        {d.cluster_label}
       </button>
     );
   };
