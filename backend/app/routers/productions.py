@@ -155,8 +155,20 @@ async def get_pipeline(
     if prod is None:
         raise HTTPException(status_code=404, detail="Production not found")
     await get_user_role_for_production(db, user, production_id)
+    counts = (
+        await db.execute(
+            select(
+                func.count(Document.id),
+                func.count(Document.summary),
+            ).where(Document.production_id == production_id)
+        )
+    ).one()
     return PipelineStatusOut(
-        status=prod.ai_pipeline_status, brief=prod.brief, case_context=prod.case_context
+        status=prod.ai_pipeline_status,
+        brief=prod.brief,
+        case_context=prod.case_context,
+        doc_count=counts[0],
+        summarized_count=counts[1],
     )
 
 

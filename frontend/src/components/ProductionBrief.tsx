@@ -261,6 +261,12 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
     // stages as pending rather than flashing a stale `!` glyph.
     const realRunning = isActivelyRunning(status);
     const glyph = (s: PipelineStageState | undefined) => (realRunning ? stageGlyph(s) : '·');
+    // Per-document progress for the long summaries stage — only meaningful
+    // while it is actually running (before that the counts reflect a prior run).
+    const summariesProgress =
+      realRunning && status?.summaries === 'running' && (info?.doc_count ?? 0) > 0
+        ? ` ${info?.summarized_count ?? 0}/${info?.doc_count}`
+        : '';
     return (
       <div className="brief-card brief-skeleton">
         <div className="brief-header">
@@ -271,7 +277,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
         <div className="brief-skeleton-bar" style={{ width: '70%' }} />
         <div className="brief-stages">
           <span>Clustering {glyph(status?.clustering)}</span>
-          <span>Summaries {glyph(status?.summaries)}</span>
+          <span>Summaries{summariesProgress} {glyph(status?.summaries)}</span>
           <span>Brief {glyph(status?.brief)}</span>
         </div>
       </div>
