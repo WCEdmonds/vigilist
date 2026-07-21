@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { getByBates } from '../api/client';
 import type { ChatState } from '../hooks/useChat';
 import { showToast } from './Toast';
 import { renderChatMarkdown } from '../utils/chatMarkdown';
@@ -7,9 +8,19 @@ interface Props {
   chat: ChatState;
   placeholder: string;
   autoFocusToken: number;
+  /** Opens a document cited by the AI ([BATES](doc:…) links in replies). */
+  onOpenDocument?: (id: string) => void;
 }
 
-export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const SAMPLE_QUESTIONS = [
+  'What is this production about, and what stands out?',
+  'Build a timeline of the key events with Bates citations.',
+  'Which documents most need attorney attention, and why?',
+];
+
+export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDocument }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -37,6 +48,25 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
       showToast('Transcript copied', 'success');
     } catch {
       showToast('Copy failed', 'error');
+    }
+  };
+
+  // Doc citations render as .chat-doc-link buttons deep inside markdown
+  // blocks — one delegated handler beats threading a callback through the
+  // (pure) renderer.
+  const handleBodyClick = async (e: React.MouseEvent) => {
+    const link = (e.target as HTMLElement).closest<HTMLElement>('.chat-doc-link');
+    if (!link || !onOpenDocument) return;
+    const target = link.dataset.docTarget || '';
+    try {
+      if (UUID_RE.test(target)) {
+        onOpenDocument(target);
+      } else {
+        const found = await getByBates(target);
+        onOpenDocument(found.id);
+      }
+    } catch {
+      showToast(`Could not find ${target} in this production`, 'error');
     }
   };
 
@@ -72,10 +102,17 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
         </div>
       )}
 
-      <div className="chat-body" ref={scrollRef}>
+      <div className="chat-body" ref={scrollRef} onClick={handleBodyClick}>
         {chat.messages.length === 0 && !chat.streaming && (
           <div className="chat-empty">
-            <span className="brief-ai-mark">✦</span> {placeholder}
+            <div><span className="brief-ai-mark">✦</span> {placeholder}</div>
+            <div className="chat-suggestions">
+              {SAMPLE_QUESTIONS.map(q => (
+                <button key={q} type="button" className="chat-suggestion" onClick={() => chat.send(q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {chat.messages.map((m, i) => (
