@@ -8,6 +8,9 @@
   --color-parchment-warm: #f2ede5;
   --color-card: #ffffff;
   --color-card-hover: #faf7f2;
+  /* Ivory: an elevated warm-white surface that reads as "paper laid on the
+     parchment desk" — for flagship panels that must stand off the page bg. */
+  --color-ivory: #fffdf8;
   --color-rule: #8b7355;
   --color-margin: rgba(183, 28, 28, 0.06);
 

@@ -164,6 +164,9 @@
 
 .doc-table {
   width: 100%;
+  /* Below this the columns crush into each other — let the card's
+     horizontal scroll take over instead. */
+  min-width: 720px;
 }
 
 .doc-table th {
@@ -461,7 +464,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
   margin: var(--space-5) 0 var(--space-3);
+}
+
+/* The filter strip may wrap onto its own row when space runs out, but the
+   title itself never breaks mid-phrase. */
+.section-header > div:last-child {
+  flex-wrap: wrap;
 }
 
 .section-title {
@@ -470,6 +481,7 @@
   font-weight: var(--font-semibold);
   color: var(--color-primary-900);
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .section-count {
@@ -1472,6 +1484,14 @@
   .home-shell.rail-open ~ .floating-bar,
   .home-shell.rail-open .floating-bar {
     left: calc(50% - var(--rail-width) / 2);
+  }
+}
+
+/* Between full desktop and the drawer breakpoint, a narrower rail leaves the
+   document list enough room that it scrolls instead of crushing. */
+@media (min-width: 1025px) and (max-width: 1280px) {
+  :root {
+    --rail-width: 320px;
   }
 }
 

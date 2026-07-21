@@ -132,6 +132,22 @@
   font-size: var(--text-xs);
 }
 
+/* Native selects: replace the OS chrome with the design system's — card
+   surface, ink border, and an inked chevron in place of the default arrow. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%232c3e6b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+select.input.input-sm {
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+
 textarea.input {
   resize: vertical;
   min-height: 60px;
@@ -832,6 +848,51 @@ mark {
   color: var(--color-ink);
   border: 1px solid rgba(44, 62, 107, 0.08);
   border-bottom-left-radius: var(--radius-sm);
+  /* Assistant replies render as markdown blocks — block margins own the
+     vertical rhythm, so pre-wrap would double every blank line. */
+  white-space: normal;
+}
+.ai-agent-msg-content p {
+  margin: 0 0 var(--space-2);
+}
+.ai-agent-msg-content p:last-child,
+.ai-agent-msg-content ul:last-child,
+.ai-agent-msg-content ol:last-child {
+  margin-bottom: 0;
+}
+.ai-agent-msg-content .chat-md-heading {
+  font-weight: var(--font-semibold);
+  margin: var(--space-3) 0 var(--space-1-5);
+}
+.ai-agent-msg-content .chat-md-heading:first-child {
+  margin-top: 0;
+}
+.ai-agent-msg-content ul,
+.ai-agent-msg-content ol {
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-5);
+}
+.ai-agent-msg-content li {
+  margin-bottom: var(--space-1);
+}
+.ai-agent-msg-content blockquote {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-left: 3px solid var(--color-brass, #b08d57);
+  color: var(--color-neutral-600);
+  font-style: italic;
+}
+.ai-agent-msg-content code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: rgba(44, 62, 107, 0.07);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+.ai-agent-msg-content hr {
+  border: none;
+  border-top: 1px solid rgba(44, 62, 107, 0.12);
+  margin: var(--space-3) 0;
 }
 
 .ai-agent-typing {
@@ -1016,10 +1077,11 @@ mark {
   position: relative;
   margin-bottom: var(--space-4);
   padding: var(--space-4) var(--space-5);
-  background: var(--color-parchment-light);
-  border-radius: var(--radius-lg);
+  background: var(--color-ivory);
+  border: 1px solid rgba(44, 62, 107, 0.12);
   border-left: 3px solid var(--color-ink);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .brief-header {
@@ -1403,12 +1465,12 @@ mark {
 .doc-theme-chip {
   border: none;
   border-radius: var(--radius-full);
-  padding: 1px var(--space-2);
+  padding: 2px var(--space-2);
   font-size: 10px;
   font-weight: var(--font-medium);
   color: var(--color-neutral-0);
   cursor: pointer;
-  max-width: 140px;
+  max-width: 220px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
