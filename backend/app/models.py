@@ -113,6 +113,10 @@ class Document(Base):
     family_id = Column(String(255), nullable=True)
     thread_id = Column(String(255), nullable=True)
     is_inclusive = Column(Boolean, nullable=False, default=False)
+    # Phase 0 SP4b-2 — email threading headers (parent email Documents only)
+    message_id = Column(String(500), nullable=True, index=True)
+    in_reply_to = Column(String(500), nullable=True)
+    email_references = Column(Text, nullable=True)
 
     # Phase 0 SP1 — typed metadata (promoted from load-file columns)
     custodian = Column(String(255), nullable=True, index=True)
