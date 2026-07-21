@@ -163,6 +163,19 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [lastMetadata, setLastMetadata] = useState<Record<string, string> | undefined>(undefined);
 
   const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => {
+    // A query that looks like a Bates number jumps straight to that document
+    // (tolerant matching server-side); anything unresolved falls through to a
+    // normal search.
+    const trimmed = query.trim();
+    if (!metadata && /^[A-Za-z]{2,}[\s\-_.]*\d{3,}$/.test(trimmed)) {
+      try {
+        const { getByBates } = await import('./api/client');
+        const found = await getByBates(trimmed, production.id);
+        setViewDocId(found.id);
+        return;
+      } catch { /* not a Bates number in this production — search normally */ }
+    }
+
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
