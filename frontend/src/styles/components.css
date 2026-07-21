@@ -67,7 +67,7 @@
 
 .btn-ghost {
   background: transparent;
-  color: rgba(44, 62, 107, 0.6);
+  color: rgba(44, 62, 107, 0.78);
 }
 .btn-ghost:hover:not(:disabled) {
   background: rgba(44, 62, 107, 0.04);
@@ -124,7 +124,7 @@
   box-shadow: var(--shadow-ring);
 }
 .input::placeholder {
-  color: rgba(44, 62, 107, 0.3);
+  color: rgba(44, 62, 107, 0.5);
 }
 
 .input-sm {
@@ -951,7 +951,7 @@ mark {
 }
 
 .chat-empty {
-  color: var(--color-neutral-400);
+  color: var(--color-neutral-500);
   font-size: var(--text-sm);
   text-align: center;
   margin-top: var(--space-6);
@@ -979,6 +979,9 @@ mark {
 .chat-input:focus {
   outline: none;
   box-shadow: var(--shadow-ring);
+}
+.chat-input::placeholder {
+  color: rgba(44, 62, 107, 0.5);
 }
 
 /* ── Onboarding guide ── */
