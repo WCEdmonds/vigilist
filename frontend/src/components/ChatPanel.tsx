@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { ChatState } from '../hooks/useChat';
 import { showToast } from './Toast';
+import { renderChatMarkdown } from '../utils/chatMarkdown';
 
 interface Props {
   chat: ChatState;
@@ -80,14 +81,16 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken }: Props) 
         {chat.messages.map((m, i) => (
           <div key={i} className={`ai-agent-msg ai-agent-msg-${m.role === 'user' ? 'user' : 'assistant'}`}>
             <div className="ai-agent-msg-role">{m.role === 'user' ? 'You' : '✦ AI'}</div>
-            <div className="ai-agent-msg-content">{m.content}</div>
+            <div className="ai-agent-msg-content">
+              {m.role === 'user' ? m.content : renderChatMarkdown(m.content)}
+            </div>
           </div>
         ))}
         {chat.streaming && (
           <div className="ai-agent-msg ai-agent-msg-assistant">
             <div className="ai-agent-msg-role">✦ AI</div>
             <div className="ai-agent-msg-content">
-              {chat.streamingText || (
+              {chat.streamingText ? renderChatMarkdown(chat.streamingText) : (
                 <span className="ai-agent-typing"><span /><span /><span /></span>
               )}
             </div>
