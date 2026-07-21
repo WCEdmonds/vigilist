@@ -3,10 +3,17 @@ import { streamChat, type ChatMessage } from '../api/client';
 import type { AttachedDoc } from '../types';
 import { showToast } from '../components/Toast';
 
+export interface ChatActivity {
+  summary: string;
+  ok?: boolean;
+}
+
 export interface ChatState {
   messages: ChatMessage[];
   streaming: boolean;
   streamingText: string;
+  /** Tool calls made during the current/most recent turn ("Searching…"). */
+  activity: ChatActivity[];
   attachedDocs: AttachedDoc[];
   attachDocs: (docs: AttachedDoc[]) => void;
   removeDoc: (id: string) => void;
@@ -31,6 +38,7 @@ export function useChat(productionId?: number): ChatState {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [activity, setActivity] = useState<ChatActivity[]>([]);
   const [attachedDocs, setAttachedDocs] = useState<AttachedDoc[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   // Mirrors the accumulated streamed text so `stop()` can commit synchronously
@@ -57,6 +65,7 @@ export function useChat(productionId?: number): ChatState {
     setMessages(nextMessages);
     setStreaming(true);
     setStreamingText('');
+    setActivity([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -69,6 +78,15 @@ export function useChat(productionId?: number): ChatState {
       {
         onDelta: delta => { accRef.current += delta; setStreamingText(accRef.current); },
         onError: message => { errored = true; showToast(message, 'error'); },
+        onToolUse: evt => setActivity(prev => [...prev, { summary: evt.summary }]),
+        onToolResult: evt => setActivity(prev => {
+          // Mark the oldest still-pending activity row settled.
+          const next = [...prev];
+          for (let i = 0; i < next.length; i++) {
+            if (next[i].ok === undefined) { next[i] = { ...next[i], ok: evt.ok }; break; }
+          }
+          return next;
+        }),
       },
       controller.signal,
       productionId,
@@ -118,13 +136,14 @@ export function useChat(productionId?: number): ChatState {
     setMessages([]);
     setStreaming(false);
     setStreamingText('');
+    setActivity([]);
     setAttachedDocs([]);
   }, []);
 
   const transcriptText = useCallback(() => formatTranscript(messages), [messages]);
 
   return useMemo(
-    () => ({ messages, streaming, streamingText, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText }),
-    [messages, streaming, streamingText, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText],
+    () => ({ messages, streaming, streamingText, activity, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText }),
+    [messages, streaming, streamingText, activity, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText],
   );
 }

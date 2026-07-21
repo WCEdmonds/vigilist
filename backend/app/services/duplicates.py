@@ -14,6 +14,22 @@ from app.services.document_embeddings import get_document_embeddings
 logger = logging.getLogger(__name__)
 
 
+def group_by_hash(rows: list[tuple[str, str]]) -> list[list[str]]:
+    """Group document ids by identical SHA-256 hash.
+
+    ``rows`` is a list of ``(doc_id, sha256)``. Returns a list of doc-id
+    groups, each of size >= 2 (a hash held by one doc is not a duplicate).
+    Rows with an empty/None hash are ignored. First-seen order is preserved
+    for both groups and members (deterministic).
+    """
+    buckets: dict[str, list[str]] = {}
+    for doc_id, sha in rows:
+        if not sha:
+            continue
+        buckets.setdefault(sha, []).append(doc_id)
+    return [ids for ids in buckets.values() if len(ids) >= 2]
+
+
 def _compute_minhash(text: str, num_perm: int = 128) -> MinHash:
     """Compute MinHash signature from word 3-grams."""
     m = MinHash(num_perm=num_perm)
@@ -68,7 +84,8 @@ async def detect_duplicates(
 ) -> dict:
     """Run full duplicate detection for a production.
 
-    Returns { exact_groups: int, similar_groups: int, total_documents_grouped: int }
+    Returns { hash_groups: int, exact_groups: int, similar_groups: int,
+    total_documents_grouped: int }
     """
     # Clear previous results
     old_groups = await db.execute(
@@ -78,6 +95,25 @@ async def detect_duplicates(
     if old_ids:
         await db.execute(delete(DocumentDuplicate).where(DocumentDuplicate.group_id.in_(old_ids)))
         await db.execute(delete(DuplicateGroup).where(DuplicateGroup.id.in_(old_ids)))
+
+    # --- Byte-identical (SHA-256) pass — independent of text ---
+    hash_result = await db.execute(
+        select(Document.id, Document.file_hash_sha256)
+        .where(Document.production_id == production_id)
+        .where(Document.file_hash_sha256.isnot(None))
+        .where(Document.file_hash_sha256 != "")
+    )
+    hash_rows = [(str(r[0]), r[1]) for r in hash_result.all()]
+    hash_components = group_by_hash(hash_rows)
+    hash_doc_count = 0
+    for ids in hash_components:
+        group = DuplicateGroup(production_id=production_id, type="hash")
+        db.add(group)
+        await db.flush()
+        for doc_id in ids:
+            db.add(DocumentDuplicate(document_id=doc_id, group_id=group.id, similarity=1.0))
+            hash_doc_count += 1
+    logger.info("Hash: found %d byte-identical groups", len(hash_components))
 
     # Get all documents with text
     result = await db.execute(
@@ -90,7 +126,13 @@ async def detect_duplicates(
     logger.info("Duplicate detection: %d documents with text", len(docs))
 
     if len(docs) < 2:
-        return {"exact_groups": 0, "similar_groups": 0, "total_documents_grouped": 0}
+        await db.commit()
+        return {
+            "hash_groups": len(hash_components),
+            "exact_groups": 0,
+            "similar_groups": 0,
+            "total_documents_grouped": hash_doc_count,
+        }
 
     # --- MinHash exact duplicates (95%+) ---
     exact_pairs = []
@@ -167,7 +209,8 @@ async def detect_duplicates(
     await db.commit()
 
     return {
+        "hash_groups": len(hash_components),
         "exact_groups": len(exact_components),
         "similar_groups": len(similar_components),
-        "total_documents_grouped": exact_doc_count + similar_doc_count,
+        "total_documents_grouped": hash_doc_count + exact_doc_count + similar_doc_count,
     }

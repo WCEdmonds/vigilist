@@ -23,8 +23,8 @@ export default function NotesPanel({ docId, mediaTime: _mediaTime, onSeek: _onSe
     try {
       const res = await getNotes(docId);
       setNotes(res);
-    } catch (e: any) {
-      showToast(`Could not load notes: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not load notes: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -40,8 +40,8 @@ export default function NotesPanel({ docId, mediaTime: _mediaTime, onSeek: _onSe
       await createNote(docId, newContent.trim());
       setNewContent('');
       await loadNotes();
-    } catch (e: any) {
-      showToast(`Could not save note: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not save note: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setSaving(false);
     }
@@ -54,8 +54,8 @@ export default function NotesPanel({ docId, mediaTime: _mediaTime, onSeek: _onSe
       await updateNote(noteId, editContent.trim());
       setEditingId(null);
       await loadNotes();
-    } catch (e: any) {
-      showToast(`Could not update note: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not update note: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setSaving(false);
     }
@@ -68,8 +68,8 @@ export default function NotesPanel({ docId, mediaTime: _mediaTime, onSeek: _onSe
     try {
       await deleteNote(noteId);
       await loadNotes();
-    } catch (e: any) {
-      showToast(`Could not delete note: ${e?.message || 'unknown error'}`, 'error');
+    } catch (e: unknown) {
+      showToast(`Could not delete note: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
       setDeletingId(null);
     }

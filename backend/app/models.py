@@ -117,6 +117,25 @@ class Document(Base):
     thread_id = Column(String(255), nullable=True)
     is_inclusive = Column(Boolean, nullable=False, default=False)
 
+    # Phase 0 SP1 — typed metadata (promoted from load-file columns)
+    custodian = Column(String(255), nullable=True, index=True)
+    date_sent = Column(DateTime(timezone=True), nullable=True, index=True)
+    date_received = Column(DateTime(timezone=True), nullable=True)
+    date_created = Column(DateTime(timezone=True), nullable=True)
+    date_modified = Column(DateTime(timezone=True), nullable=True)
+    file_hash_md5 = Column(String(32), nullable=True)
+    file_hash_sha256 = Column(String(64), nullable=True, index=True)
+    file_type = Column(String(50), nullable=True, index=True)
+    file_name = Column(String(500), nullable=True)
+    source_path = Column(String(1000), nullable=True)
+    extraction_status = Column(String(20), nullable=False, server_default="ok")
+    extraction_error = Column(Text, nullable=True)
+    email_from = Column(String(500), nullable=True)
+    email_to = Column(Text, nullable=True)
+    email_cc = Column(Text, nullable=True)
+    email_bcc = Column(Text, nullable=True)
+    email_subject = Column(String(1000), nullable=True)
+
     production = relationship("Production", back_populates="documents")
     tags = relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
     notes = relationship("Note", back_populates="document", cascade="all, delete-orphan", order_by="Note.created_at.desc()")
@@ -243,6 +262,7 @@ class IngestJob(Base):
     processed_files = Column(Integer, nullable=False, default=0)
     skipped_files = Column(Integer, nullable=False, default=0)
     errors = Column(JSONB, nullable=False, default=list)
+    field_mapping = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime, nullable=True)
 
@@ -367,7 +387,7 @@ class DuplicateGroup(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
-    type = Column(String(20), nullable=False)  # 'exact' or 'similar'
+    type = Column(String(20), nullable=False)  # 'hash' | 'exact' | 'similar'
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     members = relationship("DocumentDuplicate", back_populates="group", cascade="all, delete-orphan")

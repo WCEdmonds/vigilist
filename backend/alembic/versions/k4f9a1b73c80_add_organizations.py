@@ -1,10 +1,7 @@
 """add organizations, production.organization_id, seed + backfill thirulaw
 
-Also merges the two prior migration heads (i2d7e6f15g48 and j3e8f7g26h59)
-into a single lineage so `alembic upgrade head` is unambiguous again.
-
 Revision ID: k4f9a1b73c80
-Revises: i2d7e6f15g48, j3e8f7g26h59
+Revises: j3e8f7g26h59
 Create Date: 2026-07-16
 
 """
@@ -14,7 +11,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 
 # revision identifiers, used by Alembic.
 revision = "k4f9a1b73c80"
-down_revision = ("i2d7e6f15g48", "j3e8f7g26h59")
+down_revision = "j3e8f7g26h59"
 branch_labels = None
 depends_on = None
 

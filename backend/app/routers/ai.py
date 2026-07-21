@@ -1,12 +1,9 @@
 """AI-powered endpoints: summarize, NL search, find similar, chat."""
 
-import json
-import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -15,18 +12,17 @@ from app.models import Document, Production, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.ai import (
-    CHAT_MODEL,
     build_chat_system_prompt,
     build_production_chat_system_prompt,
     extract_similar_terms,
     generate_summary,
     nl_to_search_query,
 )
+from app.services.ai_chat import stream_chat_events
+from app.services.ai_tools import TOOLS, run_tool, tool_use_summary
 from app.services.audit import log_action
 from app.services.search import search_documents
 from app.services.semantic_search import top_chunks_for_query
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -223,26 +219,20 @@ async def chat(
     )
     await db.commit()
 
-    async def event_stream():
-        import anthropic
+    import anthropic
 
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        try:
-            async with client.messages.stream(
-                model=CHAT_MODEL,
-                max_tokens=4096,
-                system=system,
-                messages=messages,
-            ) as stream:
-                async for text in stream.text_stream:
-                    yield f"data: {json.dumps({'type': 'delta', 'text': text})}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        except Exception:
-            logger.warning("AI chat stream failed", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'The AI service failed to respond.'})}\n\n"
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    async def _run(name: str, tool_input: dict):
+        return await run_tool(db, user, accessible, name, tool_input)
 
     return StreamingResponse(
-        event_stream(),
+        stream_chat_events(
+            client, system, messages,
+            describe_call=tool_use_summary,
+            run_tool=_run,
+            tools=TOOLS,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

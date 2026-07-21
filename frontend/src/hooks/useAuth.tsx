@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- intentional: AuthProvider co-located with its useAuth hook */
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
