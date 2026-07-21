@@ -14,11 +14,15 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document
-from app.schemas import ThreadStats
+
+if TYPE_CHECKING:
+    from app.schemas import ThreadStats
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +206,11 @@ async def derive_threads(db: "AsyncSession", production_id: int) -> ThreadStats:
     overwrites SP3 load-file thread_id on other document types. Idempotent and
     best-effort — logs and returns zeroed stats on failure rather than raising.
     """
+    # Imported here, not at module scope: the backfill migration imports this
+    # module's pure functions under the deploy workflow's minimal dependency
+    # set, which has no pydantic (broke the prod deploy on 2026-07-21).
+    from app.schemas import ThreadStats
+
     try:
         result = await db.execute(
             select(
