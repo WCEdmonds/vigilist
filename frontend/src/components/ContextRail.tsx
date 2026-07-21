@@ -263,7 +263,7 @@ export default function ContextRail({
         </>
       )}
 
-      <ChatPanel chat={chat} placeholder={placeholder} autoFocusToken={autoFocusToken} />
+      <ChatPanel chat={chat} placeholder={placeholder} autoFocusToken={autoFocusToken} onOpenDocument={onViewDocument} />
     </aside>
   );
 }
