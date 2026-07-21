@@ -100,8 +100,29 @@ def _sanitize_label(raw: str) -> str:
     return label
 
 
-async def _generate_cluster_label(doc_texts: list[str]) -> str:
-    """Use Claude to generate a 2-4 word topic label from representative texts."""
+def _spread_sample(ordered: list, k: int) -> list:
+    """Pick up to k items evenly spread across an ordered list (first and
+    last always included). Labeling from a spread, not just the centroid,
+    keeps the label honest about the whole cluster's breadth."""
+    n = len(ordered)
+    if n <= k:
+        return list(ordered)
+    if k == 1:
+        return [ordered[0]]
+    idx = sorted({round(i * (n - 1) / (k - 1)) for i in range(k)})
+    return [ordered[i] for i in idx]
+
+
+_LABEL_SAMPLE_SIZE = 8
+
+
+async def _generate_cluster_label(doc_lines: list[str]) -> str:
+    """Use Claude to generate a 2-4 word topic label covering all sampled docs.
+
+    `doc_lines` are per-document "Title — snippet" strings sampled from
+    across the cluster (centroid to edge), so the model labels the common
+    denominator rather than the flavor of the centroid documents.
+    """
     from app.config import settings
     if not settings.anthropic_api_key:
         return "Unlabeled"
@@ -109,7 +130,7 @@ async def _generate_cluster_label(doc_texts: list[str]) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    excerpts = "\n---\n".join(text[:500] for text in doc_texts[:3])
+    excerpts = "\n---\n".join(doc_lines[:_LABEL_SAMPLE_SIZE])
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -119,10 +140,14 @@ async def _generate_cluster_label(doc_texts: list[str]) -> str:
                 # Labels render as compact chips in the document list — long
                 # ones truncate, so brevity is a display constraint.
                 "content": (
-                    "Generate a topic label of 2-4 short words (under 30 characters) "
-                    "for these related legal documents. If the text is illegible or "
-                    "too fragmentary to characterize, respond with exactly: Unlabeled. "
-                    f"Respond with ONLY the label, no quotes.\n\n{excerpts}"
+                    "These documents were sampled from across ONE cluster of "
+                    "related legal documents. Generate a topic label of 2-4 "
+                    "short words (under 30 characters) describing what ALL of "
+                    "them have in common — prefer the general category over "
+                    "the specifics of any single document. If they share no "
+                    "discernible topic, or the text is illegible, respond "
+                    "with exactly: Unlabeled. Respond with ONLY the label, "
+                    f"no quotes.\n\n{excerpts}"
                 ),
             }],
         )
@@ -182,15 +207,18 @@ async def cluster_production(
 
     labels = _kmeans(X, num_clusters)
 
-    # Get doc texts for labeling
-    doc_texts = {}
+    # Titles + text snippets for labeling. Titles (AI-generated at ingest)
+    # are a much cleaner topic signal than raw leading characters,
+    # especially for OCR-heavy tabular documents.
+    doc_texts: dict[str, str] = {}
+    doc_titles: dict[str, str] = {}
     result = await db.execute(
-        select(Document.id, Document.text_content)
+        select(Document.id, Document.title, Document.text_content)
         .where(Document.production_id == production_id)
-        .where(Document.text_content.isnot(None))
     )
-    for doc_id, text in result.all():
+    for doc_id, title, text in result.all():
         doc_texts[str(doc_id)] = text or ""
+        doc_titles[str(doc_id)] = title or ""
 
     # Create clusters with labels
     clusters_info = []
@@ -199,15 +227,22 @@ async def cluster_production(
         if not member_ids:
             continue
 
-        # Get representative texts (closest to centroid)
+        # Sample documents across the whole cluster, centroid to edge, so
+        # the label reflects the common denominator rather than whatever
+        # flavor happens to sit at the center.
         mask = labels == k
         centroid = X[mask].mean(axis=0)
         dists = np.linalg.norm(X[mask] - centroid, axis=1)
         sorted_idx = np.argsort(dists)
-        rep_ids = [member_ids[i] for i in sorted_idx[:3]]
-        rep_texts = [doc_texts.get(d, "")[:500] for d in rep_ids]
+        ordered_ids = [member_ids[i] for i in sorted_idx]
+        rep_ids = _spread_sample(ordered_ids, _LABEL_SAMPLE_SIZE)
+        rep_lines = []
+        for d in rep_ids:
+            title = doc_titles.get(d, "")
+            snippet = doc_texts.get(d, "")[:200].replace("\n", " ").strip()
+            rep_lines.append(f"{title} — {snippet}" if title else snippet)
 
-        label = await _generate_cluster_label(rep_texts)
+        label = await _generate_cluster_label(rep_lines)
 
         cluster = DocumentCluster(
             production_id=production_id,
