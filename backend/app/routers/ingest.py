@@ -6,11 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.models import Document, IngestJob, Production, User
 from app.routers.auth import get_current_user
-from app.schemas import IngestJobOut
+from app.schemas import AnalyzeResponse, IngestJobOut
 from app.services.oidc import verify_cloud_tasks_request
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,36 @@ async def create_production_for_ingest(
     return {"production_id": production.id, "production_name": production.name}
 
 
+@router.post("/ingest/analyze", response_model=AnalyzeResponse)
+async def analyze_ingest(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Parse the uploaded load file and return a proposed column mapping.
+
+    Downloads the production's DAT file from Firebase Storage, detects encoding
+    and delimiter, parses headers + sample rows, and runs alias + AI mapping.
+    Returns format metadata, proposed column mappings, and sample rows so the
+    frontend can render a field-mapping UI before starting ingest.
+    """
+    from app.services.ingest import analyze_load_file
+
+    production_id = body.get("production_id")
+    if not production_id:
+        raise HTTPException(status_code=400, detail="production_id is required")
+    production = await db.get(Production, production_id)
+    if not production:
+        raise HTTPException(status_code=404, detail="Production not found")
+    if production.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        return await run_in_threadpool(analyze_load_file, int(production_id))
+    except Exception as e:
+        logger.exception("Analyze failed for production %s", production_id)
+        raise HTTPException(status_code=400, detail=f"Could not analyze load file: {e}")
+
+
 @router.post("/ingest/process", response_model=IngestJobOut)
 async def start_processing(
     body: dict,
@@ -101,7 +132,10 @@ async def start_processing(
         raise HTTPException(status_code=403, detail="Access denied")
 
     source_format = body.get("source_format", "relativity")
-    batch_size = 10 if source_format == "generic_pdf" else INGEST_BATCH_SIZE
+    field_mapping = body.get("field_mapping") or {}
+    if source_format == "native":
+        field_mapping = {"custodian": (body.get("custodian") or "").strip() or None}
+    batch_size = 10 if source_format in ("generic_pdf", "native") else INGEST_BATCH_SIZE
 
     if task_service.is_configured():
         # Count source items to set an accurate total_files, then enqueue tasks
@@ -109,6 +143,9 @@ async def start_processing(
             if source_format == "generic_pdf":
                 from app.services.ingest_pdf import list_pdf_sources
                 total_files = len(list_pdf_sources(production.id))
+            elif source_format == "native":
+                from app.services.ingest_native import list_native_sources
+                total_files = len(list_native_sources(production.id))
             else:
                 records, _ = bootstrap_ingest_source(production.id)
                 total_files = len(records)
@@ -125,6 +162,7 @@ async def start_processing(
             status="processing",
             source_format=source_format,
             total_files=total_files,
+            field_mapping=field_mapping,
         )
         db.add(job)
         await db.commit()
@@ -172,6 +210,7 @@ async def start_processing(
         status="processing",
         source_format=source_format,
         total_files=total_files,
+        field_mapping=field_mapping,
     )
     db.add(job)
     await db.commit()

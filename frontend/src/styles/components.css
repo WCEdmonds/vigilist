@@ -957,6 +957,24 @@ mark {
   margin-top: var(--space-6);
 }
 
+/* Tool-call activity lines shown while the agent searches/reads documents. */
+.ai-agent-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--space-2);
+}
+.ai-agent-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  font-style: italic;
+}
+.ai-agent-activity-row.is-error { color: var(--color-danger-600); }
+.ai-agent-activity-icon { font-style: normal; }
+
 .chat-composer {
   display: flex;
   align-items: flex-end;
