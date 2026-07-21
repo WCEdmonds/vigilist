@@ -9,9 +9,20 @@ same inclusive set regardless of input ordering.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Document
+from app.schemas import ThreadStats
+
+logger = logging.getLogger(__name__)
+
+_UPDATE_BATCH = 500
 
 _PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw)\s*:\s*", re.IGNORECASE)
 _EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
@@ -182,3 +193,60 @@ def compute_thread_assignments(
                 thread_id=tid, is_inclusive=mm.doc_id in inclusive_ids
             )
     return result
+
+
+async def derive_threads(db: "AsyncSession", production_id: int) -> ThreadStats:
+    """Derive thread_id + is_inclusive for a production's parsed email Documents.
+
+    Scoped to file_type == 'email' (SP4b-1 parent messages) so it never
+    overwrites SP3 load-file thread_id on other document types. Idempotent and
+    best-effort — logs and returns zeroed stats on failure rather than raising.
+    """
+    try:
+        result = await db.execute(
+            select(
+                Document.id, Document.message_id, Document.in_reply_to,
+                Document.email_references, Document.email_subject, Document.date_sent,
+            ).where(
+                Document.production_id == production_id,
+                Document.file_type == "email",
+            )
+        )
+        rows = result.all()
+        if not rows:
+            return ThreadStats(threads=0, inclusive=0, messages=0)
+
+        messages = [
+            ThreadMsg(
+                doc_id=str(r[0]),
+                message_id=r[1] or "",
+                in_reply_to=r[2] or "",
+                references=r[3] or "",
+                subject=r[4] or "",
+                date_sent=r[5],
+            )
+            for r in rows
+        ]
+        id_by_str = {str(r[0]): r[0] for r in rows}
+        assignments = compute_thread_assignments(messages, production_id)
+
+        pending = 0
+        for doc_id_str, a in assignments.items():
+            await db.execute(
+                text("UPDATE documents SET thread_id = :tid, is_inclusive = :inc WHERE id = :id"),
+                {"tid": a.thread_id, "inc": a.is_inclusive, "id": id_by_str[doc_id_str]},
+            )
+            pending += 1
+            if pending >= _UPDATE_BATCH:
+                await db.commit()
+                pending = 0
+        await db.commit()
+
+        return ThreadStats(
+            threads=len({a.thread_id for a in assignments.values()}),
+            inclusive=sum(1 for a in assignments.values() if a.is_inclusive),
+            messages=len(messages),
+        )
+    except Exception:
+        logger.exception("derive_threads failed for production %s", production_id)
+        return ThreadStats(threads=0, inclusive=0, messages=0)

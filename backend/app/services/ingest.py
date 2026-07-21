@@ -497,6 +497,14 @@ async def _finalize_job_if_done(
         except Exception:
             logger.exception("Embedding generation failed")
 
+        # SP4b-2: derive email threads/inclusive for this production (best-effort;
+        # a threading failure must never fail or un-complete the ingest job).
+        try:
+            from app.services.email_threading import derive_threads
+            await derive_threads(db, production_id)
+        except Exception:
+            logger.exception("thread derivation skipped for production %s", production_id)
+
 
 async def ingest_batch(
     db: AsyncSession,

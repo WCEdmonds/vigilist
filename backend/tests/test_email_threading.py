@@ -105,3 +105,42 @@ def test_subject_fallback_handles_naive_datetimes_without_raising():
     assert res["a"].thread_id == res["b"].thread_id
     assert res["b"].is_inclusive is True
     assert res["a"].is_inclusive is False
+
+
+def test_derive_threads_updates_docs_over_fake_session():
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.services.email_threading import derive_threads
+
+    # Two parsed emails: b replies to a → one thread, b inclusive.
+    rows = [
+        SimpleNamespace(id="a", message_id="<a>", in_reply_to=None,
+                        email_references=None, email_subject="Hi", date_sent=_dt(1)),
+        SimpleNamespace(id="b", message_id="<b>", in_reply_to="<a>",
+                        email_references=None, email_subject="Re: Hi", date_sent=_dt(2)),
+    ]
+    updates: list[dict] = []
+
+    class FakeResult:
+        def all(self_inner):
+            return [(r.id, r.message_id, r.in_reply_to, r.email_references,
+                     r.email_subject, r.date_sent) for r in rows]
+
+    class FakeSession:
+        async def execute(self_inner, stmt, params=None):
+            if params is not None:            # the UPDATE calls carry params
+                updates.append(params)
+                return None
+            return FakeResult()               # the SELECT call
+        async def commit(self_inner):
+            return None
+
+    stats = asyncio.run(derive_threads(FakeSession(), production_id=1))
+    assert stats.messages == 2
+    assert stats.threads == 1
+    assert stats.inclusive == 1
+    by_id = {u["id"]: u for u in updates}
+    assert by_id["b"]["inc"] is True
+    assert by_id["a"]["inc"] is False
+    assert by_id["a"]["tid"] == by_id["b"]["tid"]
