@@ -10,11 +10,25 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 _PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw)\s*:\s*", re.IGNORECASE)
 _EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
+
+
+def _safe_dt(dt: datetime | None) -> datetime:
+    """Coerce a date to a comparable UTC-aware value (None → epoch, naive → UTC).
+
+    Guards the latest-by-date fallback against a TypeError when a naive datetime
+    is compared against the tz-aware epoch (Document.date_sent is tz-aware, but
+    this keeps the pure engine robust for any caller / the backfill migration).
+    """
+    if dt is None:
+        return _EPOCH
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def normalize_subject(subject: str) -> str:
@@ -159,7 +173,7 @@ def compute_thread_assignments(
             # No reply links at all → only the latest by date_sent (tie: smallest doc_id).
             latest = None
             for mm in sorted(members, key=lambda x: x.doc_id):
-                if latest is None or (mm.date_sent or _EPOCH) > (latest.date_sent or _EPOCH):
+                if latest is None or _safe_dt(mm.date_sent) > _safe_dt(latest.date_sent):
                     latest = mm
             inclusive_ids = {latest.doc_id}
 

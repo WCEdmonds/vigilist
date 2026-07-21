@@ -90,3 +90,18 @@ def test_same_message_id_different_production_yields_different_thread_id():
     p1 = compute_thread_assignments(msgs, production_id=1)["a"].thread_id
     p2 = compute_thread_assignments(msgs, production_id=2)["a"].thread_id
     assert p1 != p2
+
+
+def test_subject_fallback_handles_naive_datetimes_without_raising():
+    # A tz-naive date_sent must not raise when compared against the tz-aware
+    # epoch in the latest-by-date fallback; the later (naive) message wins.
+    naive_early = datetime(2026, 7, 1, 12, 0, 0)
+    naive_late = datetime(2026, 7, 9, 12, 0, 0)
+    msgs = [
+        ThreadMsg("a", subject="Budget", date_sent=naive_early),
+        ThreadMsg("b", subject="Re: Budget", date_sent=naive_late),
+    ]
+    res = compute_thread_assignments(msgs, production_id=1)
+    assert res["a"].thread_id == res["b"].thread_id
+    assert res["b"].is_inclusive is True
+    assert res["a"].is_inclusive is False
