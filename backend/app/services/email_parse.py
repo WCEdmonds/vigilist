@@ -40,6 +40,9 @@ class ParsedMessage:
     date_sent: str | None = None
     body_text: str = ""
     attachments: list[tuple[str, bytes]] = field(default_factory=list)
+    message_id: str = ""
+    in_reply_to: str = ""
+    references: str = ""
 
 
 def _ext(filename: str) -> str:
@@ -99,6 +102,9 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
         date_sent=_header(msg, "Date") or None,
         body_text=body_text,
         attachments=attachments,
+        message_id=_header(msg, "Message-ID"),
+        in_reply_to=_header(msg, "In-Reply-To"),
+        references=" ".join(_header(msg, "References").split()),
     )
 
 
@@ -138,6 +144,10 @@ def _parse_msg_bytes(data: bytes) -> ParsedMessage:
                 blob = att.data
                 if isinstance(blob, bytes):
                     attachments.append((name, blob))
+            message_id = getattr(msg, "messageId", "") or ""
+            hdr = getattr(msg, "header", None)
+            in_reply_to = (hdr.get("In-Reply-To") if hdr is not None else "") or ""
+            references = (hdr.get("References") if hdr is not None else "") or ""
             return ParsedMessage(
                 from_=(msg.sender or "").strip(),
                 to=(msg.to or "").strip(),
@@ -147,6 +157,9 @@ def _parse_msg_bytes(data: bytes) -> ParsedMessage:
                 date_sent=(str(msg.date) if msg.date else None),
                 body_text=(msg.body or "").strip(),
                 attachments=attachments,
+                message_id=message_id.strip(),
+                in_reply_to=in_reply_to.strip(),
+                references=" ".join(references.split()),
             )
         finally:
             msg.close()
