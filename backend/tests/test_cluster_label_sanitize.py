@@ -25,3 +25,15 @@ def test_sentence_shaped_output_falls_back():
 
 def test_explicit_unlabeled_stays():
     assert _sanitize_label("Unlabeled") == "Unlabeled"
+
+
+def test_spread_sample_covers_breadth():
+    from app.services.clustering import _spread_sample
+
+    # Fewer items than k: everything is included.
+    assert _spread_sample([1, 2, 3], 8) == [1, 2, 3]
+    # More items than k: first and last always included, evenly spread.
+    sample = _spread_sample(list(range(100)), 8)
+    assert len(sample) == 8
+    assert sample[0] == 0 and sample[-1] == 99
+    assert sample == sorted(sample)
