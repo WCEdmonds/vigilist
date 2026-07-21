@@ -10,6 +10,8 @@ interface Props {
   autoFocusToken: number;
   /** Opens a document cited by the AI ([BATES](doc:…) links in replies). */
   onOpenDocument?: (id: string) => void;
+  /** Scopes Bates-citation lookups to the current production. */
+  productionId?: number;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -20,7 +22,7 @@ const SAMPLE_QUESTIONS = [
   'Which documents most need attorney attention, and why?',
 ];
 
-export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDocument }: Props) {
+export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDocument, productionId }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -62,7 +64,7 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDoc
       if (UUID_RE.test(target)) {
         onOpenDocument(target);
       } else {
-        const found = await getByBates(target);
+        const found = await getByBates(target, productionId);
         onOpenDocument(found.id);
       }
     } catch {

@@ -424,7 +424,7 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
                 className="brief-notable-row"
                 onClick={async () => {
                   try {
-                    const found = await getByBates(nd.bates);
+                    const found = await getByBates(nd.bates, production.id);
                     onViewDocument(found.id);
                   } catch {
                     showToast(`Could not find ${nd.bates} in this production`, 'error');

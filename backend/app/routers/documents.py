@@ -308,19 +308,43 @@ async def get_by_bates(
     user: User = Depends(get_current_user),
 ):
     accessible = await get_accessible_production_ids(db, user)
-    query = (
-        select(Document)
-        .where(Document.bates_begin == bates)
-        .options(selectinload(Document.tags).selectinload(DocumentTag.tag))
+
+    def _scoped(q):
+        # Scope up front (rather than post-checking) so the same Bates
+        # existing in two accessible productions can't blow up
+        # scalar_one_or_none, and out-of-scope docs are never even matched.
+        if production_id:
+            return q.where(Document.production_id == production_id)
+        return q.where(Document.production_id.in_(accessible))
+
+    base = select(Document).options(
+        selectinload(Document.tags).selectinload(DocumentTag.tag)
     )
-    if production_id:
-        query = query.where(Document.production_id == production_id)
-    result = await db.execute(query)
-    doc = result.scalar_one_or_none()
+    result = await db.execute(
+        _scoped(base.where(Document.bates_begin == bates)).limit(1)
+    )
+    doc = result.scalars().first()
+
+    if not doc:
+        # AI-written references (brief, chat) often reformat Bates separators
+        # ("SCHLEGEL 000068" vs "SCHLEGEL-000068") — fall back to comparing
+        # with all non-alphanumerics stripped, case-insensitively.
+        normalized = "".join(c for c in bates if c.isalnum()).upper()
+        if normalized:
+            result = await db.execute(
+                _scoped(
+                    base.where(
+                        func.upper(
+                            func.regexp_replace(Document.bates_begin, "[^A-Za-z0-9]", "", "g")
+                        )
+                        == normalized
+                    )
+                ).limit(1)
+            )
+            doc = result.scalars().first()
+
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    if doc.production_id not in accessible:
-        raise HTTPException(status_code=403, detail="Access denied")
     return await _doc_detail(doc, db)
 
 
