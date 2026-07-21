@@ -74,6 +74,32 @@ def _kmeans(X: np.ndarray, k: int, max_iter: int = 30) -> np.ndarray:
     return labels
 
 
+def _sanitize_label(raw: str) -> str:
+    """Keep only responses that look like actual labels.
+
+    On OCR-poor documents the model sometimes replies with an apology
+    sentence ("I cannot reliably extract legible document titles…") instead
+    of a label; stored verbatim, that sentence rendered inside theme chips
+    in prod. Anything sentence-shaped falls back to "Unlabeled" — the UI
+    then shows its generic "Cluster N" name.
+    """
+    label = raw.strip().strip('"').strip()
+    refusal_markers = (
+        "i cannot", "i can't", "i am unable", "i'm unable", "unable to",
+        "sorry", "illegible", "not legible", "no legible", "cannot determine",
+    )
+    lowered = label.lower()
+    if (
+        not label
+        or len(label) > 40
+        or len(label.split()) > 6
+        or label.endswith(".")
+        or any(m in lowered for m in refusal_markers)
+    ):
+        return "Unlabeled"
+    return label
+
+
 async def _generate_cluster_label(doc_texts: list[str]) -> str:
     """Use Claude to generate a 2-4 word topic label from representative texts."""
     from app.config import settings
@@ -92,10 +118,15 @@ async def _generate_cluster_label(doc_texts: list[str]) -> str:
                 "role": "user",
                 # Labels render as compact chips in the document list — long
                 # ones truncate, so brevity is a display constraint.
-                "content": f"Generate a topic label of 2-4 short words (under 30 characters) for these related legal documents. Respond with ONLY the label, no quotes.\n\n{excerpts}",
+                "content": (
+                    "Generate a topic label of 2-4 short words (under 30 characters) "
+                    "for these related legal documents. If the text is illegible or "
+                    "too fragmentary to characterize, respond with exactly: Unlabeled. "
+                    f"Respond with ONLY the label, no quotes.\n\n{excerpts}"
+                ),
             }],
         )
-        return response.content[0].text.strip()[:60]
+        return _sanitize_label(response.content[0].text)
     except Exception as e:
         logger.warning("Cluster labeling failed: %s", e)
         return "Unlabeled"
@@ -181,7 +212,9 @@ async def cluster_production(
         cluster = DocumentCluster(
             production_id=production_id,
             cluster_index=k,
-            label=label,
+            # NULL rather than "Unlabeled": the UI falls back to "Cluster N",
+            # which stays distinguishable when several clusters lack labels.
+            label=None if label == "Unlabeled" else label,
             doc_count=len(member_ids),
         )
         db.add(cluster)
