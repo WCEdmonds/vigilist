@@ -363,6 +363,9 @@ export interface PipelineInfo {
   status: PipelineStatus | null;
   brief: ProductionBriefData | null;
   case_context: string | null;
+  /** Documents summarized so far / total — progress for the summaries stage. */
+  summarized_count?: number;
+  doc_count?: number;
 }
 
 export interface ClusterDocument {

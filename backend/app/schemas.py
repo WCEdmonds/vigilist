@@ -264,6 +264,11 @@ class PipelineStatusOut(BaseModel):
     status: dict | None = None
     brief: dict | None = None
     case_context: str | None = None
+    # Within-stage progress for the long-running summaries stage: documents
+    # summarized so far out of the production's total. Always present so the
+    # UI can show "Summaries · 275/550" while that stage runs.
+    summarized_count: int = 0
+    doc_count: int = 0
 
 
 class ProductionAccessOut(BaseModel):
