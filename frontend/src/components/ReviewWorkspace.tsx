@@ -30,6 +30,8 @@ export default function ReviewWorkspace({ production, onViewDocument, onBack }: 
         <div className="review-lane-ai">
           <AIReviewLane
             productionId={production.id}
+            docCount={production.document_count}
+            caseContext={production.case_context ?? null}
             onViewDocument={onViewDocument}
             onQueueCreated={() => setQueueRefreshKey(k => k + 1)}
           />
