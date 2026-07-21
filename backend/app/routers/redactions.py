@@ -92,11 +92,13 @@ async def _load_redaction_for_write(db: AsyncSession, user: User, redaction_id: 
     if not red:
         raise HTTPException(status_code=404, detail="Redaction not found")
     doc = await db.get(Document, red.document_id)
-    if doc and doc.production_id not in accessible:
+    if not doc:
+        # Orphaned redaction (parent gone) — shouldn't happen under the FK
+        # CASCADE, but 404 is the correct semantics if it ever does.
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
     if red.created_by != user.id:
-        if not doc:
-            raise HTTPException(status_code=403, detail="Access denied")
         role = await get_user_role_for_production(db, user, doc.production_id)
         if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
             raise HTTPException(status_code=403, detail="Only the creator or a manager can modify this redaction")
@@ -117,8 +119,7 @@ async def update_redaction(
     w = body.w_pct if body.w_pct is not None else red.w_pct
     h = body.h_pct if body.h_pct is not None else red.h_pct
     reason = body.reason_code if body.reason_code is not None else red.reason_code
-    page_count = doc.page_count if doc else red.page_num
-    _validate_or_422(red.page_num, x, y, w, h, page_count, reason)
+    _validate_or_422(red.page_num, x, y, w, h, doc.page_count, reason)
 
     red.x_pct, red.y_pct, red.w_pct, red.h_pct = x, y, w, h
     red.reason_code = reason
