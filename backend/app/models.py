@@ -386,6 +386,27 @@ class Annotation(Base):
     document = relationship("Document", back_populates="annotations")
 
 
+class Redaction(Base):
+    __tablename__ = "redactions"
+    __table_args__ = (
+        Index("ix_redactions_document_id", "document_id"),
+        Index("ix_redactions_doc_page", "document_id", "page_num"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    page_num = Column(Integer, nullable=False)
+    x_pct = Column(Float, nullable=False)
+    y_pct = Column(Float, nullable=False)
+    w_pct = Column(Float, nullable=False)
+    h_pct = Column(Float, nullable=False)
+    reason_code = Column(String(40), nullable=False)
+    note = Column(Text, nullable=True)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, onupdate=func.now(), nullable=True)
+
+
 class DuplicateGroup(Base):
     __tablename__ = "duplicate_groups"
 
