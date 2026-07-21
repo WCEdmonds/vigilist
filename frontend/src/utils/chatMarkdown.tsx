@@ -6,7 +6,10 @@ import type { ReactNode } from 'react';
  * transcript. This covers that subset deterministically with React elements
  * (no HTML injection). Anything unrecognized falls through as plain text. */
 
-const INLINE_PATTERN = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+const INLINE_PATTERN = /(\[[^\]]+\]\(doc:[^)]+\)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+
+const DOC_LINK = /^\[([^\]]+)\]\(doc:([^)]+)\)$/;
+const ANY_LINK = /^\[([^\]]+)\]\([^)]+\)$/;
 
 function renderInline(text: string, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -17,7 +20,21 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
     if (idx > last) out.push(text.slice(last, idx));
     const token = match[0];
     const key = `${keyBase}-i${i++}`;
-    if (token.startsWith('**')) {
+    const docLink = DOC_LINK.exec(token);
+    const anyLink = docLink ? null : ANY_LINK.exec(token);
+    if (docLink) {
+      // The chat model cites documents as [BATES](doc:BATES). Rendered as a
+      // button; ChatPanel opens the document via click delegation.
+      out.push(
+        <button key={key} type="button" className="chat-doc-link" data-doc-target={docLink[2].trim()}>
+          {docLink[1]}
+        </button>,
+      );
+    } else if (anyLink) {
+      // Non-doc links: show the label, drop the URL (chat never needs to
+      // send users off-app).
+      out.push(anyLink[1]);
+    } else if (token.startsWith('**')) {
       out.push(<strong key={key}>{token.slice(2, -2)}</strong>);
     } else if (token.startsWith('`')) {
       out.push(<code key={key}>{token.slice(1, -1)}</code>);
