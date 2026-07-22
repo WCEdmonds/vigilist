@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import Annotation, Document, DocumentTag, Note, User
+from app.models import Annotation, Document, DocumentTag, Note, Redaction, User
 from app.models_review import ReviewProject, AIReviewResult
 
 # Pin colors used by both the viewer overlay and the burned-in PDF pins.
@@ -24,6 +24,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut, get_file_type
+from app.services.redaction_render import burn_page
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -398,6 +399,7 @@ async def get_image(
     doc_id: UUID,
     page_num: int,
     w: int | None = Query(None, ge=50, le=2000, description="Resize width for thumbnails"),
+    redacted: bool = Query(False, description="Burn redactions into the returned image"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -413,19 +415,31 @@ async def get_image(
     if not raw_path:
         raise HTTPException(status_code=404, detail="Image file not found")
 
+    rects = []
+    if redacted:
+        result = await db.execute(
+            select(Redaction).where(
+                Redaction.document_id == doc_id, Redaction.page_num == page_num
+            )
+        )
+        rects = list(result.scalars().all())
+
     if raw_path.startswith("productions/"):
         from app.services.storage import get_download_bytes
         try:
             data = get_download_bytes(raw_path)
         except Exception:
             raise HTTPException(status_code=404, detail="Image file not found in storage")
-        if w:
+        if w or rects:
             import io
             from PIL import Image as PILImage
             img = PILImage.open(io.BytesIO(data))
-            ratio = w / img.width
-            new_h = int(img.height * ratio)
-            img = img.resize((w, new_h), PILImage.LANCZOS)
+            if rects:
+                img = burn_page(img, rects)
+            if w:
+                ratio = w / img.width
+                new_h = int(img.height * ratio)
+                img = img.resize((w, new_h), PILImage.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=75)
             data = buf.getvalue()
@@ -434,6 +448,13 @@ async def get_image(
         path = Path(raw_path.replace("\\", "/")).resolve()
         if not path.exists():
             raise HTTPException(status_code=404, detail="Image file not found")
+        if rects:
+            import io
+            from PIL import Image as PILImage
+            img = burn_page(PILImage.open(str(path)), rects)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=90)
+            return Response(content=buf.getvalue(), media_type="image/jpeg")
         return FileResponse(str(path), media_type="image/jpeg")
 
 
