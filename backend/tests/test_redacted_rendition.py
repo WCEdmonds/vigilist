@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from PIL import Image
 
@@ -87,6 +88,7 @@ class FakeSession:
         self._docs = docs or {}
         self.redactions = redactions or []
         self.annotations = annotations or []
+        self.executed = []
 
     async def get(self, model, key):
         if model.__name__ == "Document":
@@ -95,6 +97,7 @@ class FakeSession:
 
     async def execute(self, stmt):
         sql = str(stmt)
+        self.executed.append(sql)
         if "FROM redactions" in sql:
             if "count(" in sql:
                 return FakeResult(scalar=len(self.redactions))
@@ -157,13 +160,45 @@ def test_image_redacted_no_redactions_falls_back_to_normal(monkeypatch, tmp_path
     assert isinstance(out, FileResponse)
 
 
-def test_image_redacted_only_burns_matching_page(monkeypatch, tmp_path):
+def test_image_redacted_query_filters_by_page(monkeypatch, tmp_path):
     _patch_access(monkeypatch)
     doc_id = uuid4()
     doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
-    # redaction is on page 2; we request page 1 -> FakeSession returns rows
-    # filtered by the endpoint's WHERE, which we emulate by giving no rows
-    db = FakeSession(docs={doc_id: doc}, redactions=[])
-    out = asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=True,
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction(page_num=2)])
+    asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=True,
+                             db=db, user=FakeUser()))
+    red_sql = [s for s in db.executed if "FROM redactions" in s]
+    assert red_sql and "page_num" in red_sql[0]
+
+
+def test_image_redacted_storage_path_burns_before_resize(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    import app.services.storage as storage
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 400), "white").save(buf, "JPEG", quality=95)
+    monkeypatch.setattr(storage, "get_download_bytes", lambda p: buf.getvalue())
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["productions/pages/p1.jpg"])
+    db = FakeSession(docs={doc_id: doc},
+                     redactions=[FakeRedaction(x_pct=10, y_pct=10, w_pct=40, h_pct=30)])
+    out = asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=200, redacted=True,
                                    db=db, user=FakeUser()))
-    assert isinstance(out, FileResponse)
+    img = Image.open(io.BytesIO(out.body))
+    assert img.width == 200                      # resize applied after burn
+    r, g, b = img.getpixel((60, 50))             # box center scales with resize
+    assert r < 40 and g < 40 and b < 40
+    r, g, b = img.getpixel((190, 190))
+    assert r > 200 and g > 200 and b > 200
+
+
+def test_image_redacted_unreadable_local_file_404(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    p = tmp_path / "bad.jpg"
+    p.write_bytes(b"not a jpeg")
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [str(p)])
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=True,
+                                 db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
