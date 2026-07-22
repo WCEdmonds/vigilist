@@ -89,3 +89,9 @@ def test_out_of_range_rect_is_clamped_not_crashing():
     out = burn_page(img, [Rect(110, 10, 20, 20)])  # starts past the right edge
     assert out.size == (100, 100)
     assert out.getpixel((50, 50)) == (255, 255, 255)
+
+
+def test_reason_labels_cover_all_reason_codes():
+    from app.services.redaction import REDACTION_REASON_CODES
+    from app.services.redaction_render import REASON_LABELS
+    assert set(REASON_LABELS) == set(REDACTION_REASON_CODES)
