@@ -215,6 +215,9 @@ async def redaction_qc_queue(
             func.count(Redaction.id).label("cnt"),
             func.max(func.coalesce(Redaction.updated_at, Redaction.created_at)).label("changed"),
         )
+        # INNER JOIN by design: the QC queue lists only documents that
+        # currently have redactions — a doc with none has nothing to QC.
+        # (not_applicable status surfaces via the privilege log instead.)
         .join(Redaction, Redaction.document_id == Document.id)
         .where(Document.production_id == production_id)
         .group_by(Document.id, Document.bates_begin)
