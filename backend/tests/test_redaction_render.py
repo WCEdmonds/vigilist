@@ -75,4 +75,4 @@ def test_empty_rects_returns_equal_image():
     img = _white(200, 100)
     out = burn_page(img, [])
     assert out is not img
-    assert list(out.getdata()) == list(img.getdata())
+    assert out.tobytes() == img.tobytes()
