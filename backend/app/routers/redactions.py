@@ -1,15 +1,23 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production, ROLE_RANK
-from app.models import Document, Redaction, User
+from app.models import Document, Redaction, RedactionQCDecision, User
 from app.routers.auth import get_current_user
-from app.schemas import RedactionCreate, RedactionOut, RedactionUpdate
+from app.schemas import (
+    RedactionCreate,
+    RedactionOut,
+    RedactionQCDecisionCreate,
+    RedactionQCDecisionOut,
+    RedactionQCQueueItem,
+    RedactionUpdate,
+)
 from app.services.audit import log_action
+from app.services.privilege import qc_status
 from app.services.redaction import is_valid_reason_code, validate_rect
 
 router = APIRouter(prefix="/api", tags=["redactions"])
@@ -150,3 +158,95 @@ async def delete_redaction(
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/documents/{doc_id}/redaction-qc", response_model=RedactionQCDecisionOut, status_code=201)
+async def decide_redaction_qc(
+    doc_id: UUID,
+    body: RedactionQCDecisionCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    doc = await _load_accessible_doc(db, user, doc_id)
+    role = await get_user_role_for_production(db, user, doc.production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
+    count = (await db.execute(
+        select(func.count(Redaction.id)).where(Redaction.document_id == doc_id)
+    )).scalar() or 0
+    if count == 0:
+        raise HTTPException(status_code=422, detail="Document has no redactions to QC")
+
+    dec = RedactionQCDecision(
+        document_id=doc_id,
+        decision=body.decision,
+        note=body.note,
+        redaction_count=count,
+        decided_by=user.id,
+    )
+    db.add(dec)
+    await db.flush()
+    await log_action(
+        db, user, "redaction_qc_decided", "redaction_qc", str(dec.id),
+        production_id=doc.production_id,
+        details={"document_id": str(doc_id), "decision": body.decision,
+                 "redaction_count": count},
+    )
+    await db.commit()
+    await db.refresh(dec)
+    return RedactionQCDecisionOut.model_validate(dec)
+
+
+@router.get("/productions/{production_id}/redaction-qc", response_model=list[RedactionQCQueueItem])
+async def redaction_qc_queue(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    agg = await db.execute(
+        select(
+            Document.id,
+            Document.bates_begin,
+            func.count(Redaction.id).label("cnt"),
+            func.max(func.coalesce(Redaction.updated_at, Redaction.created_at)).label("changed"),
+        )
+        # INNER JOIN by design: the QC queue lists only documents that
+        # currently have redactions — a doc with none has nothing to QC.
+        # (not_applicable status surfaces via the privilege log instead.)
+        .join(Redaction, Redaction.document_id == Document.id)
+        .where(Document.production_id == production_id)
+        .group_by(Document.id, Document.bates_begin)
+        .order_by(Document.bates_begin)
+    )
+    rows = agg.all()
+
+    latest: dict = {}
+    doc_ids = [r[0] for r in rows]
+    if doc_ids:
+        dec_result = await db.execute(
+            select(RedactionQCDecision)
+            .where(RedactionQCDecision.document_id.in_(doc_ids))
+            .order_by(RedactionQCDecision.document_id,
+                      RedactionQCDecision.decided_at.desc(),
+                      RedactionQCDecision.id.desc())
+        )
+        for d in dec_result.scalars().all():
+            latest.setdefault(d.document_id, d)
+
+    items = []
+    for did, bates, cnt, changed in rows:
+        d = latest.get(did)
+        status = qc_status(cnt, (d.decision, d.decided_at, d.redaction_count) if d else None, changed)
+        items.append(RedactionQCQueueItem(
+            document_id=did,
+            bates_begin=bates,
+            redaction_count=cnt,
+            qc_status=status,
+            latest_decision=RedactionQCDecisionOut.model_validate(d) if d else None,
+        ))
+    return items

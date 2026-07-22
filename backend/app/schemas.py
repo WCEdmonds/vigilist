@@ -54,6 +54,7 @@ class TagOut(BaseModel):
     category: str
     color: str
     keyboard_shortcut: str | None
+    is_privilege: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -63,6 +64,10 @@ class TagCreate(BaseModel):
     category: str
     color: str = "gray"
     keyboard_shortcut: str | None = None
+
+
+class TagPrivilegeUpdate(BaseModel):
+    is_privilege: bool
 
 
 class DocumentTagOut(BaseModel):
@@ -530,6 +535,36 @@ class RedactionOut(BaseModel):
     updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class RedactionQCDecisionCreate(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: str | None = None
+
+
+class RedactionQCDecisionOut(BaseModel):
+    id: int
+    document_id: UUID
+    decision: str
+    note: str | None
+    redaction_count: int
+    decided_by: str
+    decided_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PrivilegeOverrideUpdate(BaseModel):
+    disposition: str | None = None
+    description: str | None = None
+
+
+class RedactionQCQueueItem(BaseModel):
+    document_id: UUID
+    bates_begin: str
+    redaction_count: int
+    qc_status: str
+    latest_decision: RedactionQCDecisionOut | None = None
 
 
 # ── Intelligence ──
