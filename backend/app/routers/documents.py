@@ -1075,6 +1075,7 @@ async def stream_native(
 @router.get("/{doc_id}/text")
 async def get_text(
     doc_id: UUID,
+    redacted: bool = Query(False, description="Withhold extracted text if the document has redactions"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1084,6 +1085,16 @@ async def get_text(
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
+    if redacted:
+        # Flat text_content has no word coordinates, so region-level removal
+        # is impossible — the as-produced text for a redacted doc is withheld
+        # entirely (re-OCR of burned images is Phase 2).
+        count = (await db.execute(
+            select(func.count(Redaction.id)).where(Redaction.document_id == doc_id)
+        )).scalar() or 0
+        if count:
+            return {"text": "", "withheld": True}
+        return {"text": doc.text_content or "", "withheld": False}
     return {"text": doc.text_content or ""}
 
 
