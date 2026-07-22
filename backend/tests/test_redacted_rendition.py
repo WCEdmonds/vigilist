@@ -202,3 +202,56 @@ def test_image_redacted_unreadable_local_file_404(monkeypatch, tmp_path):
         asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=True,
                                  db=db, user=FakeUser()))
     assert exc.value.status_code == 404
+
+
+# --- pdf endpoint ---------------------------------------------------------
+
+def _pdf_page_count(pdf_bytes: bytes) -> int:
+    # Pillow writes one "/Type /Page" object per page plus one "/Type /Pages" tree.
+    return len(re.findall(rb"/Type /Page[^s]", pdf_bytes))
+
+
+def _first_embedded_jpeg(pdf_bytes: bytes) -> Image.Image:
+    start = pdf_bytes.index(b"\xff\xd8")
+    end = pdf_bytes.index(b"\xff\xd9", start) + 2
+    return Image.open(io.BytesIO(pdf_bytes[start:end]))
+
+
+def test_pdf_flag_off_keeps_annotation_index(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
+    db = FakeSession(docs={doc_id: doc}, annotations=[FakeAnnotation()],
+                     redactions=[FakeRedaction()])
+    out = asyncio.run(dd.get_document_pdf(doc_id=doc_id, redacted=False,
+                                          db=db, user=FakeUser()))
+    assert _pdf_page_count(out.body) == 2  # 1 page + 1 annotation index page
+
+
+def test_pdf_redacted_drops_pins_and_index(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
+    db = FakeSession(docs={doc_id: doc}, annotations=[FakeAnnotation()],
+                     redactions=[FakeRedaction(x_pct=10, y_pct=10, w_pct=40, h_pct=30)])
+    out = asyncio.run(dd.get_document_pdf(doc_id=doc_id, redacted=True,
+                                          db=db, user=FakeUser()))
+    assert _pdf_page_count(out.body) == 1  # no index page
+    page = _first_embedded_jpeg(out.body)
+    r, g, b = page.getpixel((int(page.width * 0.3), int(page.height * 0.25)))
+    assert r < 40 and g < 40 and b < 40  # burned box
+    r, g, b = page.getpixel((int(page.width * 0.95), int(page.height * 0.95)))
+    assert r > 200 and g > 200 and b > 200
+
+
+def test_pdf_redacted_no_redactions_is_clean_document(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
+    db = FakeSession(docs={doc_id: doc}, annotations=[FakeAnnotation()], redactions=[])
+    out = asyncio.run(dd.get_document_pdf(doc_id=doc_id, redacted=True,
+                                          db=db, user=FakeUser()))
+    assert _pdf_page_count(out.body) == 1  # still as-produced: no annotations
+    page = _first_embedded_jpeg(out.body)
+    r, g, b = page.getpixel((int(page.width * 0.3), int(page.height * 0.25)))
+    assert r > 200 and g > 200 and b > 200  # nothing burned
