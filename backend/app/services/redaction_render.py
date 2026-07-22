@@ -49,16 +49,18 @@ def burn_page(img: Image.Image, rects: Sequence[RectLike]) -> Image.Image:
     stamped in white, centered, only when it fits inside the box.
     """
     out = img.copy()
-    if not rects:
-        return out
     if out.mode != "RGB":
         out = out.convert("RGB")
+    if not rects:
+        return out
     draw = ImageDraw.Draw(out)
     for r in rects:
-        x0 = r.x_pct / 100.0 * out.width
-        y0 = r.y_pct / 100.0 * out.height
-        x1 = min(out.width, (r.x_pct + r.w_pct) / 100.0 * out.width)
-        y1 = min(out.height, (r.y_pct + r.h_pct) / 100.0 * out.height)
+        x0 = min(out.width, max(0.0, r.x_pct / 100.0 * out.width))
+        y0 = min(out.height, max(0.0, r.y_pct / 100.0 * out.height))
+        x1 = min(out.width, max(x0, (r.x_pct + r.w_pct) / 100.0 * out.width))
+        y1 = min(out.height, max(y0, (r.y_pct + r.h_pct) / 100.0 * out.height))
+        if x1 <= x0 or y1 <= y0:
+            continue
         draw.rectangle((x0, y0, x1, y1), fill=(0, 0, 0))
 
         label = REASON_LABELS.get(r.reason_code, "REDACTED")
