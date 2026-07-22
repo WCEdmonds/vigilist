@@ -554,6 +554,11 @@ class RedactionQCDecisionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PrivilegeOverrideUpdate(BaseModel):
+    disposition: str | None = None
+    description: str | None = None
+
+
 class RedactionQCQueueItem(BaseModel):
     document_id: UUID
     bates_begin: str
