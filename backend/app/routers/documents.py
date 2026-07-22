@@ -1145,6 +1145,10 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         select(func.count(Annotation.id)).where(Annotation.document_id == doc.id)
     )).scalar() or 0
 
+    redaction_count = (await db.execute(
+        select(func.count(Redaction.id)).where(Redaction.document_id == doc.id)
+    )).scalar() or 0
+
     return DocumentDetail(
         id=doc.id,
         production_id=doc.production_id,
@@ -1161,4 +1165,5 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         tags=[DocumentTagOut(id=dt.id, tag=TagOut.model_validate(dt.tag), applied_by=dt.applied_by, applied_at=dt.applied_at) for dt in doc.tags],
         note_count=note_count,
         annotation_count=annotation_count,
+        redaction_count=redaction_count,
     )
