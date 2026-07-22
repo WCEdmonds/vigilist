@@ -76,3 +76,16 @@ def test_empty_rects_returns_equal_image():
     out = burn_page(img, [])
     assert out is not img
     assert out.tobytes() == img.tobytes()
+
+
+def test_non_rgb_input_returns_rgb_even_with_no_rects():
+    img = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    out = burn_page(img, [])
+    assert out.mode == "RGB"
+
+
+def test_out_of_range_rect_is_clamped_not_crashing():
+    img = _white(100, 100)
+    out = burn_page(img, [Rect(110, 10, 20, 20)])  # starts past the right edge
+    assert out.size == (100, 100)
+    assert out.getpixel((50, 50)) == (255, 255, 255)
