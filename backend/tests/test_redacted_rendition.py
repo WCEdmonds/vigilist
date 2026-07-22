@@ -255,3 +255,32 @@ def test_pdf_redacted_no_redactions_is_clean_document(monkeypatch, tmp_path):
     page = _first_embedded_jpeg(out.body)
     r, g, b = page.getpixel((int(page.width * 0.3), int(page.height * 0.25)))
     assert r > 200 and g > 200 and b > 200  # nothing burned
+
+
+# --- text endpoint --------------------------------------------------------
+
+def test_text_flag_off_unchanged(monkeypatch):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["p1.jpg"], text_content="secret words")
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+    out = asyncio.run(dd.get_text(doc_id=doc_id, redacted=False, db=db, user=FakeUser()))
+    assert out == {"text": "secret words"}
+
+
+def test_text_redacted_withholds_when_redactions_exist(monkeypatch):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["p1.jpg"], text_content="secret words")
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+    out = asyncio.run(dd.get_text(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
+    assert out == {"text": "", "withheld": True}
+
+
+def test_text_redacted_passes_through_without_redactions(monkeypatch):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["p1.jpg"], text_content="secret words")
+    db = FakeSession(docs={doc_id: doc}, redactions=[])
+    out = asyncio.run(dd.get_text(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
+    assert out == {"text": "secret words", "withheld": False}
