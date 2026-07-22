@@ -537,6 +537,31 @@ class RedactionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RedactionQCDecisionCreate(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: str | None = None
+
+
+class RedactionQCDecisionOut(BaseModel):
+    id: int
+    document_id: UUID
+    decision: str
+    note: str | None
+    redaction_count: int
+    decided_by: str
+    decided_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RedactionQCQueueItem(BaseModel):
+    document_id: UUID
+    bates_begin: str
+    redaction_count: int
+    qc_status: str
+    latest_decision: RedactionQCDecisionOut | None = None
+
+
 # ── Intelligence ──
 
 class DuplicateEntryOut(BaseModel):
