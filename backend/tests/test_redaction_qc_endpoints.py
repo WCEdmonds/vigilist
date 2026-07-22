@@ -132,3 +132,38 @@ def test_qc_queue_403_outside_accessible_productions(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(rr.redaction_qc_queue(production_id=1, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+def test_qc_queue_query_contracts(monkeypatch):
+    """Pin the SQL contracts fakes can't execute: inner join (queue lists only
+    redacted docs) and latest-decision ordering (decided_at desc, id desc)."""
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(responders=[
+        ("JOIN redactions", FakeResult(rows=[(d1, "DOC-001", 1, TS)])),
+        ("FROM redaction_qc_decisions", FakeResult(items=[])),
+    ])
+    asyncio.run(rr.redaction_qc_queue(production_id=1, db=db, user=FakeUser()))
+    agg_sql = next(s for s in db.executed if "JOIN redactions" in s)
+    assert "LEFT OUTER JOIN" not in agg_sql
+    dec_sql = next(s for s in db.executed if "FROM redaction_qc_decisions" in s)
+    assert "decided_at DESC" in dec_sql
+    assert "id DESC" in dec_sql
+
+
+def test_qc_queue_latest_decision_wins(monkeypatch):
+    """Two decisions on one doc: the endpoint takes the first row of the
+    DB-sorted stream (decided_at desc, id desc) as the latest."""
+    _patch(monkeypatch)
+    d1 = uuid4()
+    later_rejected = FakeDecision(d1, "rejected", TS + timedelta(hours=3), 1, dec_id=9)
+    earlier_approved = FakeDecision(d1, "approved", TS + timedelta(hours=1), 1, dec_id=4)
+    db = FakeSession(responders=[
+        ("JOIN redactions", FakeResult(rows=[(d1, "DOC-001", 1, TS)])),
+        # DB returns rows already sorted desc: latest first
+        ("FROM redaction_qc_decisions", FakeResult(items=[later_rejected, earlier_approved])),
+    ])
+    out = asyncio.run(rr.redaction_qc_queue(production_id=1, db=db, user=FakeUser()))
+    assert out[0].qc_status == "rejected"
+    assert out[0].latest_decision.decision == "rejected"
+    assert out[0].latest_decision.id == 9
