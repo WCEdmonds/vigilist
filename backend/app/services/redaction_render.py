@@ -63,11 +63,17 @@ def burn_page(img: Image.Image, rects: Sequence[RectLike]) -> Image.Image:
 
         label = REASON_LABELS.get(r.reason_code, "REDACTED")
         box_w, box_h = x1 - x0, y1 - y0
-        font = _load_font(max(12, int(box_h * 0.35)))
+        size = max(12, int(box_h * 0.35))
+        font = _load_font(size)
         bbox = draw.textbbox((0, 0), label, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        if tw <= box_w * 1.05 and th <= box_h * 0.85:
-            # Center manually (anchor support varies by font backend).
+        # Shrink until the label fits comfortably inside the box (or give up).
+        while (tw > box_w * 0.9 or th > box_h * 0.8) and size > 12:
+            size = max(12, size - 4)
+            font = _load_font(size)
+            bbox = draw.textbbox((0, 0), label, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if tw <= box_w * 0.9 and th <= box_h * 0.8:
             pos = (x0 + (box_w - tw) / 2 - bbox[0], y0 + (box_h - th) / 2 - bbox[1])
             draw.text(pos, label, fill=(255, 255, 255), font=font)
     return out
