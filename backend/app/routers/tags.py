@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Document, DocumentTag, Tag, User
 from app.routers.auth import get_current_user
-from app.dependencies import get_accessible_production_ids, get_user_role_for_production
+from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
 from app.schemas import (
     ApplyTagsRequest,
@@ -16,6 +16,7 @@ from app.schemas import (
     DocumentTagOut,
     TagCreate,
     TagOut,
+    TagPrivilegeUpdate,
 )
 
 router = APIRouter(prefix="/api", tags=["tags"])
@@ -45,6 +46,37 @@ async def create_tag(
     await db.commit()
     await db.refresh(tag)
     return tag
+
+
+@router.put("/tags/{tag_id}", response_model=TagOut)
+async def update_tag_privilege(
+    tag_id: int,
+    body: TagPrivilegeUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    tag = await db.get(Tag, tag_id)
+    if not tag:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    if tag.production_id is not None:
+        role = await get_user_role_for_production(db, user, tag.production_id)
+        if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+            raise HTTPException(status_code=403, detail="Manager or higher role required")
+    else:
+        # Global tag: manager+ on at least one accessible production.
+        accessible = await get_accessible_production_ids(db, user)
+        for pid in accessible:
+            role = await get_user_role_for_production(db, user, pid)
+            if ROLE_RANK.get(role, 0) >= ROLE_RANK["manager"]:
+                break
+        else:
+            raise HTTPException(status_code=403, detail="Manager or higher role required")
+    tag.is_privilege = body.is_privilege
+    await log_action(db, user, "tag_privilege_set", "tag", str(tag_id),
+                     details={"is_privilege": body.is_privilege})
+    await db.commit()
+    await db.refresh(tag)
+    return TagOut.model_validate(tag)
 
 
 @router.get("/documents/{doc_id}/tags", response_model=list[DocumentTagOut])
