@@ -54,6 +54,7 @@ class TagOut(BaseModel):
     category: str
     color: str
     keyboard_shortcut: str | None
+    is_privilege: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -63,6 +64,10 @@ class TagCreate(BaseModel):
     category: str
     color: str = "gray"
     keyboard_shortcut: str | None = None
+
+
+class TagPrivilegeUpdate(BaseModel):
+    is_privilege: bool
 
 
 class DocumentTagOut(BaseModel):
