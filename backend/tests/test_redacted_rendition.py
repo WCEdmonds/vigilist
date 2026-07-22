@@ -204,6 +204,19 @@ def test_image_redacted_unreadable_local_file_404(monkeypatch, tmp_path):
     assert exc.value.status_code == 404
 
 
+def test_image_redacted_unreadable_storage_bytes_404(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    import app.services.storage as storage
+    monkeypatch.setattr(storage, "get_download_bytes", lambda p: b"not a jpeg")
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["productions/pages/p1.jpg"])
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=True,
+                                 db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
 # --- pdf endpoint ---------------------------------------------------------
 
 def _pdf_page_count(pdf_bytes: bytes) -> int:
@@ -211,10 +224,23 @@ def _pdf_page_count(pdf_bytes: bytes) -> int:
     return len(re.findall(rb"/Type /Page[^s]", pdf_bytes))
 
 
+def _embedded_jpegs(pdf_bytes: bytes) -> list[Image.Image]:
+    imgs = []
+    pos = 0
+    while True:
+        start = pdf_bytes.find(b"\xff\xd8", pos)
+        if start == -1:
+            break
+        end = pdf_bytes.find(b"\xff\xd9", start)
+        if end == -1:
+            break
+        imgs.append(Image.open(io.BytesIO(pdf_bytes[start:end + 2])))
+        pos = end + 2
+    return imgs
+
+
 def _first_embedded_jpeg(pdf_bytes: bytes) -> Image.Image:
-    start = pdf_bytes.index(b"\xff\xd8")
-    end = pdf_bytes.index(b"\xff\xd9", start) + 2
-    return Image.open(io.BytesIO(pdf_bytes[start:end]))
+    return _embedded_jpegs(pdf_bytes)[0]
 
 
 def test_pdf_flag_off_keeps_annotation_index(monkeypatch, tmp_path):
@@ -242,6 +268,23 @@ def test_pdf_redacted_drops_pins_and_index(monkeypatch, tmp_path):
     assert r < 40 and g < 40 and b < 40  # burned box
     r, g, b = page.getpixel((int(page.width * 0.95), int(page.height * 0.95)))
     assert r > 200 and g > 200 and b > 200
+
+
+def test_pdf_redacted_multipage_burns_only_redacted_page(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path, "p1.jpg"), _page_jpeg(tmp_path, "p2.jpg")])
+    db = FakeSession(docs={doc_id: doc},
+                     redactions=[FakeRedaction(page_num=2, x_pct=10, y_pct=10, w_pct=40, h_pct=30)])
+    out = asyncio.run(dd.get_document_pdf(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
+    assert _pdf_page_count(out.body) == 2
+    pages = _embedded_jpegs(out.body)
+    assert len(pages) == 2
+    r, g, b = pages[0].getpixel((int(pages[0].width * 0.3), int(pages[0].height * 0.25)))
+    assert r > 200 and g > 200 and b > 200      # page 1 untouched
+    r, g, b = pages[1].getpixel((int(pages[1].width * 0.3), int(pages[1].height * 0.25)))
+    assert r < 40 and g < 40 and b < 40         # page 2 burned
+    assert "_redacted.pdf" in out.headers["content-disposition"]
 
 
 def test_pdf_redacted_no_redactions_is_clean_document(monkeypatch, tmp_path):
@@ -284,6 +327,16 @@ def test_text_redacted_passes_through_without_redactions(monkeypatch):
     db = FakeSession(docs={doc_id: doc}, redactions=[])
     out = asyncio.run(dd.get_text(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
     assert out == {"text": "secret words", "withheld": False}
+
+
+def test_text_redacted_count_query_scoped_to_document(monkeypatch):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["p1.jpg"])
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+    asyncio.run(dd.get_text(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
+    count_sql = [s for s in db.executed if "FROM redactions" in s and "count(" in s]
+    assert count_sql and "document_id" in count_sql[0]
 
 
 # --- detail payload -------------------------------------------------------

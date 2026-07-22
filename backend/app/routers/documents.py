@@ -432,8 +432,12 @@ async def get_image(
             raise HTTPException(status_code=404, detail="Image file not found in storage")
         if w or rects:
             import io
-            from PIL import Image as PILImage
-            img = PILImage.open(io.BytesIO(data))
+            from PIL import Image as PILImage, UnidentifiedImageError
+            try:
+                img = PILImage.open(io.BytesIO(data))
+                img.load()
+            except (UnidentifiedImageError, OSError):
+                raise HTTPException(status_code=404, detail="Image file unreadable")
             if rects:
                 img = burn_page(img, rects)
             if w:
@@ -736,7 +740,7 @@ async def get_document_pdf(
             detail=f"PDF generation failed: {e}",
         )
 
-    filename = f"{doc.bates_begin}.pdf"
+    filename = f"{doc.bates_begin}_redacted.pdf" if redacted else f"{doc.bates_begin}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
