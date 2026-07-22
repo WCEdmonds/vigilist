@@ -203,3 +203,35 @@ def test_override_blocked_for_reviewer(monkeypatch):
             db=db, user=FakeUser()))
     assert exc.value.status_code == 403
     assert audit_calls == []
+
+
+# --- CSV export ------------------------------------------------------------
+
+def test_privilege_log_csv_shape(monkeypatch):
+    import app.routers.export as re_
+
+    async def fake_accessible(db, user):
+        return [1]
+
+    monkeypatch.setattr(re_, "get_accessible_production_ids", fake_accessible)
+
+    async def fake_rows(db, production_id):
+        return [{
+            "document_id": "x", "bates_begin": "DOC-001", "bates_end": "DOC-002",
+            "doc_date": "2026-07-22", "custodian": "T. Owner",
+            "author": "alice@firm.com", "recipients": "bob@client.com",
+            "file_type": "eml", "disposition": "withhold",
+            "basis": ["Attorney-Client", "PII"],
+            "description": "Email from alice@firm.com dated 2026-07-22 withheld.",
+            "qc_status": "not_applicable",
+        }]
+
+    monkeypatch.setattr(re_, "build_privilege_log_rows", fake_rows)
+    out = asyncio.run(re_.export_privilege_log_csv(production_id=1, db=FakeSession(), user=FakeUser()))
+    text = out.body.decode()
+    lines = text.strip().splitlines()
+    assert lines[0] == ("Bates Begin,Bates End,Date,Custodian,Author,Recipients,"
+                       "Doc Type,Disposition,Privilege Basis,Description,Redaction QC")
+    assert "DOC-001" in lines[1]
+    assert "Attorney-Client; PII" in lines[1]
+    assert "privilege_log.csv" in out.headers["content-disposition"]
