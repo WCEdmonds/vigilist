@@ -466,12 +466,16 @@ async def get_image(
 @router.get("/{doc_id}/pdf")
 async def get_document_pdf(
     doc_id: UUID,
+    redacted: bool = Query(False, description="As-produced rendition: burn redactions, omit annotations"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Generate a multi-page PDF from the document's page images,
-    with any annotations burned in as numbered pins plus an annotation
-    index appended at the end."""
+    """Generate a multi-page PDF from the document's page images.
+
+    Default: annotations burned in as numbered pins plus an annotation index
+    appended at the end. With redacted=1: the as-produced view — redaction
+    boxes burned in, no pins, no index.
+    """
     import io
     import logging
     from PIL import Image as PILImage, ImageDraw, ImageFont, UnidentifiedImageError
@@ -534,13 +538,27 @@ async def get_document_pdf(
             detail="Could not build PDF: none of the page images could be read.",
         )
 
-    # Load annotations and resolve author display names once.
-    ann_result = await db.execute(
-        select(Annotation)
-        .where(Annotation.document_id == doc.id)
-        .order_by(Annotation.page_num, Annotation.created_at)
-    )
-    annotations = list(ann_result.scalars().all())
+    annotations: list[Annotation] = []
+    if redacted:
+        # As-produced: burn redaction boxes; annotations are work product
+        # and are omitted entirely (no pins, no index pages).
+        red_result = await db.execute(
+            select(Redaction).where(Redaction.document_id == doc.id)
+        )
+        red_by_page: dict[int, list[Redaction]] = {}
+        for r in red_result.scalars().all():
+            red_by_page.setdefault(r.page_num, []).append(r)
+        loaded = [
+            (idx, burn_page(img, red_by_page[idx]) if idx in red_by_page else img)
+            for idx, img in loaded
+        ]
+    else:
+        ann_result = await db.execute(
+            select(Annotation)
+            .where(Annotation.document_id == doc.id)
+            .order_by(Annotation.page_num, Annotation.created_at)
+        )
+        annotations = list(ann_result.scalars().all())
 
     by_page: dict[int, list[Annotation]] = {}
     for a in annotations:
