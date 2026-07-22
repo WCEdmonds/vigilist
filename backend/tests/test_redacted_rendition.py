@@ -284,3 +284,14 @@ def test_text_redacted_passes_through_without_redactions(monkeypatch):
     db = FakeSession(docs={doc_id: doc}, redactions=[])
     out = asyncio.run(dd.get_text(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
     assert out == {"text": "secret words", "withheld": False}
+
+
+# --- detail payload -------------------------------------------------------
+
+def test_doc_detail_includes_redaction_count(monkeypatch):
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["p1.jpg"])
+    db = FakeSession(docs={doc_id: doc},
+                     redactions=[FakeRedaction(), FakeRedaction(page_num=2)])
+    detail = asyncio.run(dd._doc_detail(doc, db))
+    assert detail.redaction_count == 2
