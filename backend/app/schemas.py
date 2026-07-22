@@ -167,6 +167,7 @@ class DocumentDetail(BaseModel):
     tags: list[DocumentTagOut] = []
     note_count: int = 0
     annotation_count: int = 0
+    redaction_count: int = 0
 
     model_config = {"from_attributes": True}
 

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models import Annotation, Document, DocumentTag, Note, User
+from app.models import Annotation, Document, DocumentTag, Note, Redaction, User
 from app.models_review import ReviewProject, AIReviewResult
 
 # Pin colors used by both the viewer overlay and the burned-in PDF pins.
@@ -24,6 +24,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut, get_file_type
+from app.services.redaction_render import burn_page
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -398,6 +399,7 @@ async def get_image(
     doc_id: UUID,
     page_num: int,
     w: int | None = Query(None, ge=50, le=2000, description="Resize width for thumbnails"),
+    redacted: bool = Query(False, description="Burn redactions into the returned image"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -413,19 +415,35 @@ async def get_image(
     if not raw_path:
         raise HTTPException(status_code=404, detail="Image file not found")
 
+    rects = []
+    if redacted:
+        result = await db.execute(
+            select(Redaction).where(
+                Redaction.document_id == doc_id, Redaction.page_num == page_num
+            )
+        )
+        rects = list(result.scalars().all())
+
     if raw_path.startswith("productions/"):
         from app.services.storage import get_download_bytes
         try:
             data = get_download_bytes(raw_path)
         except Exception:
             raise HTTPException(status_code=404, detail="Image file not found in storage")
-        if w:
+        if w or rects:
             import io
-            from PIL import Image as PILImage
-            img = PILImage.open(io.BytesIO(data))
-            ratio = w / img.width
-            new_h = int(img.height * ratio)
-            img = img.resize((w, new_h), PILImage.LANCZOS)
+            from PIL import Image as PILImage, UnidentifiedImageError
+            try:
+                img = PILImage.open(io.BytesIO(data))
+                img.load()
+            except (UnidentifiedImageError, OSError):
+                raise HTTPException(status_code=404, detail="Image file unreadable")
+            if rects:
+                img = burn_page(img, rects)
+            if w:
+                ratio = w / img.width
+                new_h = int(img.height * ratio)
+                img = img.resize((w, new_h), PILImage.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=75)
             data = buf.getvalue()
@@ -434,18 +452,34 @@ async def get_image(
         path = Path(raw_path.replace("\\", "/")).resolve()
         if not path.exists():
             raise HTTPException(status_code=404, detail="Image file not found")
+        if rects:
+            import io
+            from PIL import Image as PILImage, UnidentifiedImageError
+            try:
+                img = PILImage.open(str(path))
+                img.load()
+            except (UnidentifiedImageError, OSError):
+                raise HTTPException(status_code=404, detail="Image file unreadable")
+            img = burn_page(img, rects)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=90)
+            return Response(content=buf.getvalue(), media_type="image/jpeg")
         return FileResponse(str(path), media_type="image/jpeg")
 
 
 @router.get("/{doc_id}/pdf")
 async def get_document_pdf(
     doc_id: UUID,
+    redacted: bool = Query(False, description="As-produced rendition: burn redactions, omit annotations"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Generate a multi-page PDF from the document's page images,
-    with any annotations burned in as numbered pins plus an annotation
-    index appended at the end."""
+    """Generate a multi-page PDF from the document's page images.
+
+    Default: annotations burned in as numbered pins plus an annotation index
+    appended at the end. With redacted=1: the as-produced view — redaction
+    boxes burned in, no pins, no index.
+    """
     import io
     import logging
     from PIL import Image as PILImage, ImageDraw, ImageFont, UnidentifiedImageError
@@ -508,13 +542,27 @@ async def get_document_pdf(
             detail="Could not build PDF: none of the page images could be read.",
         )
 
-    # Load annotations and resolve author display names once.
-    ann_result = await db.execute(
-        select(Annotation)
-        .where(Annotation.document_id == doc.id)
-        .order_by(Annotation.page_num, Annotation.created_at)
-    )
-    annotations = list(ann_result.scalars().all())
+    annotations: list[Annotation] = []
+    if redacted:
+        # As-produced: burn redaction boxes; annotations are work product
+        # and are omitted entirely (no pins, no index pages).
+        red_result = await db.execute(
+            select(Redaction).where(Redaction.document_id == doc.id)
+        )
+        red_by_page: dict[int, list[Redaction]] = {}
+        for r in red_result.scalars().all():
+            red_by_page.setdefault(r.page_num, []).append(r)
+        loaded = [
+            (idx, burn_page(img, red_by_page[idx]) if idx in red_by_page else img)
+            for idx, img in loaded
+        ]
+    else:
+        ann_result = await db.execute(
+            select(Annotation)
+            .where(Annotation.document_id == doc.id)
+            .order_by(Annotation.page_num, Annotation.created_at)
+        )
+        annotations = list(ann_result.scalars().all())
 
     by_page: dict[int, list[Annotation]] = {}
     for a in annotations:
@@ -692,7 +740,7 @@ async def get_document_pdf(
             detail=f"PDF generation failed: {e}",
         )
 
-    filename = f"{doc.bates_begin}.pdf"
+    filename = f"{doc.bates_begin}_redacted.pdf" if redacted else f"{doc.bates_begin}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1031,6 +1079,7 @@ async def stream_native(
 @router.get("/{doc_id}/text")
 async def get_text(
     doc_id: UUID,
+    redacted: bool = Query(False, description="Withhold extracted text if the document has redactions"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1040,6 +1089,16 @@ async def get_text(
         raise HTTPException(status_code=404, detail="Document not found")
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
+    if redacted:
+        # Flat text_content has no word coordinates, so region-level removal
+        # is impossible — the as-produced text for a redacted doc is withheld
+        # entirely (re-OCR of burned images is Phase 2).
+        count = (await db.execute(
+            select(func.count(Redaction.id)).where(Redaction.document_id == doc_id)
+        )).scalar() or 0
+        if count:
+            return {"text": "", "withheld": True}
+        return {"text": doc.text_content or "", "withheld": False}
     return {"text": doc.text_content or ""}
 
 
@@ -1090,6 +1149,10 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         select(func.count(Annotation.id)).where(Annotation.document_id == doc.id)
     )).scalar() or 0
 
+    redaction_count = (await db.execute(
+        select(func.count(Redaction.id)).where(Redaction.document_id == doc.id)
+    )).scalar() or 0
+
     return DocumentDetail(
         id=doc.id,
         production_id=doc.production_id,
@@ -1106,4 +1169,5 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         tags=[DocumentTagOut(id=dt.id, tag=TagOut.model_validate(dt.tag), applied_by=dt.applied_by, applied_at=dt.applied_at) for dt in doc.tags],
         note_count=note_count,
         annotation_count=annotation_count,
+        redaction_count=redaction_count,
     )
