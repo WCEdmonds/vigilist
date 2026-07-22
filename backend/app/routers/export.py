@@ -4,8 +4,8 @@ import csv
 import io
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
+from app.services.privilege_log import build_privilege_log_rows
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -123,4 +124,37 @@ async def export_search_csv(
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=vigilist_search_export.csv"},
+    )
+
+
+@router.get("/privilege-log/csv")
+async def export_privilege_log_csv(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Export the production's privilege log as CSV."""
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    rows = await build_privilege_log_rows(db, production_id)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Bates Begin", "Bates End", "Date", "Custodian", "Author",
+                     "Recipients", "Doc Type", "Disposition", "Privilege Basis",
+                     "Description", "Redaction QC"])
+    for r in rows:
+        writer.writerow([
+            r["bates_begin"], r["bates_end"], r["doc_date"] or "",
+            r["custodian"] or "", r["author"] or "", r["recipients"] or "",
+            r["file_type"] or "", r["disposition"], "; ".join(r["basis"]),
+            r["description"], r["qc_status"],
+        ])
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=privilege_log.csv"},
     )
