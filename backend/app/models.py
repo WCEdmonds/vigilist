@@ -140,6 +140,10 @@ class Document(Base):
     email_bcc = Column(Text, nullable=True)
     email_subject = Column(String(1000), nullable=True)
 
+    # P1-4/5 — privilege overrides (NULL = derived / templated)
+    privilege_disposition = Column(String(20), nullable=True)
+    privilege_description = Column(Text, nullable=True)
+
     production = relationship("Production", back_populates="documents")
     tags = relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
     notes = relationship("Note", back_populates="document", cascade="all, delete-orphan", order_by="Note.created_at.desc()")
@@ -172,6 +176,7 @@ class Tag(Base):
     color = Column(String(20), nullable=False, default="gray")
     keyboard_shortcut = Column(String(5), nullable=True)
     production_id = Column(Integer, ForeignKey("productions.id"), nullable=True)
+    is_privilege = Column(Boolean, nullable=False, default=False)
 
     document_tags = relationship("DocumentTag", back_populates="tag")
 
@@ -405,6 +410,21 @@ class Redaction(Base):
     created_by = Column(String(128), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, onupdate=func.now(), nullable=True)
+
+
+class RedactionQCDecision(Base):
+    __tablename__ = "redaction_qc_decisions"
+    __table_args__ = (
+        Index("ix_rqc_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    decision = Column(String(20), nullable=False)  # 'approved' | 'rejected'
+    note = Column(Text, nullable=True)
+    redaction_count = Column(Integer, nullable=False)  # snapshot at decision time
+    decided_by = Column(String(128), nullable=False)
+    decided_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
 class DuplicateGroup(Base):
