@@ -73,6 +73,7 @@ async def update_tag_privilege(
             raise HTTPException(status_code=403, detail="Manager or higher role required")
     tag.is_privilege = body.is_privilege
     await log_action(db, user, "tag_privilege_set", "tag", str(tag_id),
+                     production_id=tag.production_id,
                      details={"is_privilege": body.is_privilege})
     await db.commit()
     await db.refresh(tag)
