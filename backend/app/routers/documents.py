@@ -450,8 +450,13 @@ async def get_image(
             raise HTTPException(status_code=404, detail="Image file not found")
         if rects:
             import io
-            from PIL import Image as PILImage
-            img = burn_page(PILImage.open(str(path)), rects)
+            from PIL import Image as PILImage, UnidentifiedImageError
+            try:
+                img = PILImage.open(str(path))
+                img.load()
+            except (UnidentifiedImageError, OSError):
+                raise HTTPException(status_code=404, detail="Image file unreadable")
+            img = burn_page(img, rects)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=90)
             return Response(content=buf.getvalue(), media_type="image/jpeg")
