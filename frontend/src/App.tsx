@@ -7,6 +7,7 @@ import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
 import IngestWizard from './components/IngestWizard';
 import ProductionSetsPanel from './components/ProductionSetsPanel';
+import DefensibilityPanel from './components/DefensibilityPanel';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
 import ProductionSettings from './components/ProductionSettings';
@@ -504,6 +505,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             onOpenDoc={setViewDocId}
           />
         )}
+        <DefensibilityPanel productionId={production.id} tags={allTags} />
         <ProductionBrief
           production={production}
           clusters={clusters}
