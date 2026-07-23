@@ -17,6 +17,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
   const [suggestions, setSuggestions] = useState<MergeSuggestion[]>([]);
   const [openEntityId, setOpenEntityId] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     listEntities(productionId, search || undefined, typeFilter || undefined)
@@ -31,12 +32,13 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
 
   const resolve = async (id: number, accept: boolean) => {
     setBusy(id);
+    setResolveError(null);
     try {
       if (accept) await acceptMergeSuggestion(id);
       else await rejectMergeSuggestion(id);
       refresh();
     } catch (e) {
-      console.warn('merge suggestion resolution failed:', e);
+      setResolveError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
@@ -67,12 +69,21 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
             <div className="panel-header" style={{ padding: 0 }}>
               Possible duplicates — same person? ({suggestions.length})
             </div>
+            {resolveError && (
+              <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-danger-700)' }}>
+                {resolveError}
+              </div>
+            )}
             {suggestions.map(s => (
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
                 <span>
-                  <b>{s.entity_a.canonical_name}</b> ({s.entity_a.mention_count})
+                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => setOpenEntityId(s.entity_a.id)}>
+                    {s.entity_a.canonical_name}
+                  </button> ({s.entity_a.mention_count})
                   {' ↔ '}
-                  <b>{s.entity_b.canonical_name}</b> ({s.entity_b.mention_count})
+                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => setOpenEntityId(s.entity_b.id)}>
+                    {s.entity_b.canonical_name}
+                  </button> ({s.entity_b.mention_count})
                 </span>
                 <span style={{ opacity: 0.6, fontSize: 'var(--text-xs)' }}>{s.rationale}</span>
                 <span style={{ marginLeft: 'auto' }}>

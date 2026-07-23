@@ -43,6 +43,11 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [imageRotation, setImageRotation] = useState(0);
   const [mediaTime, setMediaTime] = useState<number | null>(null);
   const mediaRef = useRef<MediaPlayerHandle>(null);
+  // Tracks an entity focus that is *about to* land on the next docId change because
+  // EntityPanel's onOpenDocument just triggered it — lets the docId-reset effect
+  // distinguish "navigated here to show a focused mention" from ordinary navigation
+  // (next/prev/duplicate/etc), which should clear any stale focus instead.
+  const pendingFocusRef = useRef<string | null>(null);
   const [mobileTab, setMobileTab] = useState<'view' | 'notes' | 'text'>('view');
   const [isMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
   const [popover, setPopover] = useState<{
@@ -54,6 +59,13 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   } | null>(null);
 
   useEffect(() => {
+    // Clear any focused entity left over from a previous EntityPanel deep-link,
+    // unless this very docId change is the navigation that deep-link just initiated.
+    if (pendingFocusRef.current) {
+      pendingFocusRef.current = null;
+    } else {
+      setFocusEntityId(null);
+    }
     setError('');
     setSummary(null);
     setCenterTab('images');
@@ -370,7 +382,10 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
             onOpenDocument={(targetDocId, entityId) => {
               setFocusEntityId(entityId);
               setMobileTab('text');
-              if (targetDocId !== docId) onNavigate(targetDocId);
+              if (targetDocId !== docId) {
+                pendingFocusRef.current = entityId;
+                onNavigate(targetDocId);
+              }
             }}
           />
         )}
@@ -561,7 +576,10 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
           onOpenDocument={(targetDocId, entityId) => {
             setFocusEntityId(entityId);
             setRightTab('text');
-            if (targetDocId !== docId) onNavigate(targetDocId);
+            if (targetDocId !== docId) {
+              pendingFocusRef.current = entityId;
+              onNavigate(targetDocId);
+            }
           }}
         />
       )}
