@@ -123,6 +123,9 @@ class Document(Base):
 
     # Phase 0 SP1 — typed metadata (promoted from load-file columns)
     custodian = Column(String(255), nullable=True, index=True)
+    # P0-SP5 — source designation (who this load came from; set per ingest)
+    source_party = Column(String(255), nullable=True, index=True)
+    source_type = Column(String(20), nullable=True, index=True)  # 'collection' | 'received'
     date_sent = Column(DateTime(timezone=True), nullable=True, index=True)
     date_received = Column(DateTime(timezone=True), nullable=True)
     date_created = Column(DateTime(timezone=True), nullable=True)
