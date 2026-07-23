@@ -13,7 +13,8 @@ function tenantSlug(): string | null {
   const parts = window.location.hostname.split('.');
   if (parts.length >= 3 && parts.slice(-2).join('.') === 'vigilist.co') {
     const slug = parts[0];
-    return slug && slug !== 'www' ? slug : null;
+    // app.vigilist.co is the default (non-tenant) home; www is the apex alias.
+    return slug && slug !== 'www' && slug !== 'app' ? slug : null;
   }
   return null;
 }
