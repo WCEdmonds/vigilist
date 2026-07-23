@@ -52,9 +52,20 @@ def test_timeline_returns_events_with_participants_and_doc(monkeypatch):
     assert e.participants[0].canonical_name == "Jorge Rivera"
 
 
+def test_per_page_clamp_pure():
+    """Test the _clamp_per_page function directly."""
+    assert er._clamp_per_page(5000) == 100
+    assert er._clamp_per_page(0) == 1
+    assert er._clamp_per_page(50) == 50
+
+
 def test_timeline_clamps_per_page(monkeypatch):
     _patch(monkeypatch)
-    db = FakeSession(responders=[("func.count(OntologyEvent", FakeResult(scalar=0))])
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=0)),
+        ("FROM ontology_events", FakeResult(rows=[])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
     out = asyncio.run(er.get_production_timeline(
         production_id=1, per_page=5000, db=db, user=FakeUser()))
     assert out.events == [] and out.total == 0
@@ -70,3 +81,17 @@ def test_timeline_null_date_serializes_none(monkeypatch):
     ])
     out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
     assert out.events[0].event_date is None
+
+
+def test_undated_count_distinct(monkeypatch):
+    _patch(monkeypatch)
+    ev = _event(12, d=date(2020, 1, 10), precision="day")
+    db = FakeSession(responders=[
+        ("event_date IS NULL", FakeResult(scalar=2)),
+        ("count(ontology_events", FakeResult(scalar=7)),
+        ("FROM ontology_events", FakeResult(rows=[(ev, "ABC-0003", "Contract")])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
+    out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
+    assert out.total == 7
+    assert out.undated_count == 2

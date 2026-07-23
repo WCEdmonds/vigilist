@@ -21,10 +21,16 @@ from app.schemas import (
     TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
 )
 from app.services.audit import log_action
+from app.services.entity_extraction import EVENT_TYPES
 from app.services.entity_merge import merge_entities, undo_merge
 from app.services.entity_profile import generate_entity_overview, is_overview_stale
 
 router = APIRouter(prefix="/api", tags=["entities"])
+
+
+def _clamp_per_page(v: int) -> int:
+    """Clamp per_page parameter to valid range [1, 100]."""
+    return max(1, min(100, v))
 
 
 async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> Entity:
@@ -418,11 +424,11 @@ async def get_production_timeline(
     accessible = await get_accessible_production_ids(db, user)
     if production_id not in accessible:
         raise HTTPException(status_code=404, detail="Production not found")
-    per_page = max(1, min(100, per_page))
+    per_page = _clamp_per_page(per_page)
 
     base = select(OntologyEvent).where(OntologyEvent.production_id == production_id)
     count_base = select(func.count(OntologyEvent.id)).where(OntologyEvent.production_id == production_id)
-    if event_type in ("meeting", "communication", "payment", "filing", "agreement", "other"):
+    if event_type in EVENT_TYPES:
         base = base.where(OntologyEvent.event_type == event_type)
         count_base = count_base.where(OntologyEvent.event_type == event_type)
     if entity_id is not None:
