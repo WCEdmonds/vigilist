@@ -152,6 +152,8 @@ class DocumentSummary(BaseModel):
     ai_decision: str | None = None
     ai_confidence: int | None = None
     ai_decided: bool = False
+    source_party: str | None = None
+    source_type: str | None = None
 
     model_config = {"from_attributes": True}
 

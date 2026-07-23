@@ -99,3 +99,54 @@ def test_process_folds_source_into_field_mapping(monkeypatch):
     assert job.field_mapping["source_party"] == "ABC Corp"
     assert job.field_mapping["source_type"] == "received"
     assert out.total_files == 3
+
+
+# --- search filters ---------------------------------------------------------
+
+from app.services.search import search_documents
+from tests.fakes import FakeResult
+
+
+def test_search_applies_source_filters():
+    db = FakeSession()
+    asyncio.run(search_documents(
+        db, "", production_id=1, accessible_production_ids=[1],
+        source_party="ABC Corp", source_type="received"))
+    joined = "\n".join(db.executed)
+    assert "documents.source_party" in joined
+    assert "documents.source_type" in joined
+
+
+def test_search_source_filter_alone_is_enough():
+    # the no-criteria early return must not swallow source-only browsing
+    db = FakeSession()
+    results, total = asyncio.run(search_documents(
+        db, "", accessible_production_ids=[1], source_type="collection"))
+    assert results == []
+    assert len(db.executed) >= 1  # it actually queried
+
+
+def test_source_parties_endpoint(monkeypatch):
+    import app.routers.documents as rd
+
+    async def fake_accessible(db, user):
+        return [1]
+
+    monkeypatch.setattr(rd, "get_accessible_production_ids", fake_accessible)
+    db = FakeSession(responders=[
+        ("source_party", FakeResult(rows=[("ABC Corp",), ("Our Collection",)])),
+    ])
+    out = asyncio.run(rd.list_source_parties(production_id=1, db=db, user=FakeUser()))
+    assert out == {"source_parties": ["ABC Corp", "Our Collection"]}
+
+
+def test_source_parties_403(monkeypatch):
+    import app.routers.documents as rd
+
+    async def fake_accessible(db, user):
+        return [2]
+
+    monkeypatch.setattr(rd, "get_accessible_production_ids", fake_accessible)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rd.list_source_parties(production_id=1, db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 403
