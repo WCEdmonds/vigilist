@@ -1,11 +1,20 @@
 """Entity extraction stage: batching, idempotency marker, per-doc failure
-isolation, stop-on-fully-failed-batch (mirrors the summaries stage contract)."""
+isolation, stop-on-fully-failed-batch (mirrors the summaries stage contract).
+
+Also covers the /extract-entities trigger endpoint (role check, Cloud Tasks
+enqueue vs BackgroundTasks fallback, audit logging) using the fake-session
+pattern from tests/test_redaction_endpoints.py."""
 
 import asyncio
 import uuid
 from datetime import datetime
 
+import pytest
+from fastapi import BackgroundTasks, HTTPException
+
+import app.routers.ingest as ingest_router
 import app.services.pipeline as pipeline
+import app.services.tasks as task_service
 
 
 class FakeDoc:
@@ -56,6 +65,24 @@ def test_run_entities_marks_docs_and_stops_when_none_left(monkeypatch):
     assert all(d.entities_extracted_at for d in docs)
 
 
+def test_run_entities_no_false_failure_when_batch_fully_skipped(monkeypatch):
+    """All docs in a batch vanish at re-fetch (deleted, or already marked by
+    a concurrent worker) -> attempted stays 0 -> must not raise, just move on."""
+    batches = [[FakeDoc(), FakeDoc()], []]  # first select returns docs, second none
+
+    async def fake_pending(production_id, limit):
+        return batches.pop(0)
+
+    async def fake_extract_one(db, doc):
+        raise AssertionError("must not be called — every doc is skipped at re-fetch")
+
+    monkeypatch.setattr(pipeline, "_pending_extraction_docs", fake_pending)
+    monkeypatch.setattr(pipeline, "_extract_one_document", fake_extract_one)
+    # FakeBatchSession serving no docs -> db.get returns None for every id.
+    monkeypatch.setattr(pipeline, "async_session", lambda: FakeBatchSession([]))
+    asyncio.run(pipeline._run_entities(1))  # must complete without raising
+
+
 def test_run_entities_raises_after_fully_failed_batch(monkeypatch):
     import pytest
     calls = {"n": 0}
@@ -74,3 +101,87 @@ def test_run_entities_raises_after_fully_failed_batch(monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(pipeline._run_entities(1))
     assert calls["n"] == 1  # gave up after one all-failed batch (stage marked failed by the pipeline wrapper)
+
+
+# --- /productions/{production_id}/extract-entities trigger endpoint -------
+
+class FakeUser:
+    def __init__(self, uid):
+        self.id = uid
+        self.email = f"{uid}@thirulaw.com"
+        self.display_name = uid
+
+
+class FakeSession:
+    async def commit(self):
+        pass
+
+
+def _patch_role(monkeypatch, role):
+    async def fake_role(db, user, production_id):
+        return role
+    monkeypatch.setattr("app.dependencies.get_user_role_for_production", fake_role)
+
+
+def test_trigger_entity_extraction_blocked_for_reviewer(monkeypatch):
+    _patch_role(monkeypatch, "reviewer")
+    db = FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            ingest_router.trigger_entity_extraction(
+                production_id=1,
+                background_tasks=BackgroundTasks(),
+                db=db,
+                user=FakeUser("u1"),
+            )
+        )
+    assert exc.value.status_code == 403
+
+
+def test_trigger_entity_extraction_falls_back_to_background_tasks(monkeypatch):
+    _patch_role(monkeypatch, "manager")
+    monkeypatch.setattr(task_service, "is_configured", lambda: False)
+    audit_calls = []
+
+    async def fake_log(*args, **kwargs):
+        audit_calls.append((args, kwargs))
+    monkeypatch.setattr(ingest_router, "log_action", fake_log)
+
+    db = FakeSession()
+    bg = BackgroundTasks()
+    out = asyncio.run(
+        ingest_router.trigger_entity_extraction(
+            production_id=1,
+            background_tasks=bg,
+            db=db,
+            user=FakeUser("u1"),
+        )
+    )
+    assert out == {"status": "started"}
+    assert len(bg.tasks) == 1
+    assert len(audit_calls) == 1
+
+
+def test_trigger_entity_extraction_enqueues_via_cloud_tasks(monkeypatch):
+    _patch_role(monkeypatch, "manager")
+    monkeypatch.setattr(task_service, "is_configured", lambda: True)
+    enqueue_calls = []
+    monkeypatch.setattr(task_service, "enqueue_pipeline", lambda production_id: enqueue_calls.append(production_id))
+    audit_calls = []
+
+    async def fake_log(*args, **kwargs):
+        audit_calls.append((args, kwargs))
+    monkeypatch.setattr(ingest_router, "log_action", fake_log)
+
+    db = FakeSession()
+    out = asyncio.run(
+        ingest_router.trigger_entity_extraction(
+            production_id=7,
+            background_tasks=BackgroundTasks(),
+            db=db,
+            user=FakeUser("u1"),
+        )
+    )
+    assert out == {"status": "enqueued"}
+    assert enqueue_calls == [7]
+    assert len(audit_calls) == 1
