@@ -4,6 +4,7 @@ import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
+import EntitiesView from './components/EntitiesView';
 import IngestWizard from './components/IngestWizard';
 import ProductionSetsPanel from './components/ProductionSetsPanel';
 import AuditLog from './components/AuditLog';
@@ -86,6 +87,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   );
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
+  const [showEntities, setShowEntities] = useState(initialUrl.view === 'entities');
 
   // AI chat, docked in the context rail (session-only conversation). The
   // production id lets doc-less questions be grounded in the production
@@ -131,7 +133,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showReview ? 'review' : undefined,
+    view: showReview ? 'review' : showEntities ? 'entities' : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -384,6 +386,17 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   }
 
+  // Entities view full-screen mode (key players + merge suggestion queue)
+  if (showEntities) {
+    return (
+      <EntitiesView
+        productionId={production.id}
+        onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setShowEntities(false); refreshList(); }}
+      />
+    );
+  }
+
   // Batch review full-screen mode
   if (activeBatchId) {
     return (
@@ -439,6 +452,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         initialQuery={searchQuery}
         onAsk={handleAsk}
         onOpenReview={() => setShowReview(true)}
+        onOpenEntities={() => setShowEntities(true)}
         onOpenDashboard={() => setShowDashboard(true)}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
