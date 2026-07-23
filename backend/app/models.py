@@ -454,6 +454,11 @@ class ProductionSet(Base):
     render_status = Column(String(20), nullable=False, default="not_started")  # not_started|rendering|rendered|error
     render_error = Column(Text, nullable=True)
     rendered_at = Column(DateTime, nullable=True)
+    # P2-3 — package state
+    package_status = Column(String(20), nullable=False, default="not_started")  # not_started|packaging|packaged|error
+    package_error = Column(Text, nullable=True)
+    package_path = Column(String(500), nullable=True)
+    packaged_at = Column(DateTime, nullable=True)
 
     items = relationship("ProductionSetItem", back_populates="production_set", cascade="all, delete-orphan")
 
