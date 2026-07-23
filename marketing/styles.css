@@ -302,7 +302,7 @@ html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
 
 /* ── Pricing ── */
 .pricing__sub { color: var(--ink-2); font-size: 1.05rem; }
-.calc { max-width: 560px; margin: 0 0 46px; }
+.calc { max-width: 660px; margin: 0 0 46px; }
 .calc__label { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
   font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.1em;
   color: var(--ink-2); margin-bottom: 10px; }
