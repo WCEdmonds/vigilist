@@ -58,3 +58,27 @@ def test_document_entities_denies_unknown_document(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(er.get_document_entities(doc_id=uuid.uuid4(), db=db, user=FakeUser()))
     assert exc.value.status_code == 404
+
+
+def test_list_production_entities_denies_out_of_scope_production(monkeypatch):
+    _patch(monkeypatch, accessible=(2,))  # production 1 not accessible
+    db = FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.list_production_entities(production_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_get_entity_mentions_denies_out_of_scope_entity(monkeypatch):
+    _patch(monkeypatch, accessible=(2,))  # entity is in production 1
+    db = FakeSession(get_objects={("Entity", ENT_ID): _entity(production_id=1)})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.get_entity_mentions(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_get_entity_connections_denies_out_of_scope_entity(monkeypatch):
+    _patch(monkeypatch, accessible=(2,))  # entity is in production 1
+    db = FakeSession(get_objects={("Entity", ENT_ID): _entity(production_id=1)})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.get_entity_connections(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404

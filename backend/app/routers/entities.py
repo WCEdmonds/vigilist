@@ -48,6 +48,9 @@ async def get_document_entities(
         .join(Entity, EntityMention.entity_id == Entity.id)
         .where(EntityMention.document_id == doc_id)
         .order_by(EntityMention.start_offset)
+        # Pathological-document guard: normal documents have far fewer than
+        # 2000 mentions; this just prevents a runaway result set.
+        .limit(2000)
     )).all()
 
     by_entity: dict = {}
@@ -162,6 +165,11 @@ async def get_entity_connections(
                 description=rel.description, document_id=rel.document_id,
             ))
 
+    # Same-production join safety: this joins mentions on document_id alone
+    # (no explicit production_id filter) because persist_extraction always
+    # stamps every ontology row's production_id from its source document,
+    # and resolution only ever matches entities within a single production.
+    # That invariant guarantees a shared document_id can't cross tenants.
     em_self = EntityMention.__table__.alias("em_self")
     em_other = EntityMention.__table__.alias("em_other")
     cooc_rows = (await db.execute(
@@ -224,7 +232,7 @@ async def list_production_entities(
 
     total = (await db.execute(count_query)).scalar() or 0
     rows = (await db.execute(
-        query.order_by(Entity.mention_count.desc())
+        query.order_by(Entity.mention_count.desc(), Entity.id)
         .offset((max(1, page) - 1) * per_page).limit(per_page)
     )).scalars().all()
 
