@@ -148,8 +148,13 @@ async def search_documents(
             conditions.append(or_(*[func.lower(Document.native_path).like(f"%{ext}") for ext in exts]))
     if source_party:
         conditions.append(Document.source_party == source_party)
-    if source_type:
-        conditions.append(Document.source_type == source_type)
+    if source_type == "received":
+        conditions.append(Document.source_type == "received")
+    elif source_type == "collection":
+        # Undesignated (NULL) documents count as ours: only loads explicitly
+        # marked as received are "incoming". Keeps the toggle meaningful on
+        # matters ingested before source designation existed.
+        conditions.append(Document.source_type.is_distinct_from("received"))
 
     if has_text_query:
         rank = func.ts_rank(Document.text_search_vector, tsquery).label("rank")
