@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import Document, IngestJob, Production, User
 from app.routers.auth import get_current_user
 from app.schemas import AnalyzeResponse, IngestJobOut
+from app.services.audit import log_action
 from app.services.oidc import verify_cloud_tasks_request
 
 logger = logging.getLogger(__name__)
@@ -299,10 +300,16 @@ async def trigger_entity_extraction(
     from app.services import tasks as task_service
     if task_service.is_configured():
         task_service.enqueue_pipeline(production_id)
+        await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
+                         production_id=production_id, details={"mode": "enqueued"})
+        await db.commit()
         return {"status": "enqueued"}
 
     from app.services.pipeline import run_ambient_pipeline
     background_tasks.add_task(run_ambient_pipeline, production_id)
+    await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
+                     production_id=production_id, details={"mode": "background"})
+    await db.commit()
     return {"status": "started"}
 
 

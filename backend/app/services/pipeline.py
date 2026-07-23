@@ -180,14 +180,22 @@ async def _run_entities(production_id: int) -> None:
         if not pending:
             return
         any_ok = False
+        attempted = 0
         for doc in pending:
             async with async_session() as db:
                 live = await db.get(Document, doc.id)
                 if live is None or live.entities_extracted_at is not None:
                     continue
+                attempted += 1
                 if await _extract_one_document(db, live):
                     any_ok = True
                     await db.commit()
+        if attempted == 0:
+            # Every doc in this batch was already handled elsewhere (deleted,
+            # or marked done by a concurrent worker) — nothing failed. The
+            # next _pending_extraction_docs select won't return them, so
+            # looping can't spin.
+            continue
         if not any_ok:
             raise RuntimeError("entity extraction: entire batch failed (no API key or persistent errors)")
 
