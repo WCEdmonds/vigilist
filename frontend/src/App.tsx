@@ -88,6 +88,21 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
   const [showEntities, setShowEntities] = useState(initialUrl.view === 'entities');
+  const [entityPanelId, setEntityPanelId] = useState<string | null>(initialUrl.entity ?? null);
+
+  // Deep-link into an entity's profile panel from anywhere (chip clicks,
+  // timeline participants, graph nodes, etc.) — closes other full-screen
+  // views/the doc viewer and opens the Entities workspace with the panel seeded.
+  const navigateToEntity = (id: string) => {
+    setShowReview(false);
+    setViewDocId(null);
+    setEntityPanelId(id);
+    setShowEntities(true);
+  };
+  // Not yet called from this task's own UI — wired into Timeline/Graph/chip
+  // components in follow-on ontology-surface tasks. Referenced here so
+  // strict unused-locals checks pass in the meantime.
+  void navigateToEntity;
 
   // AI chat, docked in the context rail (session-only conversation). The
   // production id lets doc-less questions be grounded in the production
@@ -134,6 +149,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
     view: showReview ? 'review' : showEntities ? 'entities' : undefined,
+    entity: showEntities && entityPanelId ? entityPanelId : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -393,6 +409,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         productionId={production.id}
         onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
         onBack={() => { setShowEntities(false); refreshList(); }}
+        initialEntityId={entityPanelId}
+        onOpenEntityChange={setEntityPanelId}
       />
     );
   }

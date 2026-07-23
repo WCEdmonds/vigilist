@@ -366,6 +366,7 @@ export interface PipelineInfo {
   /** Documents summarized so far / total — progress for the summaries stage. */
   summarized_count?: number;
   doc_count?: number;
+  key_players_resolved?: { name: string; entity_id: string | null }[] | null;
 }
 
 export interface ClusterDocument {
@@ -458,4 +459,57 @@ export interface MergeSuggestion {
   status: string;
   entity_a: EntityListItem;
   entity_b: EntityListItem;
+}
+
+// ── Ontology surfaces ──
+
+export interface TimelineParticipant {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: 'person' | 'org';
+}
+
+export interface TimelineEvent {
+  event_id: number;
+  description: string;
+  event_type: string;
+  event_date: string | null;
+  date_precision: 'day' | 'month' | 'year' | 'unknown';
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
+  participants: TimelineParticipant[];
+}
+
+export interface TimelinePage {
+  events: TimelineEvent[];
+  total: number;
+  undated_count: number;
+}
+
+export interface GraphNode {
+  id: string;
+  canonical_name: string;
+  entity_type: 'person' | 'org';
+  mention_count: number;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  kind: 'stated' | 'cooccurrence';
+  relationship_type?: string | null;
+  weight: number;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  truncated: boolean;
+}
+
+export interface ChipEntity {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: 'person' | 'org';
 }
