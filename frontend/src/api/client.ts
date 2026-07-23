@@ -1,8 +1,8 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocumentDetail, DocumentTagEntry, DuplicateEntry,
+  AIReviewResult, Annotation, BatchDocument, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile,
   FamilyThread,
-  IngestJob, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
+  IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag,
 } from '../types';
@@ -812,3 +812,40 @@ export const fetchProducedPdf = (setId: number, documentId: string) =>
 
 export const fetchProductionPackage = (setId: number) =>
   authedBlob(`/api/production-sets/${setId}/package`);
+
+// ── Ontology / entities ──
+
+export const getDocumentEntities = (docId: string) =>
+  request<{ entities: DocEntity[] }>(`/api/documents/${docId}/entities`);
+
+export const getEntity = (entityId: string) =>
+  request<EntityProfile>(`/api/entities/${entityId}`);
+
+export const getEntityMentions = (entityId: string, page = 1, perPage = 20) =>
+  request<EntityMentionsPage>(`/api/entities/${entityId}/mentions?page=${page}&per_page=${perPage}`);
+
+export const getEntityConnections = (entityId: string) =>
+  request<EntityConnections>(`/api/entities/${entityId}/connections`);
+
+export function listEntities(productionId: number, search?: string, entityType?: string, page = 1, perPage = 50) {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (search) params.set('search', search);
+  if (entityType) params.set('entity_type', entityType);
+  return request<EntityListPage>(`/api/productions/${productionId}/entities?${params}`);
+}
+
+export const listMergeSuggestions = (productionId: number, status = 'pending') =>
+  request<MergeSuggestion[]>(`/api/productions/${productionId}/merge-suggestions?status=${status}`);
+
+export const acceptMergeSuggestion = (suggestionId: number) =>
+  request<{ merge_id: number; winner_id: string }>(`/api/merge-suggestions/${suggestionId}/accept`, { method: 'POST' });
+
+export const rejectMergeSuggestion = (suggestionId: number) =>
+  request<{ ok: boolean }>(`/api/merge-suggestions/${suggestionId}/reject`, { method: 'POST' });
+
+export const mergeEntities = (winnerId: string, loserId: string) =>
+  request<{ merge_id: number; winner_id: string }>(`/api/entities/merge`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ winner_id: winnerId, loser_id: loserId }) });
+
+export const triggerEntityExtraction = (productionId: number) =>
+  request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
