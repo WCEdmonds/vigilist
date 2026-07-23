@@ -807,6 +807,31 @@ class ProductionSetLockRequest(BaseModel):
     override_conflicts: bool = False
 
 
+# --- P3-2: defensible sampling ----------------------------------------------
+
+class SampleCreate(BaseModel):
+    name: str
+    purpose: str = "richness"
+    confidence: int = 95
+    margin: float = 0.05
+    expected_rate: float = 0.5
+    size: int | None = None
+    source_type: str | None = None
+
+
+class SampleOut(BaseModel):
+    id: int
+    production_id: int
+    name: str
+    purpose: str
+    params: dict
+    document_ids: list[str]
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- P3-1: search-term hit reports ------------------------------------------
 
 class SearchTermReportCreate(BaseModel):
