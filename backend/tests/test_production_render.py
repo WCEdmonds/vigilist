@@ -20,6 +20,8 @@ class FakePS:
         self.prefix = kw.get("prefix", "SMITH")
         self.padding = kw.get("padding", 6)
         self.designation = kw.get("designation", None)
+        self.image_format = kw.get("image_format", "pdf")
+        self.native_file_types = kw.get("native_file_types", [])
         self.render_status = kw.get("render_status", "rendering")
         self.render_error = None
         self.rendered_at = None
@@ -35,6 +37,7 @@ class FakeItem:
         self.pages = kw.get("pages", 2)
         self.designation = kw.get("designation", None)
         self.output_path = kw.get("output_path", None)
+        self.produce_native = kw.get("produce_native", False)
 
 
 class FakeDoc:
@@ -159,3 +162,36 @@ def test_finalize_flips_status_only_when_all_rendered():
     )
     assert asyncio.run(pr.finalize_if_complete(db2, 1)) is False
     assert ps2.render_status == "rendering"
+
+
+# --- P2-5: TIFF + native slip-sheets ---------------------------------------
+
+def test_render_item_tiff_uploads_per_page(monkeypatch):
+    uploads, burns = _spies(monkeypatch)
+    doc_id = uuid4()
+    item = FakeItem(doc_id, disposition="produce")
+    db = FakeSession(get_objects={("Document", doc_id): FakeDoc(doc_id)})
+    out = asyncio.run(pr.render_item(db, FakePS(image_format="tiff"), item))
+    assert len(uploads) == 2
+    assert all(ct == "image/tiff" for _, ct, _ in uploads)
+    assert out == "productions/1/production_sets/1/tiff/SMITH000001.tif"
+    assert item.output_path == out
+
+
+def test_render_item_native_uses_native_slipsheet(monkeypatch):
+    uploads, burns = _spies(monkeypatch)
+    titles = []
+    real_slip = pr.slip_sheet
+
+    def spy(bates, designation, title="DOCUMENT WITHHELD"):
+        titles.append(title)
+        return real_slip(bates, designation, title)
+
+    monkeypatch.setattr(pr, "slip_sheet", spy)
+    doc_id = uuid4()
+    item = FakeItem(doc_id, disposition="produce", produce_native=True, pages=1)
+    db = FakeSession(get_objects={("Document", doc_id): FakeDoc(doc_id)})
+    asyncio.run(pr.render_item(db, FakePS(), item))
+    assert titles == ["PRODUCED IN NATIVE FORMAT"]
+    assert burns == []
+    assert len(uploads) == 1

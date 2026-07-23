@@ -85,3 +85,18 @@ def test_manifest_dict_shape():
     assert "generated_at" in m
     m2 = manifest_dict({}, {}, {}, ["gap"], [])
     assert m2["continuity"]["ok"] is False
+
+
+def test_opt_paged_round_trips_through_importer(tmp_path):
+    from app.services.loadfile_export import opt_bytes_paged
+
+    docs = [("VOL001", [("P000001", ".\\VOL001\\IMAGES\\P000001.tif"),
+                        ("P000002", ".\\VOL001\\IMAGES\\P000002.tif")]),
+            ("VOL001", [("P000003", ".\\VOL001\\IMAGES\\P000003.tif")])]
+    p = tmp_path / "paged.opt"
+    p.write_bytes(opt_bytes_paged(docs))
+    parsed = parse_opt(str(p))
+    assert parsed == {
+        "P000001": ["./VOL001/IMAGES/P000001.tif", "./VOL001/IMAGES/P000002.tif"],
+        "P000003": ["./VOL001/IMAGES/P000003.tif"],
+    }

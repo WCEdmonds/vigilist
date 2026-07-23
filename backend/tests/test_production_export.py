@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 import zipfile
 from uuid import uuid4
 
@@ -26,6 +27,9 @@ class FakePS:
         self.package_error = None
         self.package_path = None
         self.packaged_at = None
+        self.image_format = kw.get("image_format", "pdf")
+        self.native_file_types = kw.get("native_file_types", [])
+        self.volume_max_mb = kw.get("volume_max_mb", None)
 
 
 class FakeItem:
@@ -39,6 +43,7 @@ class FakeItem:
         self.designation = kw.get("designation", None)
         self.output_path = kw.get("output_path", f"productions/1/x/{bates_begin}.pdf")
         self.sort_order = kw.get("sort_order", 1)
+        self.produce_native = kw.get("produce_native", False)
 
 
 class FakeDoc:
@@ -57,6 +62,7 @@ class FakeDoc:
         self.file_hash_md5 = "md5x"
         self.file_hash_sha256 = "shax"
         self.text_content = kw.get("text_content", "hello text")
+        self.native_path = kw.get("native_path", None)
 
 
 def test_package_path_for():
@@ -96,7 +102,7 @@ def test_compute_manifest_counts_and_continuity():
              FakeItem(d2, "SMITH000005", "SMITH000005", 1, "withhold")]
     m = pe.compute_manifest(FakePS(), items)
     assert m["counts"] == {"documents": 2, "pages": 3, "produce": 1,
-                           "redact_in_part": 0, "withhold": 1}
+                           "redact_in_part": 0, "withhold": 1, "native": 0}
     assert m["bates_range"] == {"begin": "SMITH000001", "end": "SMITH000005"}
     assert m["continuity"]["ok"] is False  # gap 000003-000004
     assert m["artifacts"][0]["path"].endswith("SMITH000001.pdf")
@@ -134,8 +140,8 @@ def test_package_set_happy_path(monkeypatch):
     zf = zipfile.ZipFile(io.BytesIO(captured["zip"]))
     names = set(zf.namelist())
     assert names == {"DATA/SMITH.dat", "DATA/SMITH.opt",
-                     "PDFS/SMITH000001.pdf", "PDFS/SMITH000002.pdf",
-                     "TEXT/SMITH000001.txt", "manifest.json"}
+                     "VOL001/PDFS/SMITH000001.pdf", "VOL001/PDFS/SMITH000002.pdf",
+                     "VOL001/TEXT/SMITH000001.txt", "manifest.json"}
     manifest = zf.read("manifest.json").decode()
     assert "sha256" in manifest
     assert captured["remote"] == (ps.package_path, "application/zip")
@@ -168,3 +174,99 @@ def test_package_set_requires_rendered():
     db = FakeSession(get_objects={("ProductionSet", 1): ps})
     asyncio.run(pe.package_set(db, 1))
     assert ps.package_status == "error"
+
+
+# --- P2-5: native, TIFF, volumes -------------------------------------------
+
+def _capture_upload(captured):
+    def fake_upload(local_path, remote_path, content_type=None):
+        with open(local_path, "rb") as f:
+            captured["zip"] = f.read()
+        captured["remote"] = (remote_path, content_type)
+        return remote_path
+    return fake_upload
+
+
+def test_package_native_document(monkeypatch):
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "produce",
+                      produce_native=True, sort_order=1)]
+    docs = [FakeDoc(d1, native_path="productions/1/raw/loads/x/book.xlsx",
+                    file_type="spreadsheet")]
+    ps = FakePS(native_file_types=["spreadsheet"])
+    captured = {}
+
+    def fake_download(path):
+        return b"NATIVEBYTES" if path.endswith(".xlsx") else b"%PDF-fake"
+
+    monkeypatch.setattr(pe.storage, "get_download_bytes", fake_download)
+    monkeypatch.setattr(pe.storage, "upload_file", _capture_upload(captured))
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("FROM production_set_items", FakeResult(items=items)),
+            ("FROM documents", FakeResult(items=docs)),
+        ],
+    )
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "packaged"
+    zf = zipfile.ZipFile(io.BytesIO(captured["zip"]))
+    names = set(zf.namelist())
+    assert "VOL001/NATIVES/SMITH000001.xlsx" in names
+    dat = zf.read("DATA/SMITH.dat").decode("utf-8-sig")
+    assert "NATIVES" in dat and "SMITH000001.xlsx" in dat
+
+
+def test_package_tiff_pages_and_paged_opt(monkeypatch):
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000002", 2, "produce", sort_order=1)]
+    docs = [FakeDoc(d1)]
+    ps = FakePS(image_format="tiff")
+    captured = {}
+    monkeypatch.setattr(pe.storage, "get_download_bytes", lambda path: b"TIFBYTES")
+    monkeypatch.setattr(pe.storage, "upload_file", _capture_upload(captured))
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("FROM production_set_items", FakeResult(items=items)),
+            ("FROM documents", FakeResult(items=docs)),
+        ],
+    )
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "packaged"
+    zf = zipfile.ZipFile(io.BytesIO(captured["zip"]))
+    names = set(zf.namelist())
+    assert "VOL001/IMAGES/SMITH000001.tif" in names
+    assert "VOL001/IMAGES/SMITH000002.tif" in names
+    opt = zf.read("DATA/SMITH.opt").decode()
+    assert ",Y,,,2" in opt          # first page: doc break + page count
+    assert ",,,," in opt            # continuation page
+
+
+def test_package_volume_split(monkeypatch):
+    d1, d2 = uuid4(), uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "produce", sort_order=1,
+                      output_path="productions/1/x/SMITH000001.pdf"),
+             FakeItem(d2, "SMITH000002", "SMITH000002", 1, "produce", sort_order=2,
+                      output_path="productions/1/x/SMITH000002.pdf")]
+    docs = [FakeDoc(d1, text_content=None), FakeDoc(d2, text_content=None)]
+    ps = FakePS(volume_max_mb=1)  # 1 MB cap; each artifact is ~0.7 MB
+    captured = {}
+    monkeypatch.setattr(pe.storage, "get_download_bytes", lambda path: b"x" * 700_000)
+    monkeypatch.setattr(pe.storage, "upload_file", _capture_upload(captured))
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("FROM production_set_items", FakeResult(items=items)),
+            ("FROM documents", FakeResult(items=docs)),
+        ],
+    )
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "packaged"
+    zf = zipfile.ZipFile(io.BytesIO(captured["zip"]))
+    names = set(zf.namelist())
+    assert "VOL001/PDFS/SMITH000001.pdf" in names
+    assert "VOL002/PDFS/SMITH000002.pdf" in names
+    manifest = json.loads(zf.read("manifest.json"))
+    assert [v["label"] for v in manifest["volumes"]] == ["VOL001", "VOL002"]
+    assert all(v["documents"] == 1 for v in manifest["volumes"])

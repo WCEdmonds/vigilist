@@ -465,6 +465,10 @@ class ProductionSet(Base):
     # P2-3.5 — validation conflict override audit (Relativity "Restriction override by/on")
     conflicts_overridden_by = Column(String(128), nullable=True)
     conflicts_overridden_at = Column(DateTime, nullable=True)
+    # P2-5 — output options
+    image_format = Column(String(10), nullable=False, default="pdf")  # 'pdf' | 'tiff'
+    native_file_types = Column(JSONB, nullable=False, default=list)   # file_type values produced natively
+    volume_max_mb = Column(Integer, nullable=True)                    # NULL = single volume
 
     items = relationship("ProductionSetItem", back_populates="production_set", cascade="all, delete-orphan")
 
@@ -487,7 +491,8 @@ class ProductionSetItem(Base):
     pages = Column(Integer, nullable=True)          # snapshot: 1 for withhold, else page_count
     disposition = Column(String(20), nullable=True) # snapshot: 'produce' | 'redact_in_part' | 'withhold'
     designation = Column(String(100), nullable=True)  # per-item override of the set default
-    output_path = Column(String(500), nullable=True)  # GCS path of rendered PDF
+    output_path = Column(String(500), nullable=True)  # GCS path of rendered PDF (or first TIFF page)
+    produce_native = Column(Boolean, nullable=False, default=False)  # P2-5 snapshot at lock
 
     production_set = relationship("ProductionSet", back_populates="items")
 
