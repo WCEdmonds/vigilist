@@ -61,6 +61,8 @@ async def list_documents(
     tag_id: int | None = None,
     has_annotations: bool | None = None,
     file_type: str | None = Query(None, description="Filter by file type: video, audio, pdf, office, image, email, native, images_only"),
+    source_party: str | None = Query(None, description="Filter by source party label"),
+    source_type: str | None = Query(None, pattern="^(collection|received)$"),
     sort: str = Query("bates", pattern="^(bates|recent|size)$"),
     cluster_id: int | None = None,
     ai_decision: str | None = None,
@@ -105,6 +107,13 @@ async def list_documents(
             conditions = [func.lower(Document.native_path).like(f"%{ext}") for ext in exts]
             query = query.where(or_(*conditions))
             count_query = count_query.where(or_(*conditions))
+
+    if source_party:
+        query = query.where(Document.source_party == source_party)
+        count_query = count_query.where(Document.source_party == source_party)
+    if source_type:
+        query = query.where(Document.source_type == source_type)
+        count_query = count_query.where(Document.source_type == source_type)
 
     if cluster_id:
         from app.models import DocumentClusterAssignment
@@ -299,6 +308,26 @@ async def get_metadata_keys(
     result = await db.execute(base.distinct())
     keys = sorted(row[0] for row in result.all())
     return keys
+
+
+@router.get("/source-parties")
+async def list_source_parties(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Distinct source-party labels for the source filter dropdown (P0-SP5)."""
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+    rows = (await db.execute(
+        select(Document.source_party)
+        .where(Document.production_id == production_id,
+               Document.source_party.is_not(None))
+        .distinct()
+        .order_by(Document.source_party)
+    )).all()
+    return {"source_parties": [r[0] for r in rows]}
 
 
 @router.get("/by-bates")
