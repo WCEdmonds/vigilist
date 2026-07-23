@@ -135,6 +135,11 @@ async def start_processing(
     field_mapping = body.get("field_mapping") or {}
     if source_format == "native":
         field_mapping = {"custodian": (body.get("custodian") or "").strip() or None}
+    source_party = (body.get("source_party") or "").strip() or None
+    source_type = body.get("source_type") or None
+    if source_type not in (None, "collection", "received"):
+        raise HTTPException(status_code=422, detail="source_type must be 'collection' or 'received'")
+    field_mapping = {**field_mapping, "source_party": source_party, "source_type": source_type}
     batch_size = 10 if source_format in ("generic_pdf", "native") else INGEST_BATCH_SIZE
 
     if task_service.is_configured():
