@@ -14,9 +14,20 @@ frontend/dist/
 .env.local
 *.env
 
-# Firebase
+# Firebase / GCP service-account keys — broad match so a stray copy,
+# rename, or double-extension (e.g. *.json.json) can never be committed.
 backend/firebase-service-account.json
+*service-account*
+*serviceaccount*
+*-adminsdk-*.json
+gcp-*.json
 .firebase/
+
+# Secrets — any local secret dumps
+secrets.*
+*.secret
+*.pem
+*.key
 
 # Plugins/tools
 .superpowers/
