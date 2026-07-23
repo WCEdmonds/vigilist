@@ -650,6 +650,10 @@ class ProductionSetOut(BaseModel):
     render_error: str | None = None
     rendered_at: datetime | None = None
     rendered_count: int = 0
+    package_status: str = "not_started"
+    package_error: str | None = None
+    package_path: str | None = None
+    packaged_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
