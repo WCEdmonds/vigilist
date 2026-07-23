@@ -562,7 +562,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterAiDecision) && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterAiDecision || filterSourceParty || workMode !== 'all') && (
           <div>
             <div className="section-header">
               <h2 className="section-title">

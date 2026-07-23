@@ -150,3 +150,21 @@ def test_source_parties_403(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(rd.list_source_parties(production_id=1, db=FakeSession(), user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+def test_collection_filter_includes_undesignated():
+    # Outgoing mode must keep NULL-source (legacy) documents visible.
+    db = FakeSession()
+    asyncio.run(search_documents(
+        db, "", accessible_production_ids=[1], source_type="collection"))
+    joined = "\n".join(db.executed)
+    assert "IS DISTINCT FROM" in joined
+
+
+def test_received_filter_is_exact():
+    db = FakeSession()
+    asyncio.run(search_documents(
+        db, "", accessible_production_ids=[1], source_type="received"))
+    joined = "\n".join(db.executed)
+    assert "IS DISTINCT FROM" not in joined
+    assert "documents.source_type" in joined
