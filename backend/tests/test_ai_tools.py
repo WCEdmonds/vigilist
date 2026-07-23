@@ -28,6 +28,7 @@ def test_expected_tool_set():
         "find_similar_documents",
         "get_duplicates",
         "get_corpus_stats",
+        "lookup_entity",
     }
 
 
@@ -169,3 +170,10 @@ def test_get_document_allows_in_scope_uuid():
     ))
     assert run.ok is True
     assert "ABC-1" in run.result_summary
+
+
+def test_lookup_entity_registered():
+    from app.services.ai_tools import TOOLS, _DISPATCH, tool_use_summary
+    assert any(t["name"] == "lookup_entity" for t in TOOLS)
+    assert "lookup_entity" in _DISPATCH
+    assert "Jorge" in tool_use_summary("lookup_entity", {"name": "Jorge"})
