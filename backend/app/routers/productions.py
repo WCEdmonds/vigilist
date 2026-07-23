@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -466,3 +466,41 @@ async def revoke_access(
         await sync_user_claims(db, revoked_user)
 
     return {"ok": True}
+
+
+@router.post("/{production_id}/source-designation")
+async def designate_sources(
+    production_id: int,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Bulk-designate documents' source (P0-SP5 backfill for legacy loads)."""
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or higher role required")
+
+    source_type = body.get("source_type")
+    if source_type not in ("collection", "received"):
+        raise HTTPException(status_code=422, detail="source_type must be 'collection' or 'received'")
+    source_party = (body.get("source_party") or "").strip() or None
+    only_undesignated = bool(body.get("only_undesignated", True))
+
+    stmt = (
+        sa_update(Document)
+        .where(Document.production_id == production_id)
+        .values(source_type=source_type, source_party=source_party)
+    )
+    if only_undesignated:
+        stmt = stmt.where(Document.source_type.is_(None))
+    result = await db.execute(stmt)
+    updated = getattr(result, "rowcount", 0) or 0
+    await log_action(db, user, "source_designation_set", "production", str(production_id),
+                     production_id=production_id,
+                     details={"source_type": source_type, "source_party": source_party,
+                              "only_undesignated": only_undesignated, "updated": updated})
+    await db.commit()
+    return {"updated": updated}
