@@ -23,6 +23,7 @@ PDF_PIN_COLORS: dict[str, tuple[int, int, int]] = {
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
+from app.services.produced_bates import resolve_produced_bates
 from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut, get_file_type
 from app.services.redaction_render import burn_page
 
@@ -370,6 +371,17 @@ async def get_by_bates(
                         == normalized
                     )
                 ).limit(1)
+            )
+            doc = result.scalars().first()
+
+    if not doc:
+        # Produced Bates (numbers WE stamped) live on production_set_items,
+        # not documents — resolve those too so citations to produced numbers
+        # jump to the right document.
+        produced_doc_id = await resolve_produced_bates(db, accessible, production_id, bates)
+        if produced_doc_id is not None:
+            result = await db.execute(
+                _scoped(base.where(Document.id == produced_doc_id)).limit(1)
             )
             doc = result.scalars().first()
 
