@@ -361,6 +361,19 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
             </div>
           )}
         </div>
+
+        {openEntityId && (
+          <EntityPanel
+            entityId={openEntityId}
+            onClose={() => setOpenEntityId(null)}
+            onOpenEntity={id => setOpenEntityId(id)}
+            onOpenDocument={(targetDocId, entityId) => {
+              setFocusEntityId(entityId);
+              setMobileTab('text');
+              if (targetDocId !== docId) onNavigate(targetDocId);
+            }}
+          />
+        )}
       </div>
     );
   }
