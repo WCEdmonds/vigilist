@@ -1,6 +1,8 @@
 /* eslint-disable react-refresh/only-export-components -- intentional: AuthProvider co-located with its useAuth hook */
 import {
   GoogleAuthProvider,
+  OAuthProvider,
+  SAMLAuthProvider,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -26,6 +28,7 @@ interface AuthCtx {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
+  loginWithSSO: (providerId: string) => Promise<void>;
   logout: () => Promise<void>;
   getIdToken: () => Promise<string>;
 }
@@ -113,6 +116,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const loginWithSSO = async (providerId: string) => {
+    const provider = providerId.startsWith('saml.')
+      ? new SAMLAuthProvider(providerId)
+      : new OAuthProvider(providerId);
+    const cred = await signInWithPopup(auth, provider);
+    await syncWithBackend(cred.user);
+    setUser({
+      uid: cred.user.uid,
+      email: cred.user.email || '',
+      displayName: cred.user.displayName,
+      photoURL: cred.user.photoURL,
+    });
+  };
+
   const logout = async () => {
     await signOut(auth);
     setUser(null);
@@ -125,7 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, login, register, loginWithGoogle, logout, getIdToken }}>
+    <AuthContext.Provider value={{ user, loading, error, login, register, loginWithGoogle, loginWithSSO, logout, getIdToken }}>
       {children}
     </AuthContext.Provider>
   );
