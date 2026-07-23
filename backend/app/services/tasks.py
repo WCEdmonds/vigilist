@@ -150,3 +150,73 @@ def enqueue_reocr_batch(
         "Enqueued re-OCR batch for production %d: offset %d limit %d",
         production_id, offset, limit,
     )
+
+
+def enqueue_render_batch(set_id: int, document_ids: list[str]) -> None:
+    """Enqueue a Cloud Task to render one batch of production-set documents."""
+    if not is_configured():
+        raise RuntimeError("Cloud Tasks not configured")
+
+    client = tasks_v2.CloudTasksClient()
+    queue_path = client.queue_path(
+        settings.gcp_project_id,
+        settings.gcp_location,
+        settings.cloud_tasks_queue,
+    )
+
+    handler_url = f"{settings.cloud_run_service_url}/api/production-sets/render-batch"
+    payload = json.dumps({"set_id": set_id, "document_ids": document_ids}).encode()
+
+    task = tasks_v2.Task(
+        http_request=tasks_v2.HttpRequest(
+            http_method=tasks_v2.HttpMethod.POST,
+            url=handler_url,
+            headers={"Content-Type": "application/json"},
+            body=payload,
+            oidc_token=tasks_v2.OidcToken(
+                service_account_email=settings.cloud_tasks_service_account,
+                audience=settings.cloud_run_service_url,
+            ),
+        ),
+        # Rendering a batch (image download + burn + stamp + PDF + upload)
+        # can run long; use the Cloud Tasks maximum dispatch deadline.
+        dispatch_deadline=duration_pb2.Duration(seconds=1800),
+    )
+
+    client.create_task(parent=queue_path, task=task)
+    logger.info("Enqueued render batch for set %d: %d documents",
+                set_id, len(document_ids))
+
+
+def enqueue_package(set_id: int) -> None:
+    """Enqueue a Cloud Task to package one production set into its ZIP."""
+    if not is_configured():
+        raise RuntimeError("Cloud Tasks not configured")
+
+    client = tasks_v2.CloudTasksClient()
+    queue_path = client.queue_path(
+        settings.gcp_project_id,
+        settings.gcp_location,
+        settings.cloud_tasks_queue,
+    )
+
+    handler_url = f"{settings.cloud_run_service_url}/api/production-sets/package-worker"
+    payload = json.dumps({"set_id": set_id}).encode()
+
+    task = tasks_v2.Task(
+        http_request=tasks_v2.HttpRequest(
+            http_method=tasks_v2.HttpMethod.POST,
+            url=handler_url,
+            headers={"Content-Type": "application/json"},
+            body=payload,
+            oidc_token=tasks_v2.OidcToken(
+                service_account_email=settings.cloud_tasks_service_account,
+                audience=settings.cloud_run_service_url,
+            ),
+        ),
+        # Zipping a whole production (downloads + hashing) can run long.
+        dispatch_deadline=duration_pb2.Duration(seconds=1800),
+    )
+
+    client.create_task(parent=queue_path, task=task)
+    logger.info("Enqueued packaging for production set %d", set_id)
