@@ -405,12 +405,17 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   }
 
   // Entities view full-screen mode (key players + merge suggestion queue)
+  // Leaving via Back has no deep-link intent, so the panel id is cleared
+  // before the view flag flips — otherwise a stale id from this visit would
+  // auto-open a panel the next time a full-screen view mounts. (This is
+  // defense-in-depth: exclusivity between full-screen views is already
+  // guaranteed structurally by the if-return branch order below.)
   if (showEntities) {
     return (
       <EntitiesView
         productionId={production.id}
         onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
-        onBack={() => { setShowEntities(false); refreshList(); }}
+        onBack={() => { setEntityPanelId(null); setShowEntities(false); refreshList(); }}
         initialEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
       />
@@ -418,12 +423,14 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   }
 
   // Timeline view full-screen mode (chronological case events)
+  // Same rationale as the Entities onBack above — Back has no deep-link
+  // intent, so clear the stale panel id first.
   if (showTimeline) {
     return (
       <EntityTimelineView
         productionId={production.id}
         onViewDocument={(id) => { setShowTimeline(false); setViewDocId(id); refreshList(); }}
-        onBack={() => { setShowTimeline(false); refreshList(); }}
+        onBack={() => { setEntityPanelId(null); setShowTimeline(false); refreshList(); }}
         initialEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
       />
@@ -484,10 +491,14 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onLogoClick={clearSearch}
         initialQuery={searchQuery}
         onAsk={handleAsk}
-        onOpenReview={() => setShowReview(true)}
-        onOpenEntities={() => { setShowTimeline(false); setShowEntities(true); }}
-        onOpenTimeline={() => { setShowEntities(false); setShowTimeline(true); }}
-        onOpenDashboard={() => setShowDashboard(true)}
+        /* entityPanelId is cleared before each target view flag flips —
+           these are plain nav clicks, not deep links, so no panel should
+           carry over from whatever view was open before. Defense-in-depth
+           only: view exclusivity is already structural (branch order above). */
+        onOpenReview={() => { setEntityPanelId(null); setShowReview(true); }}
+        onOpenEntities={() => { setEntityPanelId(null); setShowTimeline(false); setShowEntities(true); }}
+        onOpenTimeline={() => { setEntityPanelId(null); setShowEntities(false); setShowTimeline(true); }}
+        onOpenDashboard={() => { setEntityPanelId(null); setShowDashboard(true); }}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
         onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}

@@ -36,10 +36,10 @@ export default function EntityTimelineView({ productionId, initialEntityId, onVi
   const [total, setTotal] = useState(0);
   const [undatedCount, setUndatedCount] = useState(0);
   const [page, setPage] = useState(1);
-  const [entityFilter, setEntityFilter] = useState<string>(initialEntityId ?? '');
+  const [entityFilter, setEntityFilter] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState('');
   const [filterOptions, setFilterOptions] = useState<EntityListItem[]>([]);
-  const [openEntityId, setOpenEntityId] = useState<string | null>(null);
+  const [openEntityId, setOpenEntityId] = useState<string | null>(initialEntityId ?? null);
   const [showUndated, setShowUndated] = useState(false);
 
   const openEntity = (id: string | null) => { setOpenEntityId(id); onOpenEntityChange?.(id); };
@@ -120,7 +120,7 @@ export default function EntityTimelineView({ productionId, initialEntityId, onVi
             {g.items.map(renderEvent)}
           </div>
         ))}
-        {events.length < total - undatedCount + undated.length && (
+        {events.length < total && (
           <button className="btn btn-xs" onClick={() => load(page + 1, true)}>Load more</button>
         )}
         {undatedCount > 0 && (
@@ -131,7 +131,13 @@ export default function EntityTimelineView({ productionId, initialEntityId, onVi
             {showUndated && undated.map(renderEvent)}
           </div>
         )}
-        {total === 0 && <div className="empty-state">No events extracted yet — run entity extraction from the Entities view.</div>}
+        {total === 0 && (
+          <div className="empty-state">
+            {entityFilter || typeFilter
+              ? 'No events match the current filters.'
+              : 'No events extracted yet — run entity extraction from the Entities view.'}
+          </div>
+        )}
       </div>
 
       {openEntityId && (
