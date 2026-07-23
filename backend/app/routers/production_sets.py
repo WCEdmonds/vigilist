@@ -235,7 +235,8 @@ async def add_documents(
     info_rows = []
     if candidates:
         info_rows = (await db.execute(
-            select(Document.id, Document.production_id, Document.family_id)
+            select(Document.id, Document.production_id, Document.family_id,
+                   Document.source_type)
             .where(Document.id.in_(candidates))
         )).all()
     found = {r[0] for r in info_rows}
@@ -254,6 +255,18 @@ async def add_documents(
             fam_ids = {r[0] for r in fam_rows}
             families_added = len(fam_ids - candidates)
             candidates |= fam_ids
+
+    skipped_received = 0
+    if body.exclude_received:
+        rec_rows = (await db.execute(
+            select(Document.id)
+            .where(Document.id.in_(candidates),
+                   Document.source_type == "received")
+        )).all()
+        for (rdid,) in rec_rows:
+            if rdid not in explicit:
+                candidates.discard(rdid)
+                skipped_received += 1
 
     skipped_duplicates = 0
     if body.exclude_duplicates:
@@ -285,7 +298,8 @@ async def add_documents(
         db.add(ProductionSetItem(production_set_id=set_id, document_id=did))
 
     summary = {"added": len(to_add), "skipped_existing": len(candidates & existing),
-               "skipped_duplicates": skipped_duplicates, "families_added": families_added}
+               "skipped_duplicates": skipped_duplicates, "families_added": families_added,
+               "skipped_received": skipped_received}
     await log_action(db, user, "production_set_documents_added", "production_set",
                      str(set_id), production_id=ps.production_id, details=summary)
     await db.commit()
