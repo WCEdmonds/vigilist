@@ -1,5 +1,8 @@
 """Pure-function tests for entity extraction: parsing, slicing, offsets, dates."""
+import json
 from datetime import date
+
+import pytest
 
 from app.services.entity_extraction import (
     build_extraction_prompt, locate_mentions, parse_email_addresses,
@@ -76,3 +79,67 @@ def test_parse_email_addresses():
 
 def test_prompt_includes_document_text():
     assert "the quick brown" in build_extraction_prompt("the quick brown")
+
+
+_VALID_EVENT = {
+    "description": "Board meeting", "type": "meeting",
+    "date": "2020-01-01", "participants": ["Jorge Rivera"],
+}
+
+_MALFORMED_PAYLOADS = [
+    {"entities": {"name": "X"}, "events": [], "relationships": []},
+    {"entities": 5, "events": [], "relationships": []},
+    {"entities": True, "events": [], "relationships": []},
+    {"entities": [], "events": {"x": 1}, "relationships": []},
+    {"entities": [{"name": "X", "type": "person", "emails": 5}], "events": [], "relationships": []},
+    {"entities": [{"name": "X", "type": "person", "surface_forms": 5}], "events": [], "relationships": []},
+    {"entities": [], "events": [{"description": "y", "type": "meeting", "participants": 5}], "relationships": []},
+]
+
+
+@pytest.mark.parametrize("payload", _MALFORMED_PAYLOADS)
+def test_parse_never_raises_on_malformed_shapes(payload):
+    out = parse_extraction_response(json.dumps(payload))
+    assert isinstance(out, dict)
+    assert set(out.keys()) == {"entities", "events", "relationships"}
+    assert isinstance(out["entities"], list)
+    assert isinstance(out["events"], list)
+    assert isinstance(out["relationships"], list)
+
+
+def test_parse_malformed_field_does_not_block_valid_sibling_field():
+    payload = {"entities": 5, "events": [_VALID_EVENT], "relationships": []}
+    out = parse_extraction_response(json.dumps(payload))
+    assert out["entities"] == []
+    assert len(out["events"]) == 1
+    assert out["events"][0]["description"] == "Board meeting"
+
+
+def test_parse_truncates_oversized_lists():
+    entities = [
+        {"name": f"Person {i}", "type": "person", "surface_forms": [f"Person {i}"]}
+        for i in range(60)
+    ]
+    out = parse_extraction_response(json.dumps({"entities": entities, "events": [], "relationships": []}))
+    assert len(out["entities"]) == 50
+
+    one_entity = [{
+        "name": "Jorge Rivera", "type": "person",
+        "surface_forms": [f"Form {i}" for i in range(12)],
+    }]
+    out2 = parse_extraction_response(json.dumps({"entities": one_entity, "events": [], "relationships": []}))
+    assert len(out2["entities"][0]["surface_forms"]) == 10
+
+
+def test_slice_text_guards_degenerate_overlap():
+    text = "x" * 1000
+
+    slices = slice_text(text, window=100, overlap=100)
+    assert 0 < len(slices) <= 1000
+    assert all(len(s) <= 100 for s in slices)
+    assert text.endswith(slices[-1])
+
+    slices2 = slice_text(text, window=100, overlap=150)
+    assert 0 < len(slices2) <= 1000
+    assert all(len(s) <= 100 for s in slices2)
+    assert text.endswith(slices2[-1])
