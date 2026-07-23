@@ -654,6 +654,8 @@ class ProductionSetOut(BaseModel):
     package_error: str | None = None
     package_path: str | None = None
     packaged_at: datetime | None = None
+    conflicts_overridden_by: str | None = None
+    conflicts_overridden_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -685,3 +687,7 @@ class ProductionSetLockOut(BaseModel):
     page_count: int
     bates_begin: str
     bates_end: str
+
+
+class ProductionSetLockRequest(BaseModel):
+    override_conflicts: bool = False

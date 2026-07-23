@@ -33,6 +33,8 @@ class FakePS:
         self.package_error = None
         self.package_path = kw.get("package_path", None)
         self.packaged_at = None
+        self.conflicts_overridden_by = None
+        self.conflicts_overridden_at = None
 
 
 class FakeItem:
@@ -414,6 +416,7 @@ def test_lock_assigns_and_snapshots(monkeypatch):
     db = FakeSession(
         get_objects={("ProductionSet", 1): ps},
         responders=[
+            ("coalesce", FakeResult()),
             ("is_privilege", FakeResult(rows=[(d1,)])),
             ("redactions", FakeResult(rows=[(d2, 4)])),
             ("production_set_items", FakeResult(items=items)),
@@ -448,6 +451,7 @@ def test_lock_produce_override_keeps_full_pages(monkeypatch):
     db = FakeSession(
         get_objects={("ProductionSet", 1): ps},
         responders=[
+            ("coalesce", FakeResult()),
             ("is_privilege", FakeResult(rows=[(d1,)])),  # tagged, but override wins
             ("redactions", FakeResult(rows=[])),
             ("production_set_items", FakeResult(items=items)),
@@ -699,3 +703,88 @@ def test_package_download_redirects(monkeypatch):
     out = asyncio.run(rps.download_package(set_id=1, db=db, user=FakeUser()))
     assert out.status_code == 307
     assert out.headers["location"].endswith("SMITH_production.zip")
+
+
+# --- validation + lock gating (P2-3.5) -------------------------------------
+
+def test_validation_endpoint_reports_conflicts(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    item = FakeItem(d1, item_id=1)
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
+            ("production_set_items", FakeResult(items=[item])),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+        ],
+    )
+    out = asyncio.run(rps.get_validation(set_id=1, db=db, user=FakeUser()))
+    assert out["total"] == 1
+    assert out["qc_pending"][0]["control_number"] == "C-1"
+
+
+def test_lock_409_on_conflicts_without_override(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    items = [FakeItem(d1, item_id=1)]
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+        ],
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.lock_production_set(set_id=1, body=None, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+    assert "qc_pending=1" in exc.value.detail
+
+
+def test_lock_override_proceeds_and_stamps_audit(monkeypatch):
+    _patch(monkeypatch)
+    from app.schemas import ProductionSetLockRequest
+    d1 = uuid4()
+    items = [FakeItem(d1, item_id=1)]
+    ps = FakePS()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
+            ("redaction_qc_decisions", FakeResult()),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+            ("is_privilege", FakeResult()),
+            ("redactions", FakeResult(rows=[(d1, 2)])),
+            ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None)])),
+        ],
+    )
+    out = asyncio.run(rps.lock_production_set(
+        set_id=1, body=ProductionSetLockRequest(override_conflicts=True),
+        db=db, user=FakeUser()))
+    assert out.doc_count == 1
+    assert ps.status == "locked"
+    assert ps.conflicts_overridden_by == "u1"
+    assert ps.conflicts_overridden_at is not None
+
+
+def test_clean_lock_leaves_override_null(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    items = [FakeItem(d1, item_id=1)]
+    ps = FakePS()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("coalesce", FakeResult()),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+            ("is_privilege", FakeResult()),
+            ("redactions", FakeResult()),
+            ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None)])),
+        ],
+    )
+    asyncio.run(rps.lock_production_set(set_id=1, body=None, db=db, user=FakeUser()))
+    assert ps.status == "locked"
+    assert ps.conflicts_overridden_by is None
