@@ -501,6 +501,24 @@ class ProductionSetItem(Base):
     production_set = relationship("ProductionSet", back_populates="items")
 
 
+class SearchTermReport(Base):
+    """A saved search-term list + its last hit-report run (P3-1)."""
+
+    __tablename__ = "search_term_reports"
+    __table_args__ = (
+        Index("ix_search_term_reports_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    terms = Column(JSONB, nullable=False)
+    results = Column(JSONB, nullable=True)      # last run snapshot
+    computed_at = Column(DateTime, nullable=True)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 class DuplicateGroup(Base):
     __tablename__ = "duplicate_groups"
 
