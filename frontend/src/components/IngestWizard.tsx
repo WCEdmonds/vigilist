@@ -27,6 +27,8 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
   const [files, setFiles] = useState<File[]>([]);
   const [mode, setMode] = useState<'relativity' | 'generic_pdf' | 'native'>('relativity');
   const [custodian, setCustodian] = useState('');
+  const [sourceType, setSourceType] = useState<'collection' | 'received'>('collection');
+  const [sourceParty, setSourceParty] = useState('');
   const [modeWarning, setModeWarning] = useState('');
   const [stage, setStage] = useState<Stage>('setup');
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
@@ -191,7 +193,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         setStage('mapping');
       } else {
         setStage('processing');
-        const ingestJob = await startProcessing(production_id, uploadList.length, mode, {}, custodian);
+        const ingestJob = await startProcessing(production_id, uploadList.length, mode, {}, custodian, sourceParty, sourceType);
         setJob(ingestJob);
         pollStatus(ingestJob.id);
       }
@@ -208,7 +210,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     );
     setStage('processing');
     try {
-      const ingestJob = await startProcessing(mappingProdId, totalFilesRef.current, 'relativity', fieldMapping);
+      const ingestJob = await startProcessing(mappingProdId, totalFilesRef.current, 'relativity', fieldMapping, '', sourceParty, sourceType);
       setJob(ingestJob);
       pollStatus(ingestJob.id);
     } catch (e: unknown) {
@@ -441,6 +443,35 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     >
                       Native files
                     </button>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', display: 'block', marginBottom: 4 }}>Document source</span>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={sourceType === 'collection' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                        onClick={() => setSourceType('collection')}
+                      >
+                        Our collection
+                      </button>
+                      <button
+                        type="button"
+                        className={sourceType === 'received' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                        onClick={() => setSourceType('received')}
+                      >
+                        Received production
+                      </button>
+                    </div>
+                    <label style={{ display: 'block', marginTop: 8 }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>Source label (optional)</span>
+                      <input
+                        className="input"
+                        value={sourceParty}
+                        onChange={e => setSourceParty(e.target.value)}
+                        placeholder={sourceType === 'received' ? 'e.g. ABC Corp' : 'e.g. Our Collection'}
+                        maxLength={255}
+                      />
+                    </label>
                   </div>
                   {mode === 'native' && (
                     <label style={{ display: 'block', marginTop: 8 }}>

@@ -61,15 +61,20 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
 }
 
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string) {
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string, sourceParty?: string, sourceType?: string) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
   if (fileType) params.set('file_type', fileType);
   if (clusterId) params.set('cluster_id', String(clusterId));
   if (aiDecision) params.set('ai_decision', aiDecision);
+  if (sourceParty) params.set('source_party', sourceParty);
+  if (sourceType) params.set('source_type', sourceType);
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
+
+export const getSourceParties = (productionId: number) =>
+  request<{ source_parties: string[] }>(`/api/documents/source-parties?production_id=${productionId}`);
 
 export const getDocument = (id: string) =>
   request<DocumentDetail>(`/api/documents/${id}`);
@@ -182,6 +187,8 @@ export async function searchDocuments(
   metadata?: Record<string, string>,
   mode?: 'fulltext' | 'semantic',
   fileType?: string,
+  sourceParty?: string,
+  sourceType?: string,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -190,6 +197,8 @@ export async function searchDocuments(
   }
   if (mode) params.set('mode', mode);
   if (fileType) params.set('file_type', fileType);
+  if (sourceParty) params.set('source_party', sourceParty);
+  if (sourceType) params.set('source_type', sourceType);
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
@@ -441,6 +450,8 @@ export const startProcessing = (
   sourceFormat: 'relativity' | 'generic_pdf' | 'native' = 'relativity',
   fieldMapping: Record<string, string> = {},
   custodian: string = '',
+  sourceParty: string = '',
+  sourceType: 'collection' | 'received' = 'collection',
 ) =>
   request<IngestJob>('/api/ingest/process', json({
     production_id: productionId,
@@ -448,6 +459,8 @@ export const startProcessing = (
     source_format: sourceFormat,
     field_mapping: fieldMapping,
     custodian,
+    source_party: sourceParty,
+    source_type: sourceType,
   }));
 
 export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
