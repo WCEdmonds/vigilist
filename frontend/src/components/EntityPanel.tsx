@@ -10,24 +10,29 @@ interface Props {
 }
 
 export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDocument }: Props) {
-  const [profile, setProfile] = useState<EntityProfile | null>(null);
-  const [mentions, setMentions] = useState<EntityMentionsPage | null>(null);
-  const [connections, setConnections] = useState<EntityConnections | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<{ id: string; value: EntityProfile } | null>(null);
+  const [mentions, setMentions] = useState<{ id: string; value: EntityMentionsPage } | null>(null);
+  const [connections, setConnections] = useState<{ id: string; value: EntityConnections } | null>(null);
+  const [error, setError] = useState<{ id: string; value: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     getEntity(entityId)
-      .then(p => { if (!cancelled) setProfile(p); })
-      .catch(e => { if (!cancelled) setError(String(e.message || e)); });
+      .then(p => { if (!cancelled) setProfile({ id: entityId, value: p }); })
+      .catch(e => { if (!cancelled) setError({ id: entityId, value: String(e.message || e) }); });
     getEntityMentions(entityId)
-      .then(m => { if (!cancelled) setMentions(m); })
+      .then(m => { if (!cancelled) setMentions({ id: entityId, value: m }); })
       .catch(() => {});
     getEntityConnections(entityId)
-      .then(c => { if (!cancelled) setConnections(c); })
+      .then(c => { if (!cancelled) setConnections({ id: entityId, value: c }); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [entityId]);
+
+  const currentProfile = profile?.id === entityId ? profile.value : null;
+  const currentMentions = mentions?.id === entityId ? mentions.value : null;
+  const currentConnections = connections?.id === entityId ? connections.value : null;
+  const currentError = error?.id === entityId ? error.value : null;
 
   return (
     <div className="entity-panel" style={{
@@ -37,39 +42,39 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
     }}>
       <div className="panel-header" style={{ display: 'flex', alignItems: 'center' }}>
         <span style={{ fontWeight: 600 }}>
-          {profile ? profile.canonical_name : 'Loading…'}
-          {profile && (
+          {currentProfile ? currentProfile.canonical_name : 'Loading…'}
+          {currentProfile && (
             <span className="badge" style={{ marginLeft: 8, fontSize: 'var(--text-xs)' }}>
-              {profile.entity_type === 'person' ? 'Person' : 'Organization'}
+              {currentProfile.entity_type === 'person' ? 'Person' : 'Organization'}
             </span>
           )}
         </span>
         <button onClick={onClose} className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }} aria-label="Close entity panel">✕</button>
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)', fontSize: 'var(--text-sm)' }}>
-        {error && <div className="empty-state">{error}</div>}
-        {profile && (
+        {currentError && <div className="empty-state">{currentError}</div>}
+        {currentProfile && (
           <>
-            {profile.attributes.role && <div style={{ marginBottom: 8, opacity: 0.85 }}>{profile.attributes.role}</div>}
-            {profile.overview
-              ? <p style={{ marginBottom: 12 }}>{profile.overview}</p>
+            {currentProfile.attributes.role && <div style={{ marginBottom: 8, opacity: 0.85 }}>{currentProfile.attributes.role}</div>}
+            {currentProfile.overview
+              ? <p style={{ marginBottom: 12 }}>{currentProfile.overview}</p>
               : <p style={{ marginBottom: 12, opacity: 0.6 }}>No overview yet.</p>}
             <div style={{ marginBottom: 12, opacity: 0.75 }}>
-              Mentioned {profile.mention_count} times across {profile.document_count} documents.
+              Mentioned {currentProfile.mention_count} times across {currentProfile.document_count} documents.
             </div>
-            {profile.aliases.length > 0 && (
+            {currentProfile.aliases.length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div className="panel-header" style={{ padding: 0 }}>Also appears as</div>
-                <div>{profile.aliases.join(' · ')}</div>
+                <div>{currentProfile.aliases.join(' · ')}</div>
               </div>
             )}
           </>
         )}
 
-        {connections && (connections.stated.length > 0 || connections.cooccurrence.length > 0) && (
+        {currentConnections && (currentConnections.stated.length > 0 || currentConnections.cooccurrence.length > 0) && (
           <div style={{ marginBottom: 16 }}>
             <div className="panel-header" style={{ padding: 0 }}>Connections</div>
-            {connections.stated.map((c, i) => (
+            {currentConnections.stated.map((c, i) => (
               <div key={`s${i}`} style={{ padding: '4px 0' }}>
                 <button className="btn btn-ghost btn-xs" onClick={() => onOpenEntity(c.entity_id)}>
                   {c.canonical_name}
@@ -78,7 +83,7 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
                 {c.description && <div style={{ opacity: 0.6, fontSize: 'var(--text-xs)' }}>{c.description}</div>}
               </div>
             ))}
-            {connections.cooccurrence.map((c, i) => (
+            {currentConnections.cooccurrence.map((c, i) => (
               <div key={`c${i}`} style={{ padding: '4px 0' }}>
                 <button className="btn btn-ghost btn-xs" onClick={() => onOpenEntity(c.entity_id)}>
                   {c.canonical_name}
@@ -89,10 +94,10 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
           </div>
         )}
 
-        {mentions && mentions.documents.length > 0 && (
+        {currentMentions && currentMentions.documents.length > 0 && (
           <div>
-            <div className="panel-header" style={{ padding: 0 }}>Mentions ({mentions.total} documents)</div>
-            {mentions.documents.map(d => (
+            <div className="panel-header" style={{ padding: 0 }}>Mentions ({currentMentions.total} documents)</div>
+            {currentMentions.documents.map(d => (
               <div key={d.document_id} style={{ margin: '8px 0' }}>
                 <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }}
                         onClick={() => onOpenDocument(d.document_id, entityId)}>
