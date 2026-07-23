@@ -519,6 +519,28 @@ class SearchTermReport(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+class Sample(Base):
+    """A frozen random draw for defensible sampling (P3-2).
+
+    purpose: 'richness' | 'acceptance' | 'control'. The id list is frozen at
+    draw time so the denominator cannot drift after coding starts.
+    """
+
+    __tablename__ = "samples"
+    __table_args__ = (
+        Index("ix_samples_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    purpose = Column(String(20), nullable=False)
+    params = Column(JSONB, nullable=False)
+    document_ids = Column(JSONB, nullable=False)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 class DuplicateGroup(Base):
     __tablename__ = "duplicate_groups"
 
