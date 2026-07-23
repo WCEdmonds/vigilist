@@ -42,6 +42,10 @@ async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> E
     return entity
 
 
+# Route note: Starlette matches routes in REGISTRATION order (first match wins).
+# This 2-segment literal path can't collide with the 3-segment
+# /documents/{doc_id}/entities sibling today, but keep it registered before any
+# future parameterized 2-segment /documents/{...} route.
 @router.get("/documents/entities-summary", response_model=EntitiesSummaryOut)
 async def get_entities_summary(
     ids: str = "",

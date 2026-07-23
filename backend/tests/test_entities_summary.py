@@ -41,3 +41,13 @@ def test_summary_caps_ids_and_rejects_garbage(monkeypatch):
     assert exc.value.status_code == 422
     out = asyncio.run(er.get_entities_summary(ids="not-a-uuid,,", db=FakeSession(), user=FakeUser()))
     assert out.summaries == {}
+
+
+def test_summary_scoping_filter_pinned_in_sql(monkeypatch):
+    _patch(monkeypatch, accessible=(2,))
+    db = FakeSession(responders=[("FROM entity_mentions", FakeResult(rows=[]))])
+    out = asyncio.run(er.get_entities_summary(ids=str(D1), db=db, user=FakeUser()))
+    assert out.summaries == {}
+    # SQL-contract pin: the production scope filter must be present in the executed query;
+    # removing .in_(accessible) would silently leak cross-tenant chips.
+    assert "entity_mentions.production_id IN" in db.executed[-1]
