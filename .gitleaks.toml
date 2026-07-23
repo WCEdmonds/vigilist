@@ -1,0 +1,25 @@
+# gitleaks configuration for Vigilist.
+# Extends the default ruleset (Neon URIs, GCP service-account keys, generic
+# API keys, private keys, etc.) with narrowly-scoped allowlisting.
+[extend]
+useDefault = true
+
+# The Firebase WEB config is public by design: it identifies the project and is
+# shipped to every browser. Security comes from Firebase Security Rules and App
+# Check, not from keeping this key private. Scoped with condition = "AND" so
+# ONLY the known public API-key value in this one file is suppressed — a real
+# secret (private key, token, etc.) added to the file is still detected.
+[[allowlists]]
+description = "Public Firebase Web API key in frontend/src/firebase.ts"
+condition = "AND"
+paths = ['''frontend/src/firebase\.ts''']
+regexes = ['''AIza[0-9A-Za-z_-]{35}''']
+
+# Non-secret connection strings: the local-dev Postgres default and
+# documentation placeholders (USER:PASS / <user>:<password>).
+[[allowlists]]
+description = "Dev/doc placeholder connection strings"
+regexes = [
+  '''postgresql\+asyncpg://vigilist:vigilist_dev@localhost''',
+  '''://(<user>|USER):(<password>|PASS(WORD)?)@''',
+]
