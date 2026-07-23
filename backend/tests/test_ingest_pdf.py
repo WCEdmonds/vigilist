@@ -197,7 +197,7 @@ def test_inline_ingest_fails_job_when_no_sources_found(monkeypatch):
 
     from app.services.ingest import ingest_from_storage
 
-    monkeypatch.setattr(pdf_mod, "list_pdf_sources", lambda production_id: [])
+    monkeypatch.setattr(pdf_mod, "list_pdf_sources", lambda production_id, load_prefix=None: [])
 
     job = MagicMock()
     job.source_format = "generic_pdf"

@@ -81,14 +81,14 @@ def iter_pdf_pages(
         doc.close()
 
 
-def list_pdf_sources(production_id: int) -> list[dict]:
+def list_pdf_sources(production_id: int, load_prefix: str | None = None) -> list[dict]:
     """List uploaded PDFs for a production, sorted deterministically.
 
     Returns a list of {storage_path, relative_path, filename} dicts.
     Slice indices into this list match across calls (sorted), so batch
     workers and retries process the same items.
     """
-    prefix = f"productions/{production_id}/raw/"
+    prefix = f"productions/{production_id}/raw/{load_prefix or ''}"
     all_files = list_files(prefix)
     pdfs = [f for f in all_files if f.lower().endswith(".pdf")]
     pdfs.sort()

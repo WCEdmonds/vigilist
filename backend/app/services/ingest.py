@@ -206,7 +206,25 @@ async def ingest_production(
 INGEST_BATCH_SIZE = 25
 
 
-def _download_dat_to_temp(production_id: int) -> str:
+def compute_control_offset(bates_values: list, prefix: str) -> int:
+    """Max numeric tail among existing '{prefix} NNNNNN' control numbers.
+
+    Later loads continue the sequence instead of restarting at 000001 (which
+    would collide with the (production_id, bates_begin) unique key and be
+    silently skipped as "already ingested").
+    """
+    import re
+
+    pat = re.compile(rf"^{re.escape(prefix)} (\d+)$")
+    best = 0
+    for b in bates_values:
+        m = pat.match(b or "")
+        if m:
+            best = max(best, int(m.group(1)))
+    return best
+
+
+def _download_dat_to_temp(production_id: int, load_prefix: str | None = None) -> str:
     """Download the production's DAT load file to a temp path and return it.
 
     Reused by both bootstrap_ingest_source and analyze_load_file so we never
@@ -216,7 +234,7 @@ def _download_dat_to_temp(production_id: int) -> str:
 
     from app.services.storage import download_file, list_files
 
-    prefix = f"productions/{production_id}/raw/"
+    prefix = f"productions/{production_id}/raw/{load_prefix or ''}"
     data_files = list_files(f"{prefix}DATA/")
     dat_remote = next((f for f in data_files if f.lower().endswith(".dat")), None)
 
@@ -229,7 +247,7 @@ def _download_dat_to_temp(production_id: int) -> str:
     return dat_local
 
 
-def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, list[str]]]:
+def bootstrap_ingest_source(production_id: int, load_prefix: str | None = None) -> tuple[list[dict], dict[str, list[str]]]:
     """Download and parse the DAT and OPT files for a production.
 
     Called both by /ingest/process (to count records) and by each
@@ -240,7 +258,7 @@ def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, l
 
     from app.services.storage import download_file, list_files
 
-    prefix = f"productions/{production_id}/raw/"
+    prefix = f"productions/{production_id}/raw/{load_prefix or ''}"
     data_files = list_files(f"{prefix}DATA/")
     dat_remote = next((f for f in data_files if f.lower().endswith(".dat")), None)
     opt_remote = next((f for f in data_files if f.lower().endswith(".opt")), None)
@@ -261,7 +279,7 @@ def bootstrap_ingest_source(production_id: int) -> tuple[list[dict], dict[str, l
     return records, opt_pages
 
 
-def analyze_load_file(production_id: int) -> dict:
+def analyze_load_file(production_id: int, load_prefix: str | None = None) -> dict:
     """Parse the uploaded load file and propose a column mapping.
 
     Downloads the DAT file from Firebase Storage (reusing _download_dat_to_temp),
@@ -271,7 +289,7 @@ def analyze_load_file(production_id: int) -> dict:
     from app.utils.loadfile import parse_loadfile
     from app.services.field_mapping import build_proposed_mapping
 
-    dat_path = _download_dat_to_temp(production_id)
+    dat_path = _download_dat_to_temp(production_id, load_prefix)
     parsed = parse_loadfile(dat_path)
     columns = build_proposed_mapping(parsed.headers, parsed.sample_rows)
     return {
@@ -560,7 +578,8 @@ async def ingest_batch(
 
     field_mapping: dict | None = job.field_mapping or None
 
-    records, opt_pages = bootstrap_ingest_source(production_id)
+    records, opt_pages = bootstrap_ingest_source(
+        production_id, (job.field_mapping or {}).get("load_prefix"))
     slice_records = records[start_idx:end_idx]
 
     # Collect Bates numbers already present so retried batches are idempotent
@@ -652,7 +671,10 @@ async def ingest_pdf_batch(
     # if a production were renamed mid-ingest (not a supported workflow).
     prefix = derive_bates_prefix(production.name if production else "")
 
-    items = list_pdf_sources(production_id)
+    fm = job.field_mapping or {}
+    load_prefix = fm.get("load_prefix")
+    offset = int(fm.get("control_offset") or 0)
+    items = list_pdf_sources(production_id, load_prefix)
     errors: list[str] = list(job.errors or [])
 
     slice_pairs = [
@@ -672,7 +694,7 @@ async def ingest_pdf_batch(
         existing = {row[0] for row in result.all()}
 
     for global_index, item in slice_pairs:
-        control_number = f"{prefix} {global_index + 1:06d}"
+        control_number = f"{prefix} {offset + global_index + 1:06d}"
         if item["storage_path"] in existing:
             await _incr_skipped(db, job_id)
             continue
@@ -681,7 +703,7 @@ async def ingest_pdf_batch(
             # inline would block the event loop and break the DB connection.
             doc = await asyncio.to_thread(
                 process_pdf_record,
-                production_id, item, global_index, prefix, errors,
+                production_id, item, offset + global_index, prefix, errors,
             )
             if doc is None:
                 await _incr_skipped(db, job_id)
@@ -737,14 +759,15 @@ async def ingest_from_storage(
         return
 
     try:
+        load_prefix = (job.field_mapping or {}).get("load_prefix")
         if job.source_format == "generic_pdf":
-            total = len(list_pdf_sources(production_id))
+            total = len(list_pdf_sources(production_id, load_prefix))
             batch_step = 10
         elif job.source_format == "native":
-            total = len(list_native_sources(production_id))
+            total = len(list_native_sources(production_id, load_prefix))
             batch_step = 10
         else:
-            records, _ = bootstrap_ingest_source(production_id)
+            records, _ = bootstrap_ingest_source(production_id, load_prefix)
             total = len(records)
             batch_step = INGEST_BATCH_SIZE
         # Mirror the Cloud Tasks path's guard: with zero sources the batch
