@@ -211,6 +211,56 @@ mark.hl-sweep {
 .transcript__cite strong { display: block; }
 .transcript__cite span { color: var(--ink-2); font-size: 0.85rem; }
 
+/* ── Split band (problem + time-cut graphic) ── */
+.split { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 60px; align-items: center; }
+.timecut { margin: 0; }
+.timecut__row { margin-bottom: 26px; }
+.timecut__label { display: block; font-family: var(--font-mono); font-size: 0.68rem;
+  letter-spacing: 0.08em; color: var(--ink-2); margin-bottom: 8px; }
+.timecut__track { display: block; background: var(--paper-dim); border-radius: 1px; height: 22px; }
+.timecut__bar { display: block; height: 100%; width: 0; border-radius: 1px; }
+.timecut__bar--old { background: var(--redact); }
+.timecut__bar--new { background: var(--marker); border: 1px solid var(--marker-deep); }
+.reveal-anim .is-visible .timecut__bar--old,
+html:not(.reveal-anim) .timecut__bar--old { width: 100%; }
+.reveal-anim .is-visible .timecut__bar--new,
+html:not(.reveal-anim) .timecut__bar--new { width: 9%; }
+.reveal-anim .timecut__bar { transition: width 1.1s cubic-bezier(.3,0,.2,1) .2s; }
+.timecut__val { display: block; font-family: var(--font-mono); font-size: 0.82rem;
+  font-weight: 600; color: var(--ink); margin-top: 6px; }
+.timecut__note { font-family: var(--font-mono); font-size: 0.65rem; color: var(--ink-2);
+  letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; }
+
+/* ── Connection graph (entity band) ── */
+.graph { position: relative; height: 440px; }
+.graph__edges { position: absolute; inset: 0; width: 100%; height: 100%; }
+.graph__edges line { stroke: rgba(255,255,255,0.35); stroke-width: 0.35;
+  stroke-dasharray: 120; stroke-dashoffset: 120; }
+.reveal-anim .is-visible .graph__edges line,
+html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
+.reveal-anim .graph__edges line { transition: stroke-dashoffset 1s ease .25s; }
+.graph__node { position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  background: #fff; color: var(--ink); padding: 8px 12px; border-radius: 2px;
+  box-shadow: 0 12px 28px -8px rgba(0,0,0,0.55); white-space: nowrap; }
+.graph__node--event { background: transparent; color: var(--marker);
+  border: 1.5px dashed var(--marker); box-shadow: none; }
+.graph__node--center { text-align: center; padding: 14px 18px;
+  border-top: 5px solid var(--marker); z-index: 2; }
+.graph__avatar { display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 2px; background: var(--redact);
+  color: var(--marker); margin-bottom: 6px; }
+.graph__name { display: block; font-family: var(--font-display); font-size: 1.1rem;
+  font-weight: 800; letter-spacing: 0; }
+.graph__meta { display: block; font-size: 0.62rem; color: var(--ink-2); letter-spacing: 0.08em; }
+.graph__edge-label { position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.75); background: var(--redact); padding: 2px 6px;
+  border-radius: 2px; white-space: nowrap; }
+.graph__caption { position: absolute; left: 0; bottom: -34px;
+  font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: #9aa0a8; }
+
 /* ── Pricing ── */
 .pricing__sub { color: var(--ink-2); font-size: 1.05rem; }
 .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; border: 2px solid var(--redact);
@@ -238,6 +288,9 @@ mark.hl-sweep {
 
 /* ── Responsive ── */
 @media (max-width: 960px) {
+  .split { grid-template-columns: 1fr; gap: 44px; }
+  .graph { height: 380px; }
+
   .hero__inner, .callout__inner { grid-template-columns: 1fr; gap: 44px; }
   .grid { grid-template-columns: 1fr 1fr; }
   .steps { grid-template-columns: 1fr 1fr; }
@@ -263,6 +316,10 @@ mark.hl-sweep {
   .stamp { opacity: 1; transform: rotate(-4deg) scale(1); animation: none; }
   mark.hl-sweep { background-size: 100% 45%; animation: none; }
   .reveal-anim .reveal { opacity: 1; transform: none; transition: none; }
+  .reveal-anim .timecut__bar { transition: none; }
+  .reveal-anim .timecut__bar--old { width: 100%; }
+  .reveal-anim .timecut__bar--new { width: 9%; }
+  .reveal-anim .graph__edges line { transition: none; stroke-dashoffset: 0; }
   .card h3 { transition: none; }
   .btn { transition: none; }
 }

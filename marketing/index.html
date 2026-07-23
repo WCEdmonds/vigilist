@@ -21,6 +21,7 @@
         <a href="#how">How it works</a>
         <a href="#defensible">Defensibility</a>
         <a href="#pricing">Pricing</a>
+        <a class="btn btn--ghost" href="https://app.vigilist.co">Log in</a>
         <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
       </nav>
     </div>
@@ -32,8 +33,8 @@
       <div class="container hero__inner">
         <div class="hero__copy">
           <p class="bates">VIGILIST&nbsp;000001</p>
-          <h1>The AI that can<br><mark class="hl-sweep">take the stand.</mark></h1>
-          <p class="hero__sub">Vigilist runs the whole matter — ingest their production, review with AI, redact, log privilege, and produce back with Bates numbers and load files. Then it does what no reviewer platform has done for lean teams: <strong>proves the work</strong>, with recall, precision, and elusion statistics a court will accept.</p>
+          <h1>The AI reads everything.<br><mark class="hl-sweep">You read what matters.</mark></h1>
+          <p class="hero__sub">Vigilist reads the whole corpus the day it lands — coding every document, mapping every person, organization, and event into a <strong>knowledge graph</strong>, and briefing your team with citations. Weeks of linear review collapse into days: you start at the documents that decide the case, not at page one.</p>
           <div class="hero__actions">
             <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
             <a class="btn btn--ghost" href="#how">Watch the lifecycle</a>
@@ -65,11 +66,26 @@
 
     <!-- ── PROBLEM ──────────────────────────────────────── -->
     <section class="band">
-      <div class="container band__narrow">
-        <p class="bates">VIGILIST&nbsp;000002</p>
-        <h2>Big-firm tools, small-firm reality.</h2>
-        <p class="lede">Traditional e-discovery is priced for hundred-lawyer firms and stitched together from separate products for review, redaction, production, and analytics. A lean litigation team gets the invoices without the leverage. Vigilist is the entire lifecycle in one platform — and the AI at its center isn't a demo feature. It reads the corpus, briefs your team, codes the documents, and stands behind its numbers.</p>
-        <div class="redact-rule" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="container split">
+        <div>
+          <p class="bates">VIGILIST&nbsp;000002</p>
+          <h2>Big-firm tools, small-firm reality.</h2>
+          <p class="lede">Traditional e-discovery is priced for hundred-lawyer firms and still burns most of the budget on one thing: humans reading documents in order. Vigilist inverts that. The AI makes the first pass over everything, the knowledge graph shows you who and what matters, and your reviewers spend their hours on the documents that decide the case — inside one platform that also redacts, produces, and proves the work.</p>
+          <div class="redact-rule" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+        <figure class="timecut reveal" aria-hidden="true">
+          <div class="timecut__row">
+            <span class="timecut__label">LINEAR&nbsp;REVIEW&nbsp;·&nbsp;9,912&nbsp;DOCS,&nbsp;PAGE&nbsp;ONE&nbsp;FIRST</span>
+            <span class="timecut__track"><span class="timecut__bar timecut__bar--old"></span></span>
+            <span class="timecut__val">≈&nbsp;47&nbsp;REVIEW-WEEKS</span>
+          </div>
+          <div class="timecut__row">
+            <span class="timecut__label">VIGILIST&nbsp;·&nbsp;AI&nbsp;PASS&nbsp;OVERNIGHT,&nbsp;HUMANS&nbsp;REVIEW&nbsp;412</span>
+            <span class="timecut__track"><span class="timecut__bar timecut__bar--new"></span></span>
+            <span class="timecut__val">≈&nbsp;4&nbsp;DAYS</span>
+          </div>
+          <figcaption class="timecut__note">illustrative matter · every AI call remains attorney-reviewable</figcaption>
+        </figure>
       </div>
     </section>
 
@@ -144,24 +160,27 @@
           <p class="callout__note">Events — meetings, payments, agreements — are extracted from day one, building toward matter timelines and relationship graphs on the same foundation.</p>
         </div>
         <div class="callout__visual" aria-hidden="true">
-          <div class="entity-card">
-            <div class="entity-card__head">
-              <span class="entity-card__avatar">JR</span>
-              <div>
-                <div class="entity-card__name">Jorge Rivera</div>
-                <div class="entity-card__role">CFO,&nbsp;ACME&nbsp;CORP&nbsp;·&nbsp;214&nbsp;MENTIONS</div>
-              </div>
+          <div class="graph reveal">
+            <svg class="graph__edges" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <line x1="42" y1="44" x2="80" y2="18" />
+              <line x1="42" y1="44" x2="82" y2="70" />
+              <line x1="42" y1="44" x2="30" y2="88" />
+              <line x1="42" y1="44" x2="12" y2="20" />
+            </svg>
+            <div class="graph__node graph__node--center" style="left:42%;top:44%;">
+              <span class="graph__avatar">JR</span>
+              <span class="graph__name">Jorge&nbsp;Rivera</span>
+              <span class="graph__meta">CFO&nbsp;·&nbsp;214&nbsp;MENTIONS</span>
             </div>
-            <div class="entity-card__aliases">
-              <span class="chip">J. Rivera</span>
-              <span class="chip">Rivera, Jorge</span>
-              <span class="chip">jrivera@acme.com</span>
-            </div>
-            <div class="entity-card__rels">
-              <div class="entity-card__rel"><span class="chip chip--hot">EMPLOYMENT</span> Acme Corp — "CFO since 2019"</div>
-              <div class="entity-card__rel"><span class="chip">CORRESPONDENT</span> Dana Wu — 41 shared documents</div>
-              <div class="entity-card__rel"><span class="chip">PARTY&nbsp;TO&nbsp;AGREEMENT</span> Meridian LLC — "signatory"</div>
-            </div>
+            <div class="graph__node" style="left:80%;top:18%;">Acme&nbsp;Corp</div>
+            <div class="graph__node" style="left:82%;top:70%;">Dana&nbsp;Wu</div>
+            <div class="graph__node" style="left:30%;top:88%;">Meridian&nbsp;LLC</div>
+            <div class="graph__node graph__node--event" style="left:12%;top:20%;">PAYMENT&nbsp;·&nbsp;MAR&nbsp;2024</div>
+            <span class="graph__edge-label" style="left:60%;top:27%;">EMPLOYMENT&nbsp;·&nbsp;"CFO&nbsp;SINCE&nbsp;2019"</span>
+            <span class="graph__edge-label" style="left:63%;top:60%;">CORRESPONDENT&nbsp;·&nbsp;41&nbsp;DOCS</span>
+            <span class="graph__edge-label" style="left:33%;top:68%;">PARTY&nbsp;TO&nbsp;AGREEMENT</span>
+            <span class="graph__edge-label" style="left:22%;top:29%;">PARTICIPANT</span>
+            <div class="graph__caption">every&nbsp;edge&nbsp;cites&nbsp;the&nbsp;document&nbsp;that&nbsp;proves&nbsp;it</div>
           </div>
         </div>
       </div>
@@ -203,7 +222,7 @@
     <section id="defensible" class="band band--tight">
       <div class="container band__narrow">
         <p class="bates">VIGILIST&nbsp;000006</p>
-        <h2>Defensible by design.</h2>
+        <h2>The AI that can take the stand.</h2>
         <p class="lede">Every claim comes with its evidence attached. Redaction approvals that expire when the redaction changes. Production locks that record who overrode which warning. Frozen random samples with Wilson confidence intervals. Validation reports that persist exactly as run. An append-only audit log under all of it.</p>
         <div class="testimony reveal">
           <p class="testimony__q">"How do you know the AI didn't miss anything?"</p>
@@ -289,6 +308,7 @@
         <span class="footer__tag">Democratizing E-Discovery</span>
       </div>
       <div class="footer__right">
+        <a href="https://app.vigilist.co">Client log in</a>
         <a href="https://qndary.com" target="_blank" rel="noopener">A QNDARY Project</a>
         <span>&copy; 2026 Vigilist</span>
       </div>
