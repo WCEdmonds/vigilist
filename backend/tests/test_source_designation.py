@@ -137,7 +137,7 @@ def test_source_parties_endpoint(monkeypatch):
         ("source_party", FakeResult(rows=[("ABC Corp",), ("Our Collection",)])),
     ])
     out = asyncio.run(rd.list_source_parties(production_id=1, db=db, user=FakeUser()))
-    assert out == {"source_parties": ["ABC Corp", "Our Collection"]}
+    assert out == {"source_parties": ["ABC Corp", "Our Collection"], "undesignated": 0}
 
 
 def test_source_parties_403(monkeypatch):
@@ -168,3 +168,68 @@ def test_received_filter_is_exact():
     joined = "\n".join(db.executed)
     assert "IS DISTINCT FROM" not in joined
     assert "documents.source_type" in joined
+
+
+# --- bulk designation (backfill) --------------------------------------------
+
+import app.routers.productions as rprod
+
+
+def _patch_prod(monkeypatch, role="manager", accessible=(1,)):
+    async def fake_accessible(db, user):
+        return list(accessible)
+
+    async def fake_role(db, user, production_id):
+        return role
+
+    async def fake_log(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(rprod, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(rprod, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(rprod, "log_action", fake_log)
+
+
+def test_designate_sources_updates_undesignated(monkeypatch):
+    _patch_prod(monkeypatch)
+    db = FakeSession(responders=[("UPDATE documents", FakeResult(rowcount=42))])
+    out = asyncio.run(rprod.designate_sources(
+        production_id=1,
+        body={"source_type": "received", "source_party": "ABC Corp"},
+        db=db, user=FakeUser()))
+    assert out == {"updated": 42}
+    joined = "\n".join(db.executed)
+    assert "source_type IS NULL" in joined  # only_undesignated default
+
+
+def test_designate_sources_rejects_bad_type(monkeypatch):
+    _patch_prod(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rprod.designate_sources(
+            production_id=1, body={"source_type": "sideways"},
+            db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_designate_sources_manager_only(monkeypatch):
+    _patch_prod(monkeypatch, role="reviewer")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rprod.designate_sources(
+            production_id=1, body={"source_type": "received"},
+            db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 403
+
+
+def test_source_parties_reports_undesignated(monkeypatch):
+    import app.routers.documents as rd
+
+    async def fake_accessible(db, user):
+        return [1]
+
+    monkeypatch.setattr(rd, "get_accessible_production_ids", fake_accessible)
+    db = FakeSession(responders=[
+        ("count", FakeResult(scalar=17)),
+        ("source_party", FakeResult(rows=[("ABC Corp",)])),
+    ])
+    out = asyncio.run(rd.list_source_parties(production_id=1, db=db, user=FakeUser()))
+    assert out == {"source_parties": ["ABC Corp"], "undesignated": 17}
