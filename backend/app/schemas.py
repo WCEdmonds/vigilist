@@ -646,6 +646,10 @@ class ProductionSetOut(BaseModel):
     page_count: int | None = None
     bates_begin: str | None = None
     bates_end: str | None = None
+    render_status: str = "not_started"
+    render_error: str | None = None
+    rendered_at: datetime | None = None
+    rendered_count: int = 0
 
     model_config = {"from_attributes": True}
 
