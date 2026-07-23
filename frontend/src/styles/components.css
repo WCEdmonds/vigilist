@@ -385,9 +385,9 @@ mark {
 .entity-mark.entity-person { background: color-mix(in srgb, #4f7cff 22%, transparent); border-bottom: 1px solid #4f7cff; }
 .entity-mark.entity-org { background: color-mix(in srgb, #b4690e 22%, transparent); border-bottom: 1px solid #b4690e; }
 .entity-mark:hover { filter: brightness(1.15); }
-.entity-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-.entity-dot.entity-person { background: #4f7cff; }
-.entity-dot.entity-org { background: #b4690e; }
+.entity-dot { font-size: 10px; line-height: 1; }
+.entity-dot.entity-person { color: #4f7cff; }
+.entity-dot.entity-org { color: #b4690e; }
 
 /* ── Keyboard shortcut hint ── */
 
