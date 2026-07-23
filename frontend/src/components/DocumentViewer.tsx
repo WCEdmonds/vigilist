@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
-import type { Annotation, DocumentDetail, DocumentTagEntry, DuplicateEntry } from '../types';
+import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentEntities, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
+import type { Annotation, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry } from '../types';
 import DocumentNav from './DocumentNav';
 import ImagePanel from './ImagePanel';
 import NativeViewer, { type MediaPlayerHandle } from './NativeViewer';
@@ -10,6 +10,7 @@ import TagBar from './TagBar';
 import TextPanel from './TextPanel';
 import AnnotationPopover from './AnnotationPopover';
 import AnnotationSidebar from './AnnotationSidebar';
+import EntityPanel from './EntityPanel';
 
 
 interface Props {
@@ -36,6 +37,9 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [similarLoading, setSimilarLoading] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateEntry[]>([]);
+  const [entities, setEntities] = useState<DocEntity[]>([]);
+  const [openEntityId, setOpenEntityId] = useState<string | null>(null);
+  const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [imageRotation, setImageRotation] = useState(0);
   const [mediaTime, setMediaTime] = useState<number | null>(null);
   const mediaRef = useRef<MediaPlayerHandle>(null);
@@ -55,6 +59,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     setCenterTab('images');
     setAnnotations([]);
     setDuplicates([]);
+    setEntities([]);
     setPopover(null);
     getDocument(docId).then(d => {
       setDoc(d);
@@ -63,6 +68,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     getDocumentNav(docId).then(nav => setNextId(nav.next_id)).catch(e => console.warn('getDocumentNav failed:', e));
     listAnnotations(docId).then(setAnnotations).catch(e => console.warn('listAnnotations failed:', e));
     getDocumentDuplicates(docId).then(setDuplicates).catch(e => console.warn('getDocumentDuplicates failed:', e));
+    getDocumentEntities(docId).then(r => setEntities(r.entities)).catch(e => console.warn('getDocumentEntities failed:', e));
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {
@@ -343,7 +349,13 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
               )}
               {mobileTab === 'text' && (
                 <div style={{ flex: 1, overflow: 'auto' }}>
-                  <TextPanel text={doc.text_content} searchQuery={searchQuery} />
+                  <TextPanel
+                    text={doc.text_content}
+                    searchQuery={searchQuery}
+                    entities={entities}
+                    onEntityClick={id => setOpenEntityId(id)}
+                    focusEntityId={focusEntityId}
+                  />
                 </div>
               )}
             </div>
@@ -354,7 +366,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', position: 'relative' }}>
       {/* Header */}
       <div className="viewer-bar">
         <button className="cb-action" onClick={onBack}>← Back</button>
@@ -419,6 +431,27 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                 </div>
               </div>
             )}
+
+            {entities.length > 0 && (
+              <div className="sidebar-section">
+                <div className="panel-header">People &amp; Orgs ({entities.length})</div>
+                {entities
+                  .slice()
+                  .sort((a, b) => b.mentions.length - a.mentions.length)
+                  .map(e => (
+                    <button
+                      key={e.id}
+                      className="btn btn-ghost btn-xs"
+                      style={{ display: 'block', width: '100%', textAlign: 'left' }}
+                      onClick={() => setOpenEntityId(e.id)}
+                    >
+                      <span className={`entity-dot entity-${e.entity_type}`} style={{ marginRight: 6 }}>●</span>
+                      {e.canonical_name}
+                      <span style={{ opacity: 0.6 }}> ({e.mentions.length})</span>
+                    </button>
+                  ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -458,7 +491,15 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
           </div>
 
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            {rightTab === 'text' && <TextPanel text={doc.text_content} searchQuery={searchQuery} />}
+            {rightTab === 'text' && (
+              <TextPanel
+                text={doc.text_content}
+                searchQuery={searchQuery}
+                entities={entities}
+                onEntityClick={id => setOpenEntityId(id)}
+                focusEntityId={focusEntityId}
+              />
+            )}
             {rightTab === 'metadata' && (
               <MetadataPanel
                 doc={doc}
@@ -496,6 +537,19 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
           onUpdate={handleAnnotationUpdate}
           onDelete={handleAnnotationDelete}
           onCancel={() => setPopover(null)}
+        />
+      )}
+
+      {openEntityId && (
+        <EntityPanel
+          entityId={openEntityId}
+          onClose={() => setOpenEntityId(null)}
+          onOpenEntity={id => setOpenEntityId(id)}
+          onOpenDocument={(targetDocId, entityId) => {
+            setFocusEntityId(entityId);
+            setRightTab('text');
+            if (targetDocId !== docId) onNavigate(targetDocId);
+          }}
         />
       )}
     </div>
