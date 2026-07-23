@@ -45,6 +45,15 @@ def _effective_mapping(record_keys, field_mapping: dict | None) -> dict:
     return match_aliases(list(record_keys))
 
 
+def _stamp_source(doc, job) -> None:
+    """Stamp job-level source designation; a load-file-mapped source_party wins."""
+    fm = job.field_mapping or {}
+    if getattr(doc, "source_party", None) is None:
+        doc.source_party = fm.get("source_party")
+    if getattr(doc, "source_type", None) is None:
+        doc.source_type = fm.get("source_type")
+
+
 def _apply_metadata(doc, record: dict, field_mapping: dict | None) -> None:
     """Promote typed metadata onto a freshly built Document."""
     mapping = _effective_mapping(record.keys(), field_mapping)
@@ -597,6 +606,7 @@ async def ingest_batch(
                 if doc is None:
                     await _incr_skipped(db, job_id)
                     continue
+                _stamp_source(doc, job)
                 await _persist_document(db, job_id, doc)
             except Exception as e:
                 logger.exception("Failed to process record %s", bates_begin)
@@ -676,6 +686,7 @@ async def ingest_pdf_batch(
             if doc is None:
                 await _incr_skipped(db, job_id)
                 continue
+            _stamp_source(doc, job)
             await _persist_document(db, job_id, doc)
         except Exception as e:
             logger.exception("Failed to process PDF %s", item.get("relative_path"))

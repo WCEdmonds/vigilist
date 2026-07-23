@@ -25,6 +25,8 @@ async def search(
     mode: str = Query("fulltext", pattern="^(fulltext|semantic)$"),
     metadata: str | None = Query(None, description="JSON object of metadata key-value filters"),
     file_type: str | None = Query(None, description="Filter by file type: video, audio, pdf, office, image, email, native, images_only"),
+    source_party: str | None = Query(None, description="Filter by source party label"),
+    source_type: str | None = Query(None, pattern="^(collection|received)$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -43,7 +45,8 @@ async def search(
     # filters are active (the semantic path doesn't support them), and falls
     # through to full-text when it yields nothing (e.g. embeddings not
     # available — no Voyage key or not yet generated).
-    if mode == "semantic" and q.strip() and not metadata_filters and not file_type:
+    if (mode == "semantic" and q.strip() and not metadata_filters and not file_type
+            and not source_party and not source_type):
         results, total = await semantic_search(
             db, q, production_id=production_id, page=page, per_page=per_page,
             accessible_production_ids=accessible,
@@ -55,6 +58,8 @@ async def search(
             accessible_production_ids=accessible,
             metadata_filters=metadata_filters,
             file_type=file_type,
+            source_party=source_party,
+            source_type=source_type,
         )
     await log_action(db, user, "search_executed", "search", None,
                      details={"query": q, "result_count": total})

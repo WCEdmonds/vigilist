@@ -301,6 +301,7 @@ async def ingest_native_batch(
         _persist_document,
         _persist_documents,
         _persist_job_errors,
+        _stamp_source,
     )
     from app.services.ingest_pdf import derive_bates_prefix
 
@@ -344,6 +345,8 @@ async def ingest_native_batch(
                 # Commit the whole family in one transaction: if it fails
                 # partway, nothing persists, so a retry re-expands the container
                 # cleanly instead of finding a lone parent and skipping it.
+                for d in docs:
+                    _stamp_source(d, job)
                 await _persist_documents(db, job_id, docs)
             else:
                 doc = await asyncio.to_thread(
@@ -353,6 +356,7 @@ async def ingest_native_batch(
                 if doc is None:
                     await _incr_skipped(db, job_id)
                     continue
+                _stamp_source(doc, job)
                 await _persist_document(db, job_id, doc)
         except Exception as e:
             logger.exception("Failed to process native file %s", item.get("relative_path"))
