@@ -74,7 +74,14 @@ export function listDocuments(page = 1, perPage = 50, productionId?: number, tag
 }
 
 export const getSourceParties = (productionId: number) =>
-  request<{ source_parties: string[] }>(`/api/documents/source-parties?production_id=${productionId}`);
+  request<{ source_parties: string[]; undesignated: number }>(`/api/documents/source-parties?production_id=${productionId}`);
+
+export const designateSources = (productionId: number, sourceType: 'collection' | 'received', sourceParty?: string) =>
+  request<{ updated: number }>(`/api/productions/${productionId}/source-designation`, json({
+    source_type: sourceType,
+    source_party: sourceParty || null,
+    only_undesignated: true,
+  }));
 
 export const getDocument = (id: string) =>
   request<DocumentDetail>(`/api/documents/${id}`);
@@ -434,14 +441,14 @@ export interface ProposedColumn {
   source: 'alias' | 'ai' | 'unmapped';
 }
 
-export const analyzeLoadFile = (productionId: number) =>
+export const analyzeLoadFile = (productionId: number, loadId?: string) =>
   request<{
     format: { encoding: string; delimiter: string };
     columns: ProposedColumn[];
     sample_rows: Record<string, string>[];
     total_rows: number;
   }>(
-    '/api/ingest/analyze', json({ production_id: productionId }),
+    '/api/ingest/analyze', json({ production_id: productionId, load_id: loadId }),
   );
 
 export const startProcessing = (
@@ -452,6 +459,7 @@ export const startProcessing = (
   custodian: string = '',
   sourceParty: string = '',
   sourceType: 'collection' | 'received' = 'collection',
+  loadId?: string,
 ) =>
   request<IngestJob>('/api/ingest/process', json({
     production_id: productionId,
@@ -461,6 +469,7 @@ export const startProcessing = (
     custodian,
     source_party: sourceParty,
     source_type: sourceType,
+    load_id: loadId,
   }));
 
 export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
