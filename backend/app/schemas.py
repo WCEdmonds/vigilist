@@ -805,3 +805,23 @@ class ProductionSetLockOut(BaseModel):
 
 class ProductionSetLockRequest(BaseModel):
     override_conflicts: bool = False
+
+
+# --- P3-1: search-term hit reports ------------------------------------------
+
+class SearchTermReportCreate(BaseModel):
+    name: str
+    terms: list[str]
+
+
+class SearchTermReportOut(BaseModel):
+    id: int
+    production_id: int
+    name: str
+    terms: list[str]
+    results: dict | None
+    computed_at: datetime | None
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
