@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 
 from app.services.entity_extraction import (
-    build_extraction_prompt, locate_mentions, parse_email_addresses,
+    build_extraction_prompt, locate_mentions, merge_parsed, parse_email_addresses,
     parse_event_date, parse_extraction_response, slice_text,
 )
 
@@ -129,6 +129,25 @@ def test_parse_truncates_oversized_lists():
     }]
     out2 = parse_extraction_response(json.dumps({"entities": one_entity, "events": [], "relationships": []}))
     assert len(out2["entities"][0]["surface_forms"]) == 10
+
+
+def test_merge_parsed_dedupes_events_and_relationships_across_overlapping_slices():
+    # Slices overlap by 2000 chars (see slice_text), so the same event/edge
+    # can be re-extracted verbatim from two adjacent slices; merge_parsed
+    # must keep only one of each (regression for FINDING 2).
+    slice1 = {
+        "entities": [],
+        "events": [{"description": "Board meeting", "type": "meeting", "date": "2019-03-15", "participants": []}],
+        "relationships": [{"source": "Jorge Rivera", "target": "Acme Corp", "type": "employment", "evidence": "sig"}],
+    }
+    slice2 = {
+        "entities": [],
+        "events": [{"description": "Board meeting", "type": "meeting", "date": "2019-03-15", "participants": []}],
+        "relationships": [{"source": "Jorge Rivera", "target": "Acme Corp", "type": "employment", "evidence": "sig"}],
+    }
+    merged = merge_parsed([slice1, slice2])
+    assert len(merged["events"]) == 1
+    assert len(merged["relationships"]) == 1
 
 
 def test_slice_text_guards_degenerate_overlap():

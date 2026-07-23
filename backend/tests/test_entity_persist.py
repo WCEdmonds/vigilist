@@ -81,6 +81,26 @@ def test_events_and_relationships_link_created_entities():
     assert stats["relationships"] == 1 and edges[0].relationship_type == "employment"
 
 
+def test_dedupes_duplicate_mentions_across_candidates_resolving_to_same_entity():
+    # Two candidates that both resolve (attach) to the same existing entity
+    # with overlapping surface forms would otherwise rediscover the same
+    # offsets twice, producing duplicate (document_id, entity_id, start_offset)
+    # rows that violate uq_mention_doc_entity_offset (regression for FINDING 1).
+    existing = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+                      canonical_name="Jorge Rivera", aliases=["Rivera"], attributes={}, mention_count=0)
+    db = _session_with_existing([existing])
+    parsed = _parsed(entities=[
+        {"name": "Jorge Rivera", "type": "person", "surface_forms": ["Jorge Rivera", "Rivera"], "role": None, "emails": []},
+        {"name": "Rivera", "type": "person", "surface_forms": ["Jorge Rivera", "Rivera"], "role": None, "emails": []},
+    ])
+    stats = asyncio.run(persist_extraction(db, 1, DOC_ID, TEXT, parsed))
+    mentions = [o for o in db.added if isinstance(o, EntityMention)]
+    keys = [(m.entity_id, m.start_offset) for m in mentions]
+    assert len(keys) == len(set(keys))  # no duplicate (entity_id, start_offset) pairs
+    assert stats["mentions"] == len(mentions)
+    assert existing.mention_count == len(mentions)
+
+
 def test_header_candidates_from_email_metadata():
     class Doc:
         email_from = "Jorge Rivera <jr@acme.com>"
