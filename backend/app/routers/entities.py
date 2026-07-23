@@ -7,18 +7,20 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_accessible_production_ids
+from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.models import (
-    Document, Entity, EntityMention, EntityRelationship,
-    EventParticipant, OntologyEvent, User,
+    Document, Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
+    EntityRelationship, EventParticipant, OntologyEvent, User,
 )
 from app.routers.auth import get_current_user
 from app.schemas import (
     DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
     EntityDocMentionOut, EntityDocumentMentionsOut, EntityListItemOut,
     EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, MentionSpanOut,
-    SharedEventOut,
+    MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
 )
+from app.services.audit import log_action
+from app.services.entity_merge import merge_entities, undo_merge
 from app.services.entity_profile import generate_entity_overview, is_overview_stale
 
 router = APIRouter(prefix="/api", tags=["entities"])
@@ -246,3 +248,141 @@ async def list_production_entities(
                                      canonical_name=e.canonical_name,
                                      mention_count=e.mention_count, document_count=doc_count))
     return EntityListPageOut(entities=out, total=total)
+
+
+async def _require_writer(db: AsyncSession, user: User, production_id: int) -> None:
+    role = await get_user_role_for_production(db, user, production_id)
+    if role == "readonly":
+        raise HTTPException(status_code=403, detail="Read-only access")
+
+
+async def _entity_list_item(db: AsyncSession, entity_id) -> EntityListItemOut | None:
+    e = await db.get(Entity, entity_id)
+    if e is None:
+        return None
+    doc_count = (await db.execute(
+        select(func.count(func.distinct(EntityMention.document_id)))
+        .where(EntityMention.entity_id == e.id)
+    )).scalar() or 0
+    return EntityListItemOut(id=e.id, entity_type=e.entity_type,
+                             canonical_name=e.canonical_name,
+                             mention_count=e.mention_count, document_count=doc_count)
+
+
+@router.get("/productions/{production_id}/merge-suggestions", response_model=list[MergeSuggestionOut])
+async def list_merge_suggestions(
+    production_id: int,
+    status: str = "pending",
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    rows = (await db.execute(
+        select(EntityMergeSuggestion)
+        .where(EntityMergeSuggestion.production_id == production_id,
+               EntityMergeSuggestion.status == status)
+        .order_by(EntityMergeSuggestion.score.desc())
+        .limit(100)
+    )).scalars().all()
+    out = []
+    for s in rows:
+        a = await _entity_list_item(db, s.entity_a_id)
+        b = await _entity_list_item(db, s.entity_b_id)
+        if a and b:
+            out.append(MergeSuggestionOut(id=s.id, score=s.score, rationale=s.rationale,
+                                          status=s.status, entity_a=a, entity_b=b))
+    return out
+
+
+@router.post("/merge-suggestions/{suggestion_id}/accept", response_model=MergeResultOut)
+async def accept_merge_suggestion(
+    suggestion_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    sugg = await db.get(EntityMergeSuggestion, suggestion_id)
+    accessible = await get_accessible_production_ids(db, user)
+    if sugg is None or sugg.production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if sugg.status != "pending":
+        raise HTTPException(status_code=409, detail="Suggestion already resolved")
+    await _require_writer(db, user, sugg.production_id)
+
+    a = await db.get(Entity, sugg.entity_a_id)
+    b = await db.get(Entity, sugg.entity_b_id)
+    if a is None or b is None:
+        raise HTTPException(status_code=409, detail="An entity in this pair no longer exists")
+    # keep the one with more mentions as the winner
+    winner, loser = (a, b) if (a.mention_count or 0) >= (b.mention_count or 0) else (b, a)
+    try:
+        merge = await merge_entities(db, winner, loser, user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await db.flush()
+    await log_action(db, user, "entity_merged", "entity", str(winner.id),
+                     production_id=sugg.production_id,
+                     details={"suggestion_id": suggestion_id, "loser": str(loser.id)})
+    await db.commit()
+    return MergeResultOut(merge_id=merge.id, winner_id=winner.id)
+
+
+@router.post("/merge-suggestions/{suggestion_id}/reject")
+async def reject_merge_suggestion(
+    suggestion_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    sugg = await db.get(EntityMergeSuggestion, suggestion_id)
+    accessible = await get_accessible_production_ids(db, user)
+    if sugg is None or sugg.production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if sugg.status != "pending":
+        raise HTTPException(status_code=409, detail="Suggestion already resolved")
+    await _require_writer(db, user, sugg.production_id)
+    sugg.status = "rejected"
+    sugg.resolved_by = user.id
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/entities/merge", response_model=MergeResultOut)
+async def manual_merge(
+    body: MergeRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    winner = await _get_scoped_entity(db, user, body.winner_id)
+    loser = await _get_scoped_entity(db, user, body.loser_id)
+    await _require_writer(db, user, winner.production_id)
+    try:
+        merge = await merge_entities(db, winner, loser, user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await db.flush()
+    await log_action(db, user, "entity_merged", "entity", str(winner.id),
+                     production_id=winner.production_id, details={"loser": str(loser.id), "manual": True})
+    await db.commit()
+    return MergeResultOut(merge_id=merge.id, winner_id=winner.id)
+
+
+@router.post("/entity-merges/{merge_id}/undo")
+async def undo_entity_merge(
+    merge_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    merge = await db.get(EntityMerge, merge_id)
+    accessible = await get_accessible_production_ids(db, user)
+    if merge is None or merge.production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Merge not found")
+    await _require_writer(db, user, merge.production_id)
+    try:
+        restored = await undo_merge(db, merge)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await log_action(db, user, "entity_merge_undone", "entity", str(restored.id),
+                     production_id=merge.production_id, details={"merge_id": merge_id})
+    await db.commit()
+    return {"ok": True, "restored_entity_id": str(restored.id)}

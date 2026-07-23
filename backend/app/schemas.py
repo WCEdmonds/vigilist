@@ -702,3 +702,22 @@ class EntityListItemOut(BaseModel):
 class EntityListPageOut(BaseModel):
     entities: list[EntityListItemOut]
     total: int
+
+
+class MergeSuggestionOut(BaseModel):
+    id: int
+    score: float
+    rationale: str
+    status: str
+    entity_a: EntityListItemOut
+    entity_b: EntityListItemOut
+
+
+class MergeRequest(BaseModel):
+    winner_id: UUID4
+    loser_id: UUID4
+
+
+class MergeResultOut(BaseModel):
+    merge_id: int
+    winner_id: UUID4
