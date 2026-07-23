@@ -26,6 +26,9 @@ class FakePS:
         self.created_at = TS
         self.locked_by = None
         self.locked_at = None
+        self.render_status = kw.get("render_status", "not_started")
+        self.render_error = None
+        self.rendered_at = None
 
 
 class FakeItem:
@@ -38,6 +41,7 @@ class FakeItem:
         self.pages = kw.get("pages", None)
         self.disposition = kw.get("disposition", None)
         self.designation = kw.get("designation", None)
+        self.output_path = kw.get("output_path", None)
 
 
 def _patch(monkeypatch, role="manager", accessible=(1,)):
@@ -474,3 +478,127 @@ def test_lock_blocked_for_reviewer(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+# --- render endpoints (P2-2) ------------------------------------------------
+
+class FakeBackgroundTasks:
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, fn, *args, **kwargs):
+        self.tasks.append((fn, args, kwargs))
+
+
+def test_render_trigger_requires_locked(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="draft")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.render_production_set(
+            set_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_render_trigger_409_while_running(monkeypatch):
+    _patch(monkeypatch)
+    ps = FakePS(status="locked", render_status="rendering")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.render_production_set(
+            set_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_render_trigger_batches_and_fallback(monkeypatch):
+    _patch(monkeypatch)
+    monkeypatch.setattr(rps.tasks, "is_configured", lambda: False)
+    ps = FakePS(status="locked")
+    doc_ids = [(uuid4(),) for _ in range(30)]
+    bg = FakeBackgroundTasks()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[("production_set_items", FakeResult(rows=doc_ids))],
+    )
+    out = asyncio.run(rps.render_production_set(
+        set_id=1, background_tasks=bg, db=db, user=FakeUser()))
+    assert out == {"documents": 30, "batches": 2}  # 25 + 5
+    assert ps.render_status == "rendering"
+    assert len(bg.tasks) == 1  # one inline runner covering all batches
+
+
+def test_render_trigger_empty_set_422(monkeypatch):
+    _patch(monkeypatch)
+    ps = FakePS(status="locked")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.render_production_set(
+            set_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_render_worker_calls_pipeline(monkeypatch):
+    calls = {}
+
+    async def fake_render_batch(db, set_id, document_ids):
+        calls["batch"] = (set_id, len(document_ids))
+        return len(document_ids)
+
+    async def fake_finalize(db, set_id):
+        calls["finalized"] = set_id
+        return True
+
+    monkeypatch.setattr(rps, "render_batch", fake_render_batch)
+    monkeypatch.setattr(rps, "finalize_if_complete", fake_finalize)
+    d1, d2 = uuid4(), uuid4()
+    out = asyncio.run(rps.render_batch_handler(
+        body={"set_id": 1, "document_ids": [str(d1), str(d2)]},
+        db=FakeSession(), _verified=None))
+    assert out == {"rendered": 2}
+    assert calls == {"batch": (1, 2), "finalized": 1}
+
+
+def test_produced_pdf_404_before_render(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS(status="locked")},
+        responders=[("production_set_items", FakeResult(items=[FakeItem(d1)]))],
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.get_produced_pdf(set_id=1, document_id=d1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_produced_pdf_redirects_to_signed_url(monkeypatch):
+    _patch(monkeypatch)
+    monkeypatch.setattr(rps, "get_signed_url",
+                        lambda path, **kw: f"https://signed.example/{path}")
+    d1 = uuid4()
+    item = FakeItem(d1, bates_begin="SMITH000004")
+    item.output_path = "productions/1/production_sets/1/SMITH000004.pdf"
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS(status="locked")},
+        responders=[("production_set_items", FakeResult(items=[item]))],
+    )
+    out = asyncio.run(rps.get_produced_pdf(set_id=1, document_id=d1, db=db, user=FakeUser()))
+    assert out.status_code == 307
+    assert out.headers["location"].endswith("SMITH000004.pdf")
+
+
+def test_detail_includes_render_progress(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()
+    ps = FakePS(status="locked", render_status="rendering")
+    i1 = FakeItem(d1, item_id=1, sort_order=1, bates_begin="SMITH000001",
+                  bates_end="SMITH000001", pages=1)
+    i1.output_path = "productions/1/production_sets/1/SMITH000001.pdf"
+    i2 = FakeItem(d2, item_id=2, sort_order=2, bates_begin="SMITH000002",
+                  bates_end="SMITH000002", pages=1)
+    i2.output_path = None
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[("FROM production_set_items", FakeResult(items=[i1, i2]))],
+    )
+    out = asyncio.run(rps.get_production_set(set_id=1, db=db, user=FakeUser()))
+    assert out.render_status == "rendering"
+    assert out.rendered_count == 1

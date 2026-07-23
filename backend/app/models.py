@@ -450,6 +450,10 @@ class ProductionSet(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     locked_by = Column(String(128), nullable=True)
     locked_at = Column(DateTime, nullable=True)
+    # P2-2 — render state
+    render_status = Column(String(20), nullable=False, default="not_started")  # not_started|rendering|rendered|error
+    render_error = Column(Text, nullable=True)
+    rendered_at = Column(DateTime, nullable=True)
 
     items = relationship("ProductionSetItem", back_populates="production_set", cascade="all, delete-orphan")
 
@@ -472,6 +476,7 @@ class ProductionSetItem(Base):
     pages = Column(Integer, nullable=True)          # snapshot: 1 for withhold, else page_count
     disposition = Column(String(20), nullable=True) # snapshot: 'produce' | 'redact_in_part' | 'withhold'
     designation = Column(String(100), nullable=True)  # per-item override of the set default
+    output_path = Column(String(500), nullable=True)  # GCS path of rendered PDF
 
     production_set = relationship("ProductionSet", back_populates="items")
 
