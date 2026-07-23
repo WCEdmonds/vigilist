@@ -194,3 +194,193 @@ def test_delete_locked_set_409(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(rps.delete_production_set(set_id=1, db=db, user=FakeUser()))
     assert exc.value.status_code == 409
+
+
+# --- POST /production-sets/{id}/documents ----------------------------------
+# FakeSession dispatches on the FIRST matching substring, so register
+# responders in this order: "document_tags", "family_id IN",
+# "document_duplicates", "production_set_items", "documents.production_id"
+# (the last is a substring of several queries' WHERE clauses).
+
+from app.schemas import ProductionSetAddDocuments, ProductionSetRemoveDocuments
+
+
+def test_add_explicit_docs(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1, body=ProductionSetAddDocuments(document_ids=[d1, d2]),
+        db=db, user=FakeUser()))
+    assert out == {"added": 2, "skipped_existing": 0,
+                   "skipped_duplicates": 0, "families_added": 0}
+    assert len(db.added) == 2
+
+
+def test_add_by_tag(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("document_tags", FakeResult(rows=[(d1,), (d2,)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1, body=ProductionSetAddDocuments(tag_id=5), db=db, user=FakeUser()))
+    assert out["added"] == 2
+
+
+def test_add_doc_from_other_matter_422(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("documents.production_id", FakeResult(rows=[(d1, 2, None)])),
+        ],
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.add_documents(
+            set_id=1, body=ProductionSetAddDocuments(document_ids=[d1]),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_add_unknown_doc_422(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS()})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.add_documents(
+            set_id=1, body=ProductionSetAddDocuments(document_ids=[uuid4()]),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_add_nothing_specified_422(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS()})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.add_documents(
+            set_id=1, body=ProductionSetAddDocuments(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_add_include_families_pulls_family_members(monkeypatch):
+    _patch(monkeypatch)
+    d1, d3 = uuid4(), uuid4()  # d1 explicit (family F1); d3 = its attachment
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("family_id IN", FakeResult(rows=[(d1,), (d3,)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, "F1")])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1,
+        body=ProductionSetAddDocuments(document_ids=[d1], include_families=True),
+        db=db, user=FakeUser()))
+    assert out["added"] == 2
+    assert out["families_added"] == 1
+
+
+def test_add_exclude_duplicates_keeps_primary(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()  # same hash group; d2 has the lower control -> primary
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("document_tags", FakeResult(rows=[(d1,), (d2,)])),
+            ("document_duplicates", FakeResult(rows=[(10, d1, "C-2"), (10, d2, "C-1")])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1,
+        body=ProductionSetAddDocuments(tag_id=5, exclude_duplicates=True),
+        db=db, user=FakeUser()))
+    assert out["added"] == 1
+    assert out["skipped_duplicates"] == 1
+
+
+def test_add_exclude_duplicates_never_drops_explicit_ids(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()  # d1 explicitly listed but NOT the primary
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("document_duplicates", FakeResult(rows=[(10, d1, "C-2"), (10, d2, "C-1")])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None)])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1,
+        body=ProductionSetAddDocuments(document_ids=[d1], exclude_duplicates=True),
+        db=db, user=FakeUser()))
+    assert out["added"] == 1
+    assert out["skipped_duplicates"] == 0
+
+
+def test_add_skips_existing_members(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("production_set_items", FakeResult(rows=[(d1,)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1, body=ProductionSetAddDocuments(document_ids=[d1, d2]),
+        db=db, user=FakeUser()))
+    assert out["added"] == 1
+    assert out["skipped_existing"] == 1
+
+
+def test_add_to_locked_set_409(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="locked")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.add_documents(
+            set_id=1, body=ProductionSetAddDocuments(document_ids=[uuid4()]),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_add_blocked_for_reviewer(monkeypatch):
+    _patch(monkeypatch, role="reviewer")
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS()})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.add_documents(
+            set_id=1, body=ProductionSetAddDocuments(document_ids=[uuid4()]),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 403
+
+
+# --- DELETE /production-sets/{id}/documents --------------------------------
+
+def test_remove_documents_draft(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS()})
+    out = asyncio.run(rps.remove_documents(
+        set_id=1, body=ProductionSetRemoveDocuments(document_ids=[d1]),
+        db=db, user=FakeUser()))
+    assert out == {"removed": 1}
+
+
+def test_remove_documents_locked_409(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="locked")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.remove_documents(
+            set_id=1, body=ProductionSetRemoveDocuments(document_ids=[uuid4()]),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
