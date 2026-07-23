@@ -18,6 +18,7 @@
       <nav class="nav__links" aria-label="Primary">
         <a href="#features">Features</a>
         <a href="#how">How it works</a>
+        <a href="#entities">Entity intelligence</a>
         <a href="#defensible">Defensibility</a>
         <a href="#pricing">Pricing</a>
         <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
@@ -87,7 +88,7 @@
           </article>
           <article class="card reveal">
             <h3>A brief that writes itself</h3>
-            <p>Clustering, theme labels, entity profiles of the key players, and an AI case brief with citations that jump straight to the Bates number — your first read of a new production, done before you sit down.</p>
+            <p>Clustering, theme labels, and an AI case brief with citations that jump straight to the Bates number — your first read of a new production, done before you sit down.</p>
           </article>
           <article class="card reveal">
             <h3>Redactions that can't leak</h3>
@@ -117,6 +118,38 @@
             <h3>Enterprise-ready security</h3>
             <p>Single sign-on with your firm's identity provider (SAML/OIDC) — enforceable per organization — role-based access, and an append-only audit trail behind every action in the platform.</p>
           </article>
+        </div>
+      </div>
+    </section>
+    <section id="entities" class="callout">
+      <div class="container callout__inner">
+        <div class="callout__copy">
+          <p class="eyebrow">Entity intelligence</p>
+          <h2>Know who's who before the first deposition.</h2>
+          <p>Vigilist reads the corpus and builds the cast of characters: every person and organization, resolved across their aliases — "J.&nbsp;Rivera," "Rivera,&nbsp;Jorge," and the email address are one person, with a review queue for the close calls, so a human confirms every merge.</p>
+          <p>Click any name, anywhere, and get the profile: an AI-written overview, every mention with its surrounding context, who they're connected to and how — employer, counsel, correspondent, party to an agreement — each relationship backed by the phrase in the document that proves it. The key-players view ranks the matter's cast by presence, so the people who matter surface on day one, not week three.</p>
+          <p class="callout__note">Events — meetings, payments, agreements — are extracted from day one too, building toward matter timelines and relationship graphs on the same foundation.</p>
+        </div>
+        <div class="callout__visual" aria-hidden="true">
+          <div class="entity-card">
+            <div class="entity-card__head">
+              <span class="entity-card__avatar">JR</span>
+              <div>
+                <div class="entity-card__name">Jorge Rivera</div>
+                <div class="entity-card__role">CFO, Acme Corp · 214 mentions</div>
+              </div>
+            </div>
+            <div class="entity-card__aliases">
+              <span class="tag">J. Rivera</span>
+              <span class="tag">Rivera, Jorge</span>
+              <span class="tag">jrivera@acme.com</span>
+            </div>
+            <div class="entity-card__rels">
+              <div class="entity-card__rel"><span class="tag tag--hot">employment</span> Acme Corp — "CFO since 2019"</div>
+              <div class="entity-card__rel"><span class="tag">correspondent</span> Dana Wu — 41 shared documents</div>
+              <div class="entity-card__rel"><span class="tag">party to agreement</span> Meridian LLC — "signatory"</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
