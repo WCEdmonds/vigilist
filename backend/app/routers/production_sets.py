@@ -196,3 +196,111 @@ async def delete_production_set(
     await db.delete(ps)
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/production-sets/{set_id}/documents")
+async def add_documents(
+    set_id: int,
+    body: ProductionSetAddDocuments,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id, require_manager=True)
+    if ps.status != "draft":
+        raise HTTPException(status_code=409, detail="Production set is locked")
+    if not body.document_ids and body.tag_id is None:
+        raise HTTPException(status_code=422, detail="Provide document_ids and/or tag_id")
+
+    explicit = set(body.document_ids or [])
+    candidates = set(explicit)
+    if body.tag_id is not None:
+        tag_rows = (await db.execute(
+            select(DocumentTag.document_id)
+            .join(Document, Document.id == DocumentTag.document_id)
+            .where(DocumentTag.tag_id == body.tag_id,
+                   Document.production_id == ps.production_id)
+        )).all()
+        candidates.update(r[0] for r in tag_rows)
+
+    info_rows = []
+    if candidates:
+        info_rows = (await db.execute(
+            select(Document.id, Document.production_id, Document.family_id)
+            .where(Document.id.in_(candidates))
+        )).all()
+    found = {r[0] for r in info_rows}
+    if (explicit - found) or any(r[1] != ps.production_id for r in info_rows):
+        raise HTTPException(status_code=422, detail="Documents not found in this matter")
+
+    families_added = 0
+    if body.include_families:
+        fams = {r[2] for r in info_rows if r[2]}
+        if fams:
+            fam_rows = (await db.execute(
+                select(Document.id)
+                .where(Document.production_id == ps.production_id,
+                       Document.family_id.in_(fams))
+            )).all()
+            fam_ids = {r[0] for r in fam_rows}
+            families_added = len(fam_ids - candidates)
+            candidates |= fam_ids
+
+    skipped_duplicates = 0
+    if body.exclude_duplicates:
+        dup_rows = (await db.execute(
+            select(DocumentDuplicate.group_id, DocumentDuplicate.document_id,
+                   Document.bates_begin)
+            .join(DuplicateGroup, DuplicateGroup.id == DocumentDuplicate.group_id)
+            .join(Document, Document.id == DocumentDuplicate.document_id)
+            .where(DuplicateGroup.production_id == ps.production_id,
+                   DuplicateGroup.type == "hash")
+        )).all()
+        groups: dict[int, list[tuple[str, object]]] = {}
+        for gid, did, control in dup_rows:
+            groups.setdefault(gid, []).append((control, did))
+        for members in groups.values():
+            primary = min(members)[1]  # lowest control number wins
+            for _, did in members:
+                if did in candidates and did != primary and did not in explicit:
+                    candidates.discard(did)
+                    skipped_duplicates += 1
+
+    existing_rows = (await db.execute(
+        select(ProductionSetItem.document_id)
+        .where(ProductionSetItem.production_set_id == set_id)
+    )).all()
+    existing = {r[0] for r in existing_rows}
+    to_add = candidates - existing
+    for did in sorted(to_add, key=str):
+        db.add(ProductionSetItem(production_set_id=set_id, document_id=did))
+
+    summary = {"added": len(to_add), "skipped_existing": len(candidates & existing),
+               "skipped_duplicates": skipped_duplicates, "families_added": families_added}
+    await log_action(db, user, "production_set_documents_added", "production_set",
+                     str(set_id), production_id=ps.production_id, details=summary)
+    await db.commit()
+    return summary
+
+
+@router.delete("/production-sets/{set_id}/documents")
+async def remove_documents(
+    set_id: int,
+    body: ProductionSetRemoveDocuments,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id, require_manager=True)
+    if ps.status != "draft":
+        raise HTTPException(status_code=409, detail="Production set is locked")
+    await db.execute(
+        sa_delete(ProductionSetItem).where(
+            ProductionSetItem.production_set_id == set_id,
+            ProductionSetItem.document_id.in_(body.document_ids),
+        )
+    )
+    await log_action(db, user, "production_set_documents_removed", "production_set",
+                     str(set_id), production_id=ps.production_id,
+                     details={"document_ids": [str(i) for i in body.document_ids]})
+    await db.commit()
+    # count of requested ids (fake sessions have no rowcount)
+    return {"removed": len(body.document_ids)}
