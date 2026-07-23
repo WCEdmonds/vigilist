@@ -24,13 +24,14 @@ from app.services.privilege import effective_disposition, qc_status
 async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
                             doc_ids: list) -> dict:
     out: dict = {"qc_pending": [], "privilege_produce": [], "no_images": [],
-                 "total": 0}
+                 "received_document": [], "total": 0}
     if not doc_ids:
         return out
 
     doc_rows = (await db.execute(
         select(Document.id, Document.bates_begin,
-               Document.privilege_disposition, Document.image_paths)
+               Document.privilege_disposition, Document.image_paths,
+               Document.source_type, Document.source_party)
         .where(Document.id.in_(doc_ids))
     )).all()
 
@@ -58,7 +59,7 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
     )).scalars().all():
         latest.setdefault(d.document_id, d)
 
-    for did, control, override, image_paths in doc_rows:
+    for did, control, override, image_paths, source_type, source_party in doc_rows:
         count, changed = reds.get(did, (0, None))
         disposition = effective_disposition(
             has_privilege_tag=did in privileged,
@@ -84,7 +85,12 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
             out["no_images"].append({
                 "document_id": str(did), "control_number": control,
                 "detail": "no page images to produce"})
+        if source_type == "received":
+            out["received_document"].append({
+                "document_id": str(did), "control_number": control,
+                "detail": f"received from {source_party or 'another party'} — "
+                          "not part of our collection"})
 
     out["total"] = (len(out["qc_pending"]) + len(out["privilege_produce"])
-                    + len(out["no_images"]))
+                    + len(out["no_images"]) + len(out["received_document"]))
     return out

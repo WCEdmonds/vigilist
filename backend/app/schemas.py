@@ -678,6 +678,7 @@ class ProductionSetAddDocuments(BaseModel):
     tag_id: int | None = None
     include_families: bool = False
     exclude_duplicates: bool = False
+    exclude_received: bool = False
 
 
 class ProductionSetRemoveDocuments(BaseModel):
