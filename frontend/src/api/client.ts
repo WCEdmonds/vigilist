@@ -441,14 +441,14 @@ export interface ProposedColumn {
   source: 'alias' | 'ai' | 'unmapped';
 }
 
-export const analyzeLoadFile = (productionId: number) =>
+export const analyzeLoadFile = (productionId: number, loadId?: string) =>
   request<{
     format: { encoding: string; delimiter: string };
     columns: ProposedColumn[];
     sample_rows: Record<string, string>[];
     total_rows: number;
   }>(
-    '/api/ingest/analyze', json({ production_id: productionId }),
+    '/api/ingest/analyze', json({ production_id: productionId, load_id: loadId }),
   );
 
 export const startProcessing = (
@@ -459,6 +459,7 @@ export const startProcessing = (
   custodian: string = '',
   sourceParty: string = '',
   sourceType: 'collection' | 'received' = 'collection',
+  loadId?: string,
 ) =>
   request<IngestJob>('/api/ingest/process', json({
     production_id: productionId,
@@ -468,6 +469,7 @@ export const startProcessing = (
     custodian,
     source_party: sourceParty,
     source_type: sourceType,
+    load_id: loadId,
   }));
 
 export const getPipeline = (productionId: number): Promise<PipelineInfo> =>

@@ -929,6 +929,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       {/* Ingest wizard modal */}
       {showIngestWizard && (
         <IngestWizard
+          existingProduction={{ id: production.id, name: production.name }}
           onClose={() => setShowIngestWizard(false)}
           onComplete={() => { setShowIngestWizard(false); onIngestComplete(); }}
         />
