@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptMergeSuggestion, listEntities, listMergeSuggestions, rejectMergeSuggestion } from '../api/client';
+import { acceptMergeSuggestion, listEntities, listMergeSuggestions, rejectMergeSuggestion, triggerEntityExtraction } from '../api/client';
 import type { EntityListItem, MergeSuggestion } from '../types';
 import EntityPanel from './EntityPanel';
 
@@ -18,6 +18,8 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
   const [openEntityId, setOpenEntityId] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractMsg, setExtractMsg] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     listEntities(productionId, search || undefined, typeFilter || undefined)
@@ -29,6 +31,24 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
   }, [productionId, search, typeFilter]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // While a backfill runs, poll so names appear as documents are processed.
+  useEffect(() => {
+    if (!extracting) return;
+    const timer = setInterval(refresh, 15000);
+    return () => clearInterval(timer);
+  }, [extracting, refresh]);
+
+  const startExtraction = async () => {
+    setExtractMsg(null);
+    try {
+      await triggerEntityExtraction(productionId);
+      setExtracting(true);
+      setExtractMsg('Extraction started — entities appear below as documents are processed.');
+    } catch (e) {
+      setExtractMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const resolve = async (id: number, accept: boolean) => {
     setBusy(id);
@@ -61,7 +81,20 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
           <option value="person">People</option>
           <option value="org">Organizations</option>
         </select>
+        <button
+          className="btn btn-xs"
+          disabled={extracting}
+          onClick={startExtraction}
+          title="Run AI entity extraction over this matter's documents (manager only)"
+        >
+          {extracting ? 'Extracting…' : 'Extract entities'}
+        </button>
       </div>
+      {extractMsg && (
+        <div style={{ padding: '4px var(--space-4)', fontSize: 'var(--text-xs)', opacity: 0.8 }}>
+          {extractMsg}
+        </div>
+      )}
 
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
         {suggestions.length > 0 && (
@@ -110,7 +143,14 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
             ))}
           </tbody>
         </table>
-        {entities.length === 0 && <div className="empty-state">No entities extracted yet.</div>}
+        {entities.length === 0 && (
+          <div className="empty-state">
+            <div>No entities extracted yet.</div>
+            <button className="btn btn-xs" style={{ marginTop: 8 }} disabled={extracting} onClick={startExtraction}>
+              {extracting ? 'Extracting…' : 'Extract entities'}
+            </button>
+          </div>
+        )}
       </div>
 
       {openEntityId && (
