@@ -268,6 +268,11 @@ class ProductionUpdate(BaseModel):
     case_context: str | None = None
 
 
+class KeyPlayerOut(BaseModel):
+    name: str
+    entity_id: UUID4 | None = None
+
+
 class PipelineStatusOut(BaseModel):
     status: dict | None = None
     brief: dict | None = None
@@ -277,6 +282,7 @@ class PipelineStatusOut(BaseModel):
     # UI can show "Summaries · 275/550" while that stage runs.
     summarized_count: int = 0
     doc_count: int = 0
+    key_players_resolved: list[KeyPlayerOut] | None = None
 
 
 class IntakeSummaryOut(BaseModel):

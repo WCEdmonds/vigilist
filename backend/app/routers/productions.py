@@ -1,5 +1,6 @@
 """Production listing and access management."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -22,6 +23,8 @@ from app.schemas import (
     ProductionUpdate,
     ProductionWithAccess,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/productions", tags=["productions"])
 
@@ -164,12 +167,21 @@ async def get_pipeline(
             ).where(Document.production_id == production_id)
         )
     ).one()
+    key_players_resolved = None
+    if prod.brief and prod.brief.get("key_players"):
+        try:
+            from app.services.brief import resolve_key_players
+            key_players_resolved = await resolve_key_players(
+                db, production_id, list(prod.brief["key_players"]))
+        except Exception:
+            logger.exception("key player resolution failed for production %s", production_id)
     return PipelineStatusOut(
         status=prod.ai_pipeline_status,
         brief=prod.brief,
         case_context=prod.case_context,
         doc_count=counts[0],
         summarized_count=counts[1],
+        key_players_resolved=key_players_resolved,
     )
 
 

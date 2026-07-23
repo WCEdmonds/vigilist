@@ -187,3 +187,32 @@ async def generate_brief(db: AsyncSession, production_id: int) -> dict | None:
     brief["generated_at"] = datetime.now(timezone.utc).isoformat()
     brief["model"] = BRIEF_MODEL
     return brief
+
+
+async def resolve_key_players(db, production_id: int, names: list[str]) -> list[dict]:
+    """Match brief key_players strings to ontology entities at read time.
+
+    Read-only enrichment: normalized-name or alias equality, first match wins.
+    Never raises past the caller's guard — the brief must render regardless.
+    """
+    if not names:
+        return []
+    from sqlalchemy import select
+    from app.models import Entity
+    from app.services.entity_resolution import normalize_name
+
+    entities = (await db.execute(
+        select(Entity).where(Entity.production_id == production_id)
+    )).scalars().all()
+    by_norm: dict[str, Entity] = {}
+    for e in entities:
+        for form in [e.canonical_name, *(e.aliases or [])]:
+            norm = normalize_name(form)
+            if norm:
+                by_norm.setdefault(norm, e)
+
+    out = []
+    for name in names:
+        match = by_norm.get(normalize_name(name))
+        out.append({"name": name, "entity_id": str(match.id) if match else None})
+    return out
