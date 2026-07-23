@@ -47,6 +47,9 @@ class FakeResult:
     def scalar_one_or_none(self):
         return self._scalar
 
+    def first(self):
+        return self._items[0] if self._items else None
+
 
 class FakeSession:
     """get() serves objects by (ModelName, key); execute() dispatches on SQL
