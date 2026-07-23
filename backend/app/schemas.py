@@ -615,3 +615,65 @@ class ThreadStats(BaseModel):
     threads: int
     inclusive: int
     messages: int
+
+
+# --- P2-1: production sets --------------------------------------------------
+
+class ProductionSetCreate(BaseModel):
+    name: str
+    prefix: str
+    padding: int = 6
+    start_number: int = 1
+    sort_key: str = "control_number"
+    designation: str | None = None
+
+
+class ProductionSetOut(BaseModel):
+    id: int
+    production_id: int
+    name: str
+    status: str
+    prefix: str
+    padding: int
+    start_number: int
+    sort_key: str
+    designation: str | None
+    created_by: str
+    created_at: datetime
+    locked_by: str | None
+    locked_at: datetime | None
+    doc_count: int = 0
+    page_count: int | None = None
+    bates_begin: str | None = None
+    bates_end: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ProductionSetMemberOut(BaseModel):
+    document_id: UUID
+    control_number: str
+    sort_order: int | None
+    bates_begin: str | None
+    bates_end: str | None
+    pages: int | None
+    disposition: str | None
+    designation: str | None
+
+
+class ProductionSetAddDocuments(BaseModel):
+    document_ids: list[UUID] | None = None
+    tag_id: int | None = None
+    include_families: bool = False
+    exclude_duplicates: bool = False
+
+
+class ProductionSetRemoveDocuments(BaseModel):
+    document_ids: list[UUID]
+
+
+class ProductionSetLockOut(BaseModel):
+    doc_count: int
+    page_count: int
+    bates_begin: str
+    bates_end: str

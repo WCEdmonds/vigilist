@@ -9,6 +9,15 @@ from datetime import datetime, timezone
 
 TS = datetime(2026, 7, 22, 12, 0, 0, tzinfo=timezone.utc)
 
+_TS_DEFAULT_FIELDS = ("decided_at", "created_at")
+
+
+def _fill_timestamps(obj):
+    """Stand in for server_default timestamps on flush/refresh."""
+    for field in _TS_DEFAULT_FIELDS:
+        if hasattr(obj, field) and getattr(obj, field) is None:
+            setattr(obj, field, TS)
+
 
 class FakeUser:
     def __init__(self, uid="u1"):
@@ -63,8 +72,7 @@ class FakeSession:
     def add(self, obj):
         if getattr(obj, "id", None) is None:
             obj.id = 1000 + len(self.added)
-        if getattr(obj, "decided_at", None) is None and hasattr(obj, "decided_at"):
-            obj.decided_at = TS
+        _fill_timestamps(obj)
         self.added.append(obj)
 
     async def flush(self):
@@ -74,8 +82,7 @@ class FakeSession:
         pass
 
     async def refresh(self, obj):
-        if getattr(obj, "decided_at", None) is None and hasattr(obj, "decided_at"):
-            obj.decided_at = TS
+        _fill_timestamps(obj)
 
     async def delete(self, obj):
         pass
