@@ -84,3 +84,20 @@ document.querySelectorAll('.graph__node[data-key]').forEach((node) => {
     }
   });
 })();
+
+// Pricing calculator: matter size -> monthly bill + rough document count.
+(() => {
+  const slider = document.querySelector('#calc-gb');
+  if (!slider) return;
+  const gbval = document.querySelector('.calc__gbval');
+  const price = document.querySelector('.calc__price');
+  const docs = document.querySelector('.calc__docs');
+  const render = () => {
+    const gb = Number(slider.value);
+    gbval.textContent = gb;
+    price.textContent = '$' + (gb * 18).toLocaleString('en-US');
+    docs.textContent = (gb * 5000).toLocaleString('en-US');
+  };
+  slider.addEventListener('input', render);
+  render();
+})();
