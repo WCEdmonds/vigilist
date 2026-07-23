@@ -24,3 +24,63 @@ document.querySelectorAll('.graph__node[data-key]').forEach((node) => {
   node.addEventListener('mouseenter', () => graph.setAttribute('data-focus', node.dataset.key));
   node.addEventListener('mouseleave', () => graph.removeAttribute('data-focus'));
 });
+
+// Demo request modal: blurred backdrop, basic info, delivered by email.
+(() => {
+  const modal = document.querySelector('.demo');
+  if (!modal) return;
+  const card = modal.querySelector('.demo__card');
+  const form = modal.querySelector('.demo__form');
+  const done = modal.querySelector('.demo__done');
+  const status = modal.querySelector('.demo__status');
+  const submitBtn = modal.querySelector('.demo__submit');
+  let lastFocus = null;
+
+  const open = () => {
+    lastFocus = document.activeElement;
+    modal.hidden = false;
+    document.body.classList.add('demo-open');
+    const first = form.querySelector('input');
+    if (first) first.focus();
+  };
+  const close = () => {
+    modal.hidden = true;
+    document.body.classList.remove('demo-open');
+    if (lastFocus) lastFocus.focus();
+  };
+
+  document.querySelectorAll('[data-demo-open]').forEach(b => b.addEventListener('click', open));
+  modal.querySelectorAll('[data-demo-close]').forEach(b => b.addEventListener('click', close));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) close(); });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status.textContent = '';
+    const data = Object.fromEntries(new FormData(form).entries());
+    if (!data.name || !data.email || !/@/.test(data.email)) {
+      status.textContent = 'Please add your name and a work email.';
+      return;
+    }
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Sending…';
+    try {
+      const res = await fetch('https://formsubmit.co/ajax/will@qndary.com', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          _subject: `Vigilist demo request — ${data.name}${data.firm ? ' (' + data.firm + ')' : ''}`,
+          name: data.name, email: data.email, firm: data.firm || '', details: data.details || '',
+        }),
+      });
+      if (!res.ok) throw new Error('send failed');
+      form.hidden = true;
+      done.hidden = false;
+      card.querySelector('h2').textContent = 'Request sent.';
+    } catch {
+      status.textContent = "Couldn't send — please email will@qndary.com directly.";
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Send request';
+    }
+  });
+})();

@@ -95,53 +95,49 @@ mark.hl-sweep {
 }
 @keyframes hlsweep { to { background-size: 100% 45%; } }
 
-/* ── The processed document (signature) ── */
-.docproc { margin: 0; }
-.docproc__meta { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em;
+/* ── The triage wall (signature): everything read, the key docs surface ── */
+.triage { margin: 0; }
+.triage__meta { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em;
   color: var(--ink-2); margin-bottom: 10px; }
-.docproc__page { position: relative; background: #fff; border: 1px solid #e3e2da;
-  border-radius: 3px; box-shadow: 0 30px 60px -18px rgba(20,24,29,0.25);
-  padding: 34px 30px 58px; overflow: hidden; }
-.dl { height: 11px; background: #e7e6df; border-radius: 1px; margin: 13px 0; }
-.dl-row { display: flex; align-items: center; gap: 10px; margin: 13px 0; }
-.dl-row .dl { margin: 0; flex-shrink: 0; }
-.w22 { width: 22%; } .w28 { width: 28%; } .w40 { width: 40%; }
-.w56 { width: 56%; } .w72 { width: 72%; } .w80 { width: 80%; }
-.w88 { width: 88%; } .w92 { width: 92%; }
-
-/* scan line pass */
-.docproc__scan { position: absolute; top: 0; bottom: 0; left: -14%; width: 10%;
-  background: linear-gradient(to right, transparent, rgba(47,61,189,0.10), transparent);
-  animation: scan 1.35s ease-in-out 0.25s 1 forwards; }
-@keyframes scan { to { left: 108%; } }
-
-/* entities pop as the scan passes */
-.ent { font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600;
-  letter-spacing: 0.06em; padding: 3px 7px; border-radius: 2px; background: var(--marker);
-  color: var(--ink); opacity: 0; transform: translateY(4px);
-  animation: entpop 0.35s ease-out forwards; }
-.ent--a { animation-delay: 0.7s; }
-.ent--b { animation-delay: 1.05s; }
-@keyframes entpop { to { opacity: 1; transform: none; } }
-
-/* one line gets redacted */
-.dl-redact { position: relative; height: 13px; margin: 13px 0; background: #e7e6df; border-radius: 1px; }
-.redactbar { position: absolute; inset: -1px auto -1px 0; width: 0; background: var(--redact);
-  border-radius: 1px; animation: redactwipe 0.5s cubic-bezier(.7,0,.3,1) 1.6s forwards; }
-@keyframes redactwipe { to { width: 78%; } }
-
-/* the Bates stamp punches in */
-.stamp { position: absolute; right: 20px; bottom: 14px; font-family: var(--font-mono);
-  font-size: 0.72rem; font-weight: 600; line-height: 1.5; text-align: center;
-  color: var(--stamp); border: 2px double var(--stamp); border-radius: 2px;
-  padding: 4px 10px; background: var(--stamp-soft);
-  transform: rotate(-4deg) scale(1.7); opacity: 0;
-  animation: stamppunch 0.28s cubic-bezier(.2,1.6,.4,1) 2.25s forwards; }
-.stamp em { font-style: normal; font-size: 0.6rem; letter-spacing: 0.18em; }
-@keyframes stamppunch { to { transform: rotate(-4deg) scale(1); opacity: 1; } }
+.triage__wall { position: relative; display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 7px; overflow: hidden; padding: 2px; }
+.td { display: block; height: 52px; border-radius: 2px; background:
+  repeating-linear-gradient(#fff 0 5px, #e7e6df 5px 7px, #fff 7px 12px);
+  background-color: #fff; border: 1px solid #e3e2da;
+  box-shadow: 0 4px 10px -4px rgba(20,24,29,0.18);
+  animation: tdim 0.4s ease forwards; animation-delay: var(--d, 0.6s); }
+@keyframes tdim { to { opacity: 0.32; filter: grayscale(1); } }
+.td--hot { animation: thot 0.45s cubic-bezier(.2,1.4,.4,1) forwards;
+  animation-delay: calc(var(--d, 0.6s) + 0.55s); }
+@keyframes thot { to { opacity: 1; filter: none; background: var(--marker);
+  border-color: var(--marker-deep); transform: scale(1.07);
+  box-shadow: 0 8px 18px -6px rgba(20,24,29,0.35); } }
+.triage__scan { position: absolute; left: 0; right: 0; top: -14%; height: 12%; z-index: 1;
+  background: linear-gradient(to bottom, transparent, rgba(47,61,189,0.14), transparent);
+  animation: tscan 1.3s ease-in-out 0.3s 1 forwards; }
+@keyframes tscan { to { top: 108%; } }
+.triage__panel { position: relative; margin: -18px 12px 0; background: #fff;
+  border: 1px solid #e3e2da; border-top: 5px solid var(--marker); border-radius: 3px;
+  box-shadow: 0 24px 48px -14px rgba(20,24,29,0.3); padding: 14px 16px 12px; z-index: 2; }
+.triage__panel-head { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 600;
+  letter-spacing: 0.12em; color: var(--stamp); margin-bottom: 8px;
+  opacity: 0; animation: trowin 0.35s ease-out 1.9s forwards; }
+.trow { display: flex; align-items: baseline; gap: 10px; font-size: 0.82rem;
+  padding: 5px 0; border-top: 1px solid var(--paper-dim);
+  opacity: 0; transform: translateY(5px); animation: trowin 0.35s ease-out forwards; }
+.trow:nth-of-type(2) { animation-delay: 2.05s; }
+.trow:nth-of-type(3) { animation-delay: 2.2s; }
+.trow:nth-of-type(4) { animation-delay: 2.35s; }
+.trow:nth-of-type(5) { animation-delay: 2.5s; }
+@keyframes trowin { to { opacity: 1; transform: none; } }
+.trow__bates { font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600;
+  color: var(--stamp); white-space: nowrap; }
+.trow__desc { flex: 1; color: var(--ink); }
+.trow__score { font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600;
+  background: var(--marker); padding: 1px 6px; border-radius: 2px; }
+.triage__readout { margin: 16px 14px 0; opacity: 0; animation: trowin 0.5s ease-out 2.85s forwards; }
 
 /* validation readout */
-.docproc__readout { margin: 14px 2px 0; opacity: 0; animation: entpop 0.5s ease-out 2.7s forwards; }
 .readout__line { display: block; font-family: var(--font-mono); font-size: 0.78rem;
   font-weight: 600; color: var(--ink); }
 .readout__line b { color: var(--stamp); font-weight: 600; }
@@ -319,6 +315,34 @@ html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
 .footer__tag { color: var(--ink-2); font-size: 0.9rem; }
 .footer__right { display: flex; gap: 22px; align-items: center; font-size: 0.9rem; }
 
+/* ── Demo request modal ── */
+button.btn { font-family: inherit; cursor: pointer; line-height: inherit; }
+.demo { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
+  justify-content: center; padding: 20px; }
+.demo[hidden] { display: none; }
+.demo__backdrop { position: absolute; inset: 0; background: rgba(20,24,29,0.45);
+  -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); }
+.demo__card { position: relative; background: var(--paper); border-radius: 3px;
+  border-top: 6px solid var(--marker); box-shadow: 0 40px 80px -20px rgba(0,0,0,0.5);
+  padding: 34px 36px; width: min(480px, 100%); max-height: 92vh; overflow-y: auto; }
+.demo__card h2 { font-size: 1.7rem; margin-bottom: 20px; }
+.demo__close { position: absolute; top: 14px; right: 16px; border: 0; background: none;
+  font-size: 1.6rem; line-height: 1; cursor: pointer; color: var(--ink-2); padding: 6px; }
+.demo__close:hover { color: var(--ink); }
+.demo__form { display: flex; flex-direction: column; gap: 14px; }
+.demo__form label { font-weight: 600; font-size: 0.9rem; display: flex;
+  flex-direction: column; gap: 6px; }
+.demo__hint { font-weight: 400; color: var(--ink-2); font-size: 0.8rem; }
+.demo .input { font-family: inherit; font-size: 0.95rem; padding: 10px 12px;
+  border: 1.5px solid #d9d8cf; border-radius: 2px; background: #fff; color: var(--ink); }
+.demo .input:focus { outline: none; border-color: var(--stamp); box-shadow: 0 0 0 3px var(--stamp-soft); }
+.demo__submit { margin-top: 4px; align-self: flex-start; }
+.demo__status { margin: 0; font-size: 0.85rem; color: #b00020; min-height: 1.2em; }
+.demo__alt { margin: 0; font-size: 0.82rem; color: var(--ink-2); }
+.demo__done-lead { font-family: var(--font-display); font-size: 1.6rem; font-weight: 800;
+  margin: 0 0 8px; }
+body.demo-open { overflow: hidden; }
+
 /* ── Reveal on scroll (gated: content visible without JS) ── */
 .reveal-anim .reveal { opacity: 0; transform: translateY(14px); transition: opacity .5s ease, transform .5s ease; }
 .reveal-anim .reveal.is-visible { opacity: 1; transform: none; }
@@ -347,10 +371,11 @@ html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
 /* ── Reduced motion: land on the final frame ── */
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .docproc__scan { display: none; }
-  .ent, .docproc__readout { opacity: 1; transform: none; animation: none; }
-  .redactbar { width: 78%; animation: none; }
-  .stamp { opacity: 1; transform: rotate(-4deg) scale(1); animation: none; }
+  .triage__scan { display: none; }
+  .td { animation: none; opacity: 0.32; filter: grayscale(1); }
+  .td--hot { animation: none; opacity: 1; filter: none; background: var(--marker);
+    border-color: var(--marker-deep); }
+  .trow, .triage__panel-head, .triage__readout { opacity: 1; transform: none; animation: none; }
   mark.hl-sweep { background-size: 100% 45%; animation: none; }
   .reveal-anim .reveal { opacity: 1; transform: none; transition: none; }
   .reveal-anim .timecut__bar { transition: none; }

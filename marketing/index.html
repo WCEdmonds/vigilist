@@ -22,7 +22,7 @@
         <a href="#defensible">Defensibility</a>
         <a href="#pricing">Pricing</a>
         <a class="btn btn--ghost" href="https://app.vigilist.co">Log in</a>
-        <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
+        <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
       </nav>
     </div>
   </header>
@@ -33,31 +33,30 @@
       <div class="container hero__inner">
         <div class="hero__copy">
           <p class="bates">VIGILIST&nbsp;000001</p>
-          <h1>The AI reads everything.<br><mark class="hl-sweep">You read what matters.</mark></h1>
-          <p class="hero__sub">Vigilist reads the whole corpus the day it lands — coding every document, mapping every person, organization, and event into a <strong>knowledge graph</strong>, and briefing your team with citations. Weeks of linear review collapse into days: you start at the documents that decide the case, not at page one.</p>
+          <h1>The production lands Friday.<br><mark class="hl-sweep">You're ready Monday.</mark></h1>
+          <p class="hero__sub">Opposing counsel sends ten thousand documents. Overnight, Vigilist reads every one — coding each document and mapping every person, organization, and event into a <strong>knowledge graph</strong>. By morning your team has a review list that starts at the documents that decide the case, every call cited to the page that proves it.</p>
           <div class="hero__actions">
-            <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
+            <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
             <a class="btn btn--ghost" href="#how">Watch the lifecycle</a>
           </div>
         </div>
         <div class="hero__visual" aria-hidden="true">
-          <figure class="docproc">
-            <div class="docproc__meta">EX.&nbsp;14&nbsp;·&nbsp;SMITH&nbsp;v.&nbsp;ACME&nbsp;·&nbsp;INGESTED&nbsp;2026-07-23</div>
-            <div class="docproc__page">
-              <span class="docproc__scan"></span>
-              <div class="dl w88"></div>
-              <div class="dl w72"></div>
-              <div class="dl-row"><span class="ent ent--a">JORGE&nbsp;RIVERA</span><div class="dl w40"></div></div>
-              <div class="dl w92"></div>
-              <div class="dl-row"><div class="dl w28"></div><span class="ent ent--b">ACME&nbsp;CORP</span><div class="dl w22"></div></div>
-              <div class="dl-redact"><span class="redactbar"></span></div>
-              <div class="dl w80"></div>
-              <div class="dl w56"></div>
-              <span class="stamp">VIG&nbsp;000142<br><em>CONFIDENTIAL</em></span>
+          <figure class="triage">
+            <div class="triage__meta">SMITH&nbsp;v.&nbsp;ACME&nbsp;·&nbsp;LOAD&nbsp;2&nbsp;·&nbsp;INGESTED&nbsp;FRIDAY&nbsp;18:42</div>
+            <div class="triage__wall">
+              <span class="triage__scan"></span>
+              <i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td td--hot" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td td--hot" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td td--hot" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i><i class="td td--hot" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i>
             </div>
-            <figcaption class="docproc__readout">
-              <span class="readout__line">RECALL&nbsp;87.4%&nbsp;<b>[CI&nbsp;81.2–92.1]</b>&nbsp;·&nbsp;ELUSION&nbsp;0.4%&nbsp;·&nbsp;n=1,538</span>
-              <span class="readout__note">sample validation readout</span>
+            <div class="triage__panel">
+              <div class="triage__panel-head">REVIEW&nbsp;FIRST&nbsp;·&nbsp;MONDAY&nbsp;09:00</div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;003211</span><span class="trow__desc">Payment approval — Rivera → Meridian</span><span class="trow__score">0.97</span></div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;001874</span><span class="trow__desc">"delete the March thread"</span><span class="trow__score">0.96</span></div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;004096</span><span class="trow__desc">Board deck — the recall decision</span><span class="trow__score">0.94</span></div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;002440</span><span class="trow__desc">Meridian agreement, signed</span><span class="trow__score">0.93</span></div>
+            </div>
+            <figcaption class="triage__readout">
+              <span class="readout__line">9,912&nbsp;READ&nbsp;OVERNIGHT&nbsp;·&nbsp;<b>412&nbsp;SURFACED</b>&nbsp;·&nbsp;4&nbsp;FLAGGED&nbsp;KEY</span>
+              <span class="readout__note">illustrative matter · every call attorney-reviewable</span>
             </figcaption>
           </figure>
         </div>
@@ -285,7 +284,7 @@
               <li>Review, AI, redaction, production &amp; defensibility included</li>
               <li>No per-user fees, no minimums, no lock-in</li>
             </ul>
-            <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
+            <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
           </div>
         </div>
       </div>
@@ -297,7 +296,7 @@
         <p class="bates bates--light">VIGILIST&nbsp;000009</p>
         <h2>See it on your own production.</h2>
         <p>Bring a sample production and we'll walk the whole lifecycle — ingest, AI review, redaction, and a Bates-stamped production back out. Start to finish.</p>
-        <a class="btn btn--primary btn--lg" href="https://intake.qndary.com">Request a demo</a>
+        <button type="button" class="btn btn--primary btn--lg" data-demo-open>Request a demo</button>
       </div>
     </section>
   </main>
@@ -314,6 +313,36 @@
       </div>
     </div>
   </footer>
+  <div class="demo" hidden>
+    <div class="demo__backdrop" data-demo-close></div>
+    <div class="demo__card" role="dialog" aria-modal="true" aria-labelledby="demo-title">
+      <p class="bates">VIGILIST&nbsp;·&nbsp;DEMO&nbsp;REQUEST</p>
+      <button type="button" class="demo__close" data-demo-close aria-label="Close">&times;</button>
+      <h2 id="demo-title">See it on your own production.</h2>
+      <form class="demo__form" novalidate>
+        <label>Name
+          <input class="input" name="name" type="text" autocomplete="name" required>
+        </label>
+        <label>Work email
+          <input class="input" name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>Firm
+          <input class="input" name="firm" type="text" autocomplete="organization">
+        </label>
+        <label>What are you working with? <span class="demo__hint">(optional — matter type, rough volume)</span>
+          <textarea class="input" name="details" rows="3"></textarea>
+        </label>
+        <button type="submit" class="btn btn--primary demo__submit">Send request</button>
+        <p class="demo__status" role="status" aria-live="polite"></p>
+        <p class="demo__alt">Or email <a href="mailto:will@qndary.com?subject=Vigilist%20demo%20request">will@qndary.com</a> directly.</p>
+      </form>
+      <div class="demo__done" hidden>
+        <p class="demo__done-lead">Received.</p>
+        <p>We'll reply within one business day to set up a walkthrough on your own production.</p>
+        <button type="button" class="btn btn--ghost" data-demo-close>Close</button>
+      </div>
+    </div>
+  </div>
   <script src="main.js" defer></script>
 </body>
 </html>
