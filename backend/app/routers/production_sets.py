@@ -86,6 +86,10 @@ async def create_production_set(
         raise HTTPException(status_code=422, detail="invalid sort_key")
     if not (1 <= body.padding <= 12) or body.start_number < 1:
         raise HTTPException(status_code=422, detail="invalid padding or start_number")
+    if body.image_format not in ("pdf", "tiff"):
+        raise HTTPException(status_code=422, detail="image_format must be 'pdf' or 'tiff'")
+    if body.volume_max_mb is not None and body.volume_max_mb < 50:
+        raise HTTPException(status_code=422, detail="volume_max_mb must be at least 50")
 
     dup = (await db.execute(
         select(ProductionSet.id).where(
@@ -103,6 +107,9 @@ async def create_production_set(
         prefix=body.prefix, padding=body.padding, start_number=body.start_number,
         sort_key=body.sort_key, designation=body.designation, created_by=user.id,
         render_status="not_started", package_status="not_started",
+        image_format=body.image_format,
+        native_file_types=list(body.native_file_types or []),
+        volume_max_mb=body.volume_max_mb,
     )
     db.add(ps)
     await db.flush()
@@ -382,7 +389,8 @@ async def lock_production_set(
     doc_rows = (await db.execute(
         select(Document.id, Document.bates_begin, Document.family_id,
                Document.custodian, Document.date_sent, Document.date_received,
-               Document.page_count, Document.privilege_disposition)
+               Document.page_count, Document.privilege_disposition,
+               Document.file_type, Document.native_path)
         .where(Document.id.in_(doc_ids))
     )).all()
 
@@ -401,14 +409,22 @@ async def lock_production_set(
     red_counts = {r[0]: r[1] for r in red_rows}
 
     members: list[MemberInfo] = []
-    meta: dict = {}  # document_id -> (disposition, pages)
-    for did, control, family_id, custodian, date_sent, date_received, page_count, override in doc_rows:
+    meta: dict = {}  # document_id -> (disposition, pages, produce_native)
+    for (did, control, family_id, custodian, date_sent, date_received,
+         page_count, override, file_type, native_path) in doc_rows:
         disposition = effective_disposition(
             has_privilege_tag=did in privileged,
             has_redactions=red_counts.get(did, 0) > 0,
             override=override,
         ) or "produce"
-        meta[did] = (disposition, pages_for(disposition, page_count or 1))
+        # Native production: produce-disposition docs of the set's chosen file
+        # types ship as native files; their image counterpart is one slip-sheet.
+        produce_native = bool(
+            disposition == "produce" and native_path
+            and file_type in (ps.native_file_types or [])
+        )
+        pages = 1 if produce_native else pages_for(disposition, page_count or 1)
+        meta[did] = (disposition, pages, produce_native)
         members.append(MemberInfo(
             document_id=did, control_number=control, family_id=family_id,
             custodian=custodian, doc_date=date_sent or date_received,
@@ -425,7 +441,7 @@ async def lock_production_set(
         item.sort_order = sort_order
         item.bates_begin = begin
         item.bates_end = end
-        item.disposition, item.pages = meta[did]
+        item.disposition, item.pages, item.produce_native = meta[did]
 
     ps.status = "locked"
     ps.locked_by = user.id
@@ -529,13 +545,15 @@ async def get_produced_pdf(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    await _load_set(db, user, set_id)
+    ps = await _load_set(db, user, set_id)
     items = (await db.execute(
         select(ProductionSetItem).where(
             ProductionSetItem.production_set_id == set_id,
             ProductionSetItem.document_id == document_id,
         )
     )).scalars().all()
+    if ps.image_format == "tiff":
+        raise HTTPException(status_code=409, detail="TIFF production — spot-check via the package")
     if not items or not items[0].output_path:
         raise HTTPException(status_code=404, detail="Rendered output not found")
     item = items[0]

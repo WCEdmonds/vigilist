@@ -35,6 +35,9 @@ class FakePS:
         self.packaged_at = None
         self.conflicts_overridden_by = None
         self.conflicts_overridden_at = None
+        self.image_format = kw.get("image_format", "pdf")
+        self.native_file_types = kw.get("native_file_types", [])
+        self.volume_max_mb = kw.get("volume_max_mb", None)
 
 
 class FakeItem:
@@ -48,6 +51,7 @@ class FakeItem:
         self.disposition = kw.get("disposition", None)
         self.designation = kw.get("designation", None)
         self.output_path = kw.get("output_path", None)
+        self.produce_native = kw.get("produce_native", False)
 
 
 def _patch(monkeypatch, role="manager", accessible=(1,)):
@@ -410,9 +414,9 @@ def test_lock_assigns_and_snapshots(monkeypatch):
     doc_rows = [
         # (id, control, family_id, custodian, date_sent, date_received,
         #  page_count, privilege_disposition)
-        (d1, "C-1", None, "Alice", TS, None, 5, None),  # privilege tag -> withhold, 1 page
-        (d2, "C-2", None, "Bob", TS, None, 3, None),    # redactions -> redact_in_part
-        (d3, "C-3", None, "Cara", TS, None, 2, None),   # nothing -> produce
+        (d1, "C-1", None, "Alice", TS, None, 5, None, "email", None),  # privilege tag -> withhold, 1 page
+        (d2, "C-2", None, "Bob", TS, None, 3, None, "email", None),    # redactions -> redact_in_part
+        (d3, "C-3", None, "Cara", TS, None, 2, None, "email", None),   # nothing -> produce
     ]
     db = FakeSession(
         get_objects={("ProductionSet", 1): ps},
@@ -448,7 +452,7 @@ def test_lock_produce_override_keeps_full_pages(monkeypatch):
     d1 = uuid4()
     items = [FakeItem(d1, item_id=1)]
     ps = FakePS()
-    doc_rows = [(d1, "C-1", None, None, None, None, 4, "produce")]
+    doc_rows = [(d1, "C-1", None, None, None, None, 4, "produce", "email", None)]
     db = FakeSession(
         get_objects={("ProductionSet", 1): ps},
         responders=[
@@ -758,7 +762,7 @@ def test_lock_override_proceeds_and_stamps_audit(monkeypatch):
             ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
             ("is_privilege", FakeResult()),
             ("redactions", FakeResult(rows=[(d1, 2)])),
-            ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None)])),
+            ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None, "email", None)])),
         ],
     )
     out = asyncio.run(rps.lock_production_set(
@@ -783,7 +787,7 @@ def test_clean_lock_leaves_override_null(monkeypatch):
             ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
             ("is_privilege", FakeResult()),
             ("redactions", FakeResult()),
-            ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None)])),
+            ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None, "email", None)])),
         ],
     )
     asyncio.run(rps.lock_production_set(set_id=1, body=None, db=db, user=FakeUser()))
@@ -828,3 +832,62 @@ def test_add_exclude_received_never_drops_explicit(monkeypatch):
         db=db, user=FakeUser()))
     assert out["added"] == 1
     assert out["skipped_received"] == 0
+
+
+# --- P2-5: output options ---------------------------------------------------
+
+def test_create_rejects_bad_image_format(monkeypatch):
+    _patch(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.create_production_set(
+            production_id=1,
+            body=ProductionSetCreate(name="V", prefix="P", image_format="bmp"),
+            db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_create_rejects_tiny_volume_cap(monkeypatch):
+    _patch(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.create_production_set(
+            production_id=1,
+            body=ProductionSetCreate(name="V", prefix="P", volume_max_mb=5),
+            db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_lock_snapshots_produce_native(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    items = [FakeItem(d1, item_id=1)]
+    ps = FakePS(native_file_types=["spreadsheet"])
+    doc_rows = [(d1, "C-1", None, None, TS, None, 7, None,
+                 "spreadsheet", "productions/1/raw/loads/x/book.xlsx")]
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("coalesce", FakeResult()),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
+            ("is_privilege", FakeResult()),
+            ("redactions", FakeResult()),
+            ("documents.page_count", FakeResult(rows=doc_rows)),
+        ],
+    )
+    out = asyncio.run(rps.lock_production_set(set_id=1, body=None, db=db, user=FakeUser()))
+    assert items[0].produce_native is True
+    assert items[0].pages == 1          # native docs image side = one slip-sheet
+    assert out.page_count == 1
+
+
+def test_produced_pdf_409_for_tiff_set(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    item = FakeItem(d1, output_path="productions/1/production_sets/1/tiff/X.tif")
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS(status="locked", image_format="tiff")},
+        responders=[("production_set_items", FakeResult(items=[item]))],
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.get_produced_pdf(set_id=1, document_id=d1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409

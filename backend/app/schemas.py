@@ -628,6 +628,9 @@ class ProductionSetCreate(BaseModel):
     start_number: int = 1
     sort_key: str = "control_number"
     designation: str | None = None
+    image_format: str = "pdf"
+    native_file_types: list[str] = []
+    volume_max_mb: int | None = None
 
 
 class ProductionSetOut(BaseModel):
@@ -658,6 +661,9 @@ class ProductionSetOut(BaseModel):
     packaged_at: datetime | None = None
     conflicts_overridden_by: str | None = None
     conflicts_overridden_at: datetime | None = None
+    image_format: str = "pdf"
+    native_file_types: list[str] = []
+    volume_max_mb: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -671,6 +677,7 @@ class ProductionSetMemberOut(BaseModel):
     pages: int | None
     disposition: str | None
     designation: str | None
+    produce_native: bool = False
 
 
 class ProductionSetAddDocuments(BaseModel):
