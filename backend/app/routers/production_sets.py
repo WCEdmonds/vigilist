@@ -34,6 +34,7 @@ from app.services import tasks
 from app.services.audit import log_action
 from app.services.oidc import verify_cloud_tasks_request
 from app.services.privilege import effective_disposition
+from app.services.production_export import compute_manifest, package_set
 from app.services.production_render import finalize_if_complete, render_batch
 from app.services.storage import get_signed_url
 from app.services.production_numbering import (
@@ -99,7 +100,7 @@ async def create_production_set(
         production_id=production_id, name=body.name, status="draft",
         prefix=body.prefix, padding=body.padding, start_number=body.start_number,
         sort_key=body.sort_key, designation=body.designation, created_by=user.id,
-        render_status="not_started",
+        render_status="not_started", package_status="not_started",
     )
     db.add(ps)
     await db.flush()
@@ -493,5 +494,92 @@ async def get_produced_pdf(
     url = get_signed_url(
         item.output_path,
         response_disposition=f'attachment; filename="{item.bates_begin}.pdf"',
+    )
+    return RedirectResponse(url, status_code=307)
+
+
+@router.get("/production-sets/{set_id}/manifest")
+async def get_manifest(
+    set_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id)
+    if ps.status != "locked":
+        raise HTTPException(status_code=409, detail="Production set must be locked")
+    items = (await db.execute(
+        select(ProductionSetItem)
+        .where(ProductionSetItem.production_set_id == set_id)
+        .order_by(ProductionSetItem.sort_order)
+    )).scalars().all()
+    return compute_manifest(ps, items)
+
+
+@router.post("/production-sets/{set_id}/package")
+async def package_production_set(
+    set_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id, require_manager=True)
+    if ps.status != "locked" or ps.render_status != "rendered":
+        raise HTTPException(status_code=409, detail="Production set must be rendered before packaging")
+    if ps.package_status == "packaging":
+        raise HTTPException(status_code=409, detail="Packaging already in progress")
+    count = (await db.execute(
+        select(func.count(ProductionSetItem.id))
+        .where(ProductionSetItem.production_set_id == set_id)
+    )).scalar() or 0
+    ps.package_status = "packaging"
+    ps.package_error = None
+    ps.package_path = None
+    ps.packaged_at = None
+    await log_action(db, user, "production_set_package_started", "production_set",
+                     str(set_id), production_id=ps.production_id,
+                     details={"documents": count})
+    await db.commit()
+    if tasks.is_configured():
+        tasks.enqueue_package(set_id)
+    else:
+        background_tasks.add_task(_package_inline, set_id)
+    return {"documents": count}
+
+
+async def _package_inline(set_id: int):
+    """Dev fallback: package in-process on a fresh session."""
+    from app.database import async_session
+
+    async with async_session() as db:
+        await package_set(db, set_id)
+
+
+@router.post("/production-sets/package-worker")
+async def package_worker_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker — packages one set. Always 200; failures land in
+    package_status='error' (non-2xx would loop a deterministic failure)."""
+    set_id = body.get("set_id")
+    if set_id is None:
+        raise HTTPException(status_code=400, detail="set_id required")
+    await package_set(db, int(set_id))
+    return {"ok": True}
+
+
+@router.get("/production-sets/{set_id}/package")
+async def download_package(
+    set_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id)
+    if ps.package_status != "packaged" or not ps.package_path:
+        raise HTTPException(status_code=404, detail="Package not available")
+    url = get_signed_url(
+        ps.package_path,
+        response_disposition=f'attachment; filename="{ps.prefix}_production.zip"',
     )
     return RedirectResponse(url, status_code=307)
