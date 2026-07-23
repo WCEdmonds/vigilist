@@ -17,6 +17,7 @@ from app.services.email import send_access_granted_email, send_invite_email
 from app.schemas import (
     IntakeSummaryOut,
     InviteRequest,
+    KeyPlayerOut,
     PendingInviteOut,
     PipelineStatusOut,
     ProductionAccessOut,
@@ -171,10 +172,13 @@ async def get_pipeline(
     if prod.brief and prod.brief.get("key_players"):
         try:
             from app.services.brief import resolve_key_players
-            key_players_resolved = await resolve_key_players(
+            resolved = await resolve_key_players(
                 db, production_id, list(prod.brief["key_players"]))
+            # Validate here so a malformed id degrades to un-augmented, never a 500.
+            key_players_resolved = [KeyPlayerOut(**r) for r in resolved]
         except Exception:
             logger.exception("key player resolution failed for production %s", production_id)
+            key_players_resolved = None
     return PipelineStatusOut(
         status=prod.ai_pipeline_status,
         brief=prod.brief,
