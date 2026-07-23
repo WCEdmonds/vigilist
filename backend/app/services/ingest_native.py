@@ -21,11 +21,14 @@ from app.services.storage import get_download_bytes, list_files
 
 logger = logging.getLogger(__name__)
 
-# Email containers handled by the one-file→many email path (SP4b-1).
-EMAIL_EXTS = {".eml", ".msg", ".pst", ".ost"}
-# PST/OST containers explode into many messages whose raw bytes we do not keep,
-# so their per-message hash comes from a deterministic re-serialization.
+# Email containers handled by the one-file→many email path (SP4b-1; .mbox added
+# in Task F2).
+EMAIL_EXTS = {".eml", ".msg", ".pst", ".ost", ".mbox"}
+# PST/OST/mbox containers explode into many messages whose raw bytes we do not
+# keep, so their per-message hash comes from a deterministic re-serialization.
 _PST_EXTS = {".pst", ".ost"}
+_MBOX_EXTS = {".mbox"}
+_TRANSIENT_CONTAINER_EXTS = _PST_EXTS | _MBOX_EXTS
 
 
 def list_native_sources(production_id: int, load_prefix: str | None = None) -> list[dict]:
@@ -240,15 +243,16 @@ def process_native_email(
 
     multi = len(messages) > 1
     # A single .eml/.msg IS one message, so its file bytes are the message bytes.
-    # PST/OST containers are exploded into transient .eml files we do not keep, so
-    # every PST message hashes a deterministic re-serialization — regardless of
-    # how many messages the container held (a 1-message PST still isn't its own
-    # file's bytes).
-    is_pst = os.path.splitext(filename)[1].lower() in _PST_EXTS
+    # PST/OST/mbox containers are exploded into transient messages we do not
+    # keep (readpst's .eml files; mailbox's parsed records), so every message
+    # hashes a deterministic re-serialization — regardless of how many messages
+    # the container held (a 1-message container still isn't its own file's
+    # bytes).
+    is_transient_container = os.path.splitext(filename)[1].lower() in _TRANSIENT_CONTAINER_EXTS
     docs: list[Document] = []
     for m, parsed in enumerate(messages, start=1):
         message_control = f"{base_control} -{m:04d}" if multi else base_control
-        msg_bytes = _serialize_message(parsed) if is_pst else data
+        msg_bytes = _serialize_message(parsed) if is_transient_container else data
         try:
             docs.extend(
                 build_email_documents(
@@ -270,8 +274,9 @@ def process_native_email(
 def _serialize_message(parsed: ParsedMessage) -> bytes:
     """Deterministic byte serialization of a parsed message for hashing.
 
-    PST messages are exploded to transient .eml files we do not keep, so we hash
-    a stable serialization of the parsed fields instead of the raw container.
+    PST/mbox messages are exploded to transient records we do not keep, so we
+    hash a stable serialization of the parsed fields instead of the raw
+    container.
     """
     header = "\n".join(
         [
