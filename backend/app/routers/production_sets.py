@@ -3,8 +3,9 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete as sa_delete, func, select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import RedirectResponse
+from sqlalchemy import delete as sa_delete, func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -29,8 +30,12 @@ from app.schemas import (
     ProductionSetOut,
     ProductionSetRemoveDocuments,
 )
+from app.services import tasks
 from app.services.audit import log_action
+from app.services.oidc import verify_cloud_tasks_request
 from app.services.privilege import effective_disposition
+from app.services.production_render import finalize_if_complete, render_batch
+from app.services.storage import get_signed_url
 from app.services.production_numbering import (
     SORT_KEYS,
     MemberInfo,
@@ -94,6 +99,7 @@ async def create_production_set(
         production_id=production_id, name=body.name, status="draft",
         prefix=body.prefix, padding=body.padding, start_number=body.start_number,
         sort_key=body.sort_key, designation=body.designation, created_by=user.id,
+        render_status="not_started",
     )
     db.add(ps)
     await db.flush()
@@ -150,6 +156,7 @@ async def get_production_set(
     )).scalars().all()
     out = ProductionSetOut.model_validate(ps)
     out.doc_count = len(items)
+    out.rendered_count = sum(1 for i in items if i.output_path)
     if ps.status == "locked" and items:
         out.page_count = sum(i.pages or 0 for i in items)
         out.bates_begin = items[0].bates_begin
@@ -385,3 +392,106 @@ async def lock_production_set(
                      production_id=ps.production_id, details=summary)
     await db.commit()
     return ProductionSetLockOut(**summary)
+
+
+RENDER_BATCH_SIZE = 25
+
+
+@router.post("/production-sets/{set_id}/render")
+async def render_production_set(
+    set_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id, require_manager=True)
+    if ps.status != "locked":
+        raise HTTPException(status_code=409, detail="Production set must be locked before rendering")
+    if ps.render_status == "rendering":
+        raise HTTPException(status_code=409, detail="Render already in progress")
+
+    rows = (await db.execute(
+        select(ProductionSetItem.document_id)
+        .where(ProductionSetItem.production_set_id == set_id)
+        .order_by(ProductionSetItem.sort_order)
+    )).all()
+    doc_ids = [r[0] for r in rows]
+    if not doc_ids:
+        raise HTTPException(status_code=422, detail="Production set has no members")
+
+    # Re-render semantics: clear prior artifact markers, then rebuild all.
+    await db.execute(
+        sa_update(ProductionSetItem)
+        .where(ProductionSetItem.production_set_id == set_id)
+        .values(output_path=None)
+    )
+    ps.render_status = "rendering"
+    ps.render_error = None
+    ps.rendered_at = None
+    batches = [doc_ids[i:i + RENDER_BATCH_SIZE]
+               for i in range(0, len(doc_ids), RENDER_BATCH_SIZE)]
+    await log_action(db, user, "production_set_render_started", "production_set",
+                     str(set_id), production_id=ps.production_id,
+                     details={"documents": len(doc_ids), "batches": len(batches)})
+    await db.commit()
+
+    if tasks.is_configured():
+        for batch in batches:
+            tasks.enqueue_render_batch(set_id, [str(d) for d in batch])
+    else:
+        background_tasks.add_task(_render_inline, set_id, batches)
+    return {"documents": len(doc_ids), "batches": len(batches)}
+
+
+async def _render_inline(set_id: int, batches):
+    """Dev fallback: run all batches in-process on a fresh session."""
+    from app.database import async_session
+
+    async with async_session() as db:
+        for batch in batches:
+            await render_batch(db, set_id, batch)
+        await finalize_if_complete(db, set_id)
+
+
+@router.post("/production-sets/render-batch")
+async def render_batch_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker endpoint — renders one batch of set documents.
+
+    Always returns 200; render failures land in render_status='error'
+    (Cloud Tasks retries non-2xx, which would loop a deterministic failure).
+    """
+    set_id = body.get("set_id")
+    document_ids = body.get("document_ids")
+    if set_id is None or not document_ids:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    n = await render_batch(db, int(set_id), [UUID(d) for d in document_ids])
+    await finalize_if_complete(db, int(set_id))
+    return {"rendered": n}
+
+
+@router.get("/production-sets/{set_id}/documents/{document_id}/pdf")
+async def get_produced_pdf(
+    set_id: int,
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    await _load_set(db, user, set_id)
+    items = (await db.execute(
+        select(ProductionSetItem).where(
+            ProductionSetItem.production_set_id == set_id,
+            ProductionSetItem.document_id == document_id,
+        )
+    )).scalars().all()
+    if not items or not items[0].output_path:
+        raise HTTPException(status_code=404, detail="Rendered output not found")
+    item = items[0]
+    url = get_signed_url(
+        item.output_path,
+        response_disposition=f'attachment; filename="{item.bates_begin}.pdf"',
+    )
+    return RedirectResponse(url, status_code=307)
