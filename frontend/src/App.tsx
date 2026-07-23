@@ -252,9 +252,23 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     const toFetch = rowIds.filter(id => !chipsFetched.current.has(id));
     if (toFetch.length === 0) return;
     toFetch.forEach(id => chipsFetched.current.add(id));
-    getEntitiesSummary(toFetch)
-      .then(r => setEntityChips(prev => ({ ...prev, ...r.summaries })))
-      .catch(e => console.warn('getEntitiesSummary failed:', e));
+
+    // Chunk into batches of ≤100 to respect backend cap.
+    const BATCH_SIZE = 100;
+    const chunks = [];
+    for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
+      chunks.push(toFetch.slice(i, i + BATCH_SIZE));
+    }
+
+    // Fire one request per chunk; on failure, unmark ids for retry-on-next-render.
+    chunks.forEach(chunk => {
+      getEntitiesSummary(chunk)
+        .then(r => setEntityChips(prev => ({ ...prev, ...r.summaries })))
+        .catch(e => {
+          console.warn('getEntitiesSummary chunk failed:', e);
+          chunk.forEach(id => chipsFetched.current.delete(id));
+        });
+    });
   }, [hasSearched, documents, searchResults]);
 
   const handleDesignateAll = async (sourceType: 'collection' | 'received') => {
