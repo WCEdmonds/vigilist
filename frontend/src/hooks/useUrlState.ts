@@ -13,7 +13,7 @@ export interface VigilistUrlState {
   doc?: string;
   q?: string;
   batch?: string;
-  view?: string; // 'review' | 'ai' (legacy) | etc.
+  view?: string; // 'review' | 'ai' (legacy) | 'entities' | etc.
   prod?: string;
 }
 
