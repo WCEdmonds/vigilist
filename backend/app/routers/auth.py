@@ -6,9 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import PendingInvite, ProductionAccess, User
+from app.models import Organization, PendingInvite, ProductionAccess, User
 from app.schemas import UserOut
 from app.services.audit import log_action
+from app.services.sso import PROVIDER_ID_RE, enforce_org_sso, resolve_sso_org
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -41,6 +42,7 @@ async def get_current_user(
     uid = decoded["uid"]
     email = decoded.get("email") or ""
     display_name = decoded.get("name") or ""
+    sign_in_provider = (decoded.get("firebase") or {}).get("sign_in_provider")
 
     # If the ID token didn't carry an email/name (common for anonymous sign-in
     # or custom tokens), try to pull them from the Firebase user record.
@@ -58,6 +60,9 @@ async def get_current_user(
     # users.email unique constraint doesn't collide across anonymous users.
     if not email:
         email = f"noemail-{uid}@vigilist.local"
+
+    # P4-1: orgs that enforce SSO reject tokens from other providers.
+    await enforce_org_sso(db, email, sign_in_provider)
 
     # Upsert user
     result = await db.execute(select(User).where(User.id == uid))
@@ -121,3 +126,54 @@ async def me(user: User = Depends(get_current_user), db: AsyncSession = Depends(
     """Return current user profile."""
     await db.commit()
     return user
+
+
+@router.get("/sso-config")
+async def sso_config(
+    slug: str | None = None,
+    email: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public login-page discovery: which provider (if any) serves this
+    subdomain or email domain. Discloses only provider id + display name."""
+    org = await resolve_sso_org(db, slug, email)
+    if not org or not org.sso_provider_id:
+        return {"provider_id": None, "enforced": False, "org_name": None}
+    return {"provider_id": org.sso_provider_id,
+            "enforced": bool(org.sso_enforced),
+            "org_name": org.name}
+
+
+@router.put("/organizations/{slug}/sso")
+async def update_org_sso(
+    slug: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Bind/enforce an Identity Platform provider for an org.
+
+    Gated to creator_emails members (the org-admin escape hatch); audited.
+    """
+    org = (await db.execute(
+        select(Organization).where(Organization.slug == slug.strip().lower())
+    )).scalar_one_or_none()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if user.email.lower() not in [e.lower() for e in (org.creator_emails or [])]:
+        raise HTTPException(status_code=403, detail="Only organization administrators may configure SSO")
+
+    provider_id = body.get("provider_id") or None
+    enforced = bool(body.get("enforced", False))
+    if provider_id is not None and not PROVIDER_ID_RE.match(provider_id):
+        raise HTTPException(status_code=422, detail="provider_id must look like 'saml.name' or 'oidc.name'")
+    if enforced and not provider_id:
+        raise HTTPException(status_code=422, detail="cannot enforce SSO without a provider_id")
+
+    org.sso_provider_id = provider_id
+    org.sso_enforced = enforced
+    await log_action(db, user, "org_sso_updated", "organization", str(org.id),
+                     details={"slug": org.slug, "provider_id": provider_id,
+                              "enforced": enforced})
+    await db.commit()
+    return {"slug": org.slug, "provider_id": provider_id, "enforced": enforced}
