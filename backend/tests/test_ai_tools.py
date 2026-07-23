@@ -28,6 +28,7 @@ def test_expected_tool_set():
         "find_similar_documents",
         "get_duplicates",
         "get_corpus_stats",
+        "lookup_entity",
     }
 
 
@@ -169,3 +170,22 @@ def test_get_document_allows_in_scope_uuid():
     ))
     assert run.ok is True
     assert "ABC-1" in run.result_summary
+
+
+def test_lookup_entity_registered():
+    from app.services.ai_tools import TOOLS, _DISPATCH, tool_use_summary
+    assert any(t["name"] == "lookup_entity" for t in TOOLS)
+    assert "lookup_entity" in _DISPATCH
+    assert "Jorge" in tool_use_summary("lookup_entity", {"name": "Jorge"})
+
+
+def test_lookup_entity_out_of_scope_production_returns_empty():
+    """Scope check must short-circuit before any DB use."""
+    run = asyncio.run(ai_tools.run_tool(
+        db=object(), user=_FakeUser(), accessible_ids=[1, 2],
+        name="lookup_entity", tool_input={"name": "test", "production_id": 999},
+    ))
+    assert run.ok is True
+    import json
+    result = json.loads(run.result)
+    assert result["matches"] == []

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import UUID4, BaseModel
 
 
 def get_file_type(native_path: str | None, page_count: int) -> str:
@@ -619,6 +619,110 @@ class ThreadStats(BaseModel):
     messages: int
 
 
+# ── Ontology ──
+
+class MentionSpanOut(BaseModel):
+    surface_text: str
+    start_offset: int | None
+    end_offset: int | None
+
+
+class DocEntityOut(BaseModel):
+    id: UUID4
+    entity_type: str
+    canonical_name: str
+    mention_count: int
+    mentions: list[MentionSpanOut]
+
+
+class DocumentEntitiesOut(BaseModel):
+    entities: list[DocEntityOut]
+
+
+class EntityProfileOut(BaseModel):
+    id: UUID4
+    production_id: int
+    entity_type: str
+    canonical_name: str
+    aliases: list[str]
+    attributes: dict
+    overview: str | None
+    mention_count: int
+    document_count: int
+
+
+class EntityDocMentionOut(BaseModel):
+    surface_text: str
+    context_snippet: str | None
+    start_offset: int | None
+
+
+class EntityDocumentMentionsOut(BaseModel):
+    document_id: UUID4
+    bates_begin: str
+    title: str | None
+    mentions: list[EntityDocMentionOut]
+
+
+class EntityMentionsPageOut(BaseModel):
+    documents: list[EntityDocumentMentionsOut]
+    total: int
+
+
+class EntityConnectionOut(BaseModel):
+    entity_id: UUID4
+    canonical_name: str
+    entity_type: str
+    relationship_type: str | None = None
+    description: str | None = None
+    document_id: UUID4 | None = None
+    shared_doc_count: int | None = None
+
+
+class SharedEventOut(BaseModel):
+    event_id: int
+    description: str
+    event_type: str
+    event_date: str | None
+    document_id: UUID4
+
+
+class EntityConnectionsOut(BaseModel):
+    stated: list[EntityConnectionOut]
+    cooccurrence: list[EntityConnectionOut]
+    shared_events: list[SharedEventOut]
+
+
+class EntityListItemOut(BaseModel):
+    id: UUID4
+    entity_type: str
+    canonical_name: str
+    mention_count: int
+    document_count: int
+
+
+class EntityListPageOut(BaseModel):
+    entities: list[EntityListItemOut]
+    total: int
+
+
+class MergeSuggestionOut(BaseModel):
+    id: int
+    score: float
+    rationale: str
+    status: str
+    entity_a: EntityListItemOut
+    entity_b: EntityListItemOut
+
+
+class MergeRequest(BaseModel):
+    winner_id: UUID4
+    loser_id: UUID4
+
+
+class MergeResultOut(BaseModel):
+    merge_id: int
+    winner_id: UUID4
 # --- P2-1: production sets --------------------------------------------------
 
 class ProductionSetCreate(BaseModel):

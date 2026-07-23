@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models import Document, IngestJob, Production, User
 from app.routers.auth import get_current_user
 from app.schemas import AnalyzeResponse, IngestJobOut
+from app.services.audit import log_action
 from app.services.oidc import verify_cloud_tasks_request
 
 logger = logging.getLogger(__name__)
@@ -320,6 +321,36 @@ async def run_pipeline_handler(
 
     await run_ambient_pipeline(int(production_id), force)
     return {"ok": True}
+
+
+@router.post("/productions/{production_id}/extract-entities")
+async def trigger_entity_extraction(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Backfill/manual trigger: run the ambient pipeline (which now includes
+    the entities stage) for this production. Manager or admin only."""
+    from app.dependencies import ROLE_RANK, get_user_role_for_production
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    from app.services import tasks as task_service
+    if task_service.is_configured():
+        task_service.enqueue_pipeline(production_id)
+        await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
+                         production_id=production_id, details={"mode": "enqueued"})
+        await db.commit()
+        return {"status": "enqueued"}
+
+    from app.services.pipeline import run_ambient_pipeline
+    background_tasks.add_task(run_ambient_pipeline, production_id)
+    await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
+                     production_id=production_id, details={"mode": "background"})
+    await db.commit()
+    return {"status": "started"}
 
 
 @router.get("/ingest/{job_id}/status", response_model=IngestJobOut)

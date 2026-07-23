@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -146,6 +147,9 @@ class Document(Base):
     # P1-4/5 — privilege overrides (NULL = derived / templated)
     privilege_disposition = Column(String(20), nullable=True)
     privilege_description = Column(Text, nullable=True)
+
+    # Ontology — per-document extraction idempotency marker
+    entities_extracted_at = Column(DateTime, nullable=True)
 
     production = relationship("Production", back_populates="documents")
     tags = relationship("DocumentTag", back_populates="document", cascade="all, delete-orphan")
@@ -551,3 +555,148 @@ class DocumentClusterAssignment(Base):
 
     cluster = relationship("DocumentCluster", back_populates="assignments")
     document = relationship("Document")
+
+
+# ── Ontology (entity intelligence) ──────────────────────────────────────────
+# Graph-shaped: entities are nodes, entity_relationships are typed edges,
+# entity_mentions are provenance. Co-occurrence edges are NOT stored — they
+# are computed live from entity_mentions.
+
+
+class Entity(Base):
+    __tablename__ = "entities"
+    __table_args__ = (
+        Index("ix_entities_production_id", "production_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    entity_type = Column(String(10), nullable=False)  # 'person' | 'org'
+    canonical_name = Column(String(500), nullable=False)
+    aliases = Column(JSONB, nullable=False, default=list)      # surface forms seen
+    attributes = Column(JSONB, nullable=False, default=dict)   # {"role": ..., "emails": [...]}
+    overview = Column(Text, nullable=True)                     # cached LLM profile
+    overview_generated_at = Column(DateTime, nullable=True)
+    overview_mention_count = Column(Integer, nullable=True)    # mention_count at generation time
+    mention_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class EntityMention(Base):
+    __tablename__ = "entity_mentions"
+    __table_args__ = (
+        UniqueConstraint("document_id", "entity_id", "start_offset", name="uq_mention_doc_entity_offset"),
+        Index("ix_entity_mentions_entity_id", "entity_id"),
+        Index("ix_entity_mentions_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    surface_text = Column(String(500), nullable=False)
+    # Char offsets into documents.text_content; NULL when the surface form
+    # couldn't be located verbatim (OCR drift) — still counts, just not clickable.
+    start_offset = Column(Integer, nullable=True)
+    end_offset = Column(Integer, nullable=True)
+    context_snippet = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    entity = relationship("Entity")
+    document = relationship("Document")
+
+
+class OntologyEvent(Base):
+    __tablename__ = "ontology_events"
+    __table_args__ = (
+        Index("ix_ontology_events_production_id", "production_id"),
+        Index("ix_ontology_events_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(20), nullable=False)
+    description = Column(Text, nullable=False)
+    event_date = Column(Date, nullable=True)
+    date_precision = Column(String(10), nullable=False, default="unknown")  # day|month|year|unknown
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    participants = relationship("EventParticipant", back_populates="event", cascade="all, delete-orphan")
+
+
+class EventParticipant(Base):
+    __tablename__ = "event_participants"
+    __table_args__ = (
+        UniqueConstraint("event_id", "entity_id", name="uq_event_entity"),
+        Index("ix_event_participants_entity_id", "entity_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(Integer, ForeignKey("ontology_events.id", ondelete="CASCADE"), nullable=False)
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(100), nullable=True)
+
+    event = relationship("OntologyEvent", back_populates="participants")
+
+
+class EntityRelationship(Base):
+    __tablename__ = "entity_relationships"
+    __table_args__ = (
+        UniqueConstraint("source_entity_id", "target_entity_id", "relationship_type", "document_id",
+                         name="uq_edge_pair_type_doc"),
+        Index("ix_entity_relationships_source", "source_entity_id"),
+        Index("ix_entity_relationships_target", "target_entity_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    source_entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    target_entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    relationship_type = Column(String(30), nullable=False)
+    description = Column(Text, nullable=True)  # short evidence phrase
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class EntityMergeSuggestion(Base):
+    __tablename__ = "entity_merge_suggestions"
+    __table_args__ = (
+        UniqueConstraint("entity_a_id", "entity_b_id", name="uq_merge_suggestion_pair"),
+        Index("ix_entity_merge_suggestions_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    entity_a_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    entity_b_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    score = Column(Float, nullable=False)
+    rationale = Column(Text, nullable=False)
+    status = Column(String(10), nullable=False, default="pending")  # pending|accepted|rejected
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    resolved_by = Column(String(128), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+class EntityMerge(Base):
+    __tablename__ = "entity_merges"
+    __table_args__ = (
+        Index("ix_entity_merges_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    # SET NULL (not CASCADE): a chain merge (A->B then B->C) deletes B. If this
+    # FK cascaded, deleting B would also delete the A->B EntityMerge row,
+    # destroying that merge's audit trail and undo history. SET NULL keeps the
+    # log row; undo_merge treats a null winner_entity_id as "cannot undo".
+    winner_entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="SET NULL"), nullable=True)
+    loser_snapshot = Column(JSONB, nullable=False)        # full loser Entity row for undo
+    winner_prior = Column(JSONB, nullable=False)          # {"aliases": [...], "mention_count": N} pre-merge
+    moved_mention_ids = Column(JSONB, nullable=False, default=list)
+    moved_relationship_ids = Column(JSONB, nullable=False, default=list)
+    moved_participant_ids = Column(JSONB, nullable=False, default=list)
+    undone = Column(Boolean, nullable=False, default=False)
+    merged_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
