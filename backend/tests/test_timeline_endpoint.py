@@ -1,0 +1,72 @@
+"""Fake-session tests for the production timeline endpoint."""
+
+import asyncio
+import uuid
+from datetime import date
+
+import pytest
+from fastapi import HTTPException
+
+import app.routers.entities as er
+from app.models import Entity, OntologyEvent
+from tests.fakes import FakeResult, FakeSession, FakeUser
+
+
+def _event(eid, d=None, precision="unknown", etype="meeting"):
+    ev = OntologyEvent(production_id=1, event_type=etype, description=f"Event {eid}",
+                       event_date=d, date_precision=precision, document_id=uuid.uuid4())
+    ev.id = eid
+    return ev
+
+
+def _patch(monkeypatch, accessible=(1,)):
+    async def fake_accessible(db, user):
+        return list(accessible)
+    monkeypatch.setattr(er, "get_accessible_production_ids", fake_accessible)
+
+
+def test_timeline_denies_out_of_scope(monkeypatch):
+    _patch(monkeypatch, accessible=(2,))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.get_production_timeline(production_id=1, db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_timeline_returns_events_with_participants_and_doc(monkeypatch):
+    _patch(monkeypatch)
+    ent = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+                 canonical_name="Jorge Rivera", aliases=[], attributes={}, mention_count=5)
+    ev = _event(10, d=date(2019, 3, 15), precision="day")
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=1)),
+        # page query returns (event, bates, title) rows
+        ("FROM ontology_events", FakeResult(rows=[(ev, "ABC-0001", "Board deck")])),
+        # participants query returns (event_id, entity) rows
+        ("FROM event_participants", FakeResult(rows=[(10, ent)])),
+    ])
+    out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
+    assert out.total == 1
+    e = out.events[0]
+    assert e.event_date == "2019-03-15" and e.date_precision == "day"
+    assert e.bates_begin == "ABC-0001"
+    assert e.participants[0].canonical_name == "Jorge Rivera"
+
+
+def test_timeline_clamps_per_page(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(responders=[("func.count(OntologyEvent", FakeResult(scalar=0))])
+    out = asyncio.run(er.get_production_timeline(
+        production_id=1, per_page=5000, db=db, user=FakeUser()))
+    assert out.events == [] and out.total == 0
+
+
+def test_timeline_null_date_serializes_none(monkeypatch):
+    _patch(monkeypatch)
+    ev = _event(11, d=None, precision="unknown")
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=1)),
+        ("FROM ontology_events", FakeResult(rows=[(ev, "ABC-0002", None)])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
+    out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
+    assert out.events[0].event_date is None

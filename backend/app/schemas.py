@@ -693,6 +693,30 @@ class EntityConnectionsOut(BaseModel):
     shared_events: list[SharedEventOut]
 
 
+class TimelineParticipantOut(BaseModel):
+    entity_id: UUID4
+    canonical_name: str
+    entity_type: str
+
+
+class TimelineEventOut(BaseModel):
+    event_id: int
+    description: str
+    event_type: str
+    event_date: str | None
+    date_precision: str
+    document_id: UUID4
+    bates_begin: str
+    title: str | None
+    participants: list[TimelineParticipantOut]
+
+
+class TimelinePageOut(BaseModel):
+    events: list[TimelineEventOut]
+    total: int
+    undated_count: int
+
+
 class EntityListItemOut(BaseModel):
     id: UUID4
     entity_type: str
