@@ -80,7 +80,12 @@ function renderWithEntities(
         title={s.name}
         style={{ cursor: 'pointer' }}
         onClick={() => onEntityClick?.(s.entityId)}
-        onKeyDown={ev => { if (ev.key === 'Enter') onEntityClick?.(s.entityId); }}
+        onKeyDown={ev => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            onEntityClick?.(s.entityId);
+          }
+        }}
       >
         {text.slice(s.start, s.end)}
       </mark>,
@@ -110,7 +115,7 @@ export default function TextPanel({ text, searchQuery, entities, onEntityClick, 
     if (!focusEntityId || !containerRef.current) return;
     const el = containerRef.current.querySelector(`[data-entity-id="${focusEntityId}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [focusEntityId]);
+  }, [focusEntityId, entities]);
 
   if (!text) {
     return <div className="empty-state">No extracted text available</div>;
