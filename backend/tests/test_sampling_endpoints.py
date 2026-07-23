@@ -144,3 +144,33 @@ def test_delete_audits(monkeypatch):
     out = asyncio.run(rsm.delete_sample(sample_id=1, db=db, user=FakeUser()))
     assert out == {"ok": True}
     assert "sample_deleted" in logged
+
+
+# --- machine_negative scope (P3-3) ------------------------------------------
+
+def test_draw_machine_negative_requires_project(monkeypatch):
+    _patch(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rsm.draw_sample(
+            production_id=1,
+            body=SampleCreate(name="E1", purpose="elusion", scope="machine_negative"),
+            db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_draw_machine_negative_scopes_to_null_set(monkeypatch):
+    _patch(monkeypatch)
+    ids = [(uuid4(),) for _ in range(5)]
+    db = FakeSession(responders=[
+        ("random", FakeResult(rows=ids)),
+        ("count", FakeResult(scalar=50)),
+    ])
+    out = asyncio.run(rsm.draw_sample(
+        production_id=1,
+        body=SampleCreate(name="E1", purpose="elusion",
+                          scope="machine_negative", project_id=3),
+        db=db, user=FakeUser()))
+    assert out.params["scope"] == "machine_negative"
+    assert out.params["project_id"] == 3
+    joined = "\n".join(db.executed)
+    assert "ai_review_results" in joined

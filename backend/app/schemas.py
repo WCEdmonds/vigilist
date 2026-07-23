@@ -817,6 +817,8 @@ class SampleCreate(BaseModel):
     expected_rate: float = 0.5
     size: int | None = None
     source_type: str | None = None
+    scope: str | None = None          # None (all) | 'machine_negative'
+    project_id: int | None = None     # required when scope='machine_negative'
 
 
 class SampleOut(BaseModel):
