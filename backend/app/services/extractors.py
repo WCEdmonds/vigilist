@@ -77,11 +77,33 @@ def _extract_pptx(data: bytes) -> str:
     return "\n".join(parts)
 
 
+_ODT_XML_CAP = 50 * 1024 * 1024  # content.xml decompressed cap — bomb guard
+
+
+def _read_zip_member_bounded(zf, name: str, limit: int) -> bytes:
+    """Read a zip member with a hard output bound, enforced against actual
+    decompressed bytes (never the entry's claimed/uncompressed size, which is
+    attacker-controlled). Raises ValueError the moment the true decompressed
+    size would exceed ``limit`` — never buffers the full bomb in memory."""
+    chunks: list[bytes] = []
+    read = 0
+    with zf.open(name) as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            read += len(chunk)
+            if read > limit:
+                raise ValueError(f"{name} exceeds decompressed size limit")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _extract_odt(data: bytes) -> str:
     import re
     import zipfile as _zipfile
     with _zipfile.ZipFile(io.BytesIO(data)) as zf:
-        xml = zf.read("content.xml").decode("utf-8", errors="replace")
+        xml = _read_zip_member_bounded(zf, "content.xml", _ODT_XML_CAP).decode("utf-8", errors="replace")
     # <text:p>/<text:h> delimit paragraphs; strip all other tags.
     xml = re.sub(r"</text:(p|h)>", "\n", xml)
     text = re.sub(r"<[^>]+>", "", xml)

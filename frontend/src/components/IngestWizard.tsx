@@ -533,7 +533,8 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
                           <strong>{emailContainerCount} email container{emailContainerCount === 1 ? '' : 's'}</strong> (.eml/.msg/.pst/.mbox)
                           detected — each expands into its message plus attachments as a linked{' '}
                           <strong>document family</strong>, and reply threads are stitched together
-                          automatically. Other files are processed as native documents.
+                          automatically. Zip archives are unpacked and their contents ingested as a
+                          document family; other files are processed as native documents.
                         </>
                       ) : (
                         <>

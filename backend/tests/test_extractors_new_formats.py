@@ -65,6 +65,72 @@ def test_extract_odt_corrupt_is_error():
     assert r.text == ""
 
 
+# --- Finding C1: bounded decompression read for content.xml (bomb-proofing) --
+#
+# _extract_odt must never buffer an unbounded decompressed content.xml — a
+# small, highly-compressible ODT can inflate to a huge in-memory payload.
+# _read_zip_member_bounded enforces the cap from actual bytes read (like
+# ingest_native's _ZipExploder._read_bounded), independent of any zip header
+# claim, and is tested directly here plus via extract()'s error path.
+
+
+def test_read_zip_member_bounded_stops_at_limit():
+    """The bounded zip-member read must never surface more than `limit` bytes
+    and must raise (not silently truncate) once the true decompressed size
+    exceeds it."""
+    import io as _io
+    import zipfile as _zipfile
+    from app.services.extractors import _read_zip_member_bounded
+
+    payload = b"\x00" * (5 * 1024 * 1024)
+    buf = _io.BytesIO()
+    with _zipfile.ZipFile(buf, "w", compression=_zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("big.bin", payload)
+    zf = _zipfile.ZipFile(_io.BytesIO(buf.getvalue()))
+
+    # A limit far below the true size: raises, never buffers the full payload.
+    try:
+        _read_zip_member_bounded(zf, "big.bin", limit=1024)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+    # A limit at/above the true size returns the exact real bytes.
+    assert _read_zip_member_bounded(zf, "big.bin", limit=len(payload)) == payload
+
+
+def test_extract_odt_bomb_guard_errors_without_full_allocation(monkeypatch):
+    """A content.xml that is small on disk but decompresses well past the cap
+    must never be fully materialized — extract() reports it as an error row,
+    mirroring the outer try/except semantics in extract()."""
+    import app.services.extractors as extractors_mod
+
+    # Lower the cap so a moderately-sized (but still much-larger-than-cap)
+    # payload is enough to trip the guard in a fast test.
+    monkeypatch.setattr(extractors_mod, "_ODT_XML_CAP", 1 * 1024 * 1024)
+
+    # Highly compressible content.xml, deflated: small on disk, ~5MB once
+    # decompressed — well above the monkeypatched 1MB cap.
+    paragraph = "<text:p>" + ("A" * 1000) + "</text:p>"
+    xml = '<?xml version="1.0" encoding="UTF-8"?><office:document-content>'
+    xml += paragraph * 5000
+    xml += "</office:document-content>"
+    content_xml = xml.encode("utf-8")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("mimetype", "application/vnd.oasis.opendocument.text", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("content.xml", content_xml, compress_type=zipfile.ZIP_DEFLATED)
+    odt = buf.getvalue()
+    assert len(odt) < 1 * 1024 * 1024  # the ODT file itself is small (well-compressed)
+    assert len(content_xml) > 1 * 1024 * 1024  # but decompresses past the cap
+
+    r = extract("bomb.odt", odt)
+    assert r.extraction_status == "error"
+    assert r.extraction_error
+    assert r.text == ""
+
+
 def test_extract_potx_routed_to_pptx_extractor():
     """Test .potx reaches _extract_pptx and file_type is 'potx'."""
     # Build a valid PPTX (which is also valid as POTX template format)
