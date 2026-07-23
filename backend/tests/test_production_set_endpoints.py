@@ -384,3 +384,93 @@ def test_remove_documents_locked_409(monkeypatch):
             set_id=1, body=ProductionSetRemoveDocuments(document_ids=[uuid4()]),
             db=db, user=FakeUser()))
     assert exc.value.status_code == 409
+
+
+# --- POST /production-sets/{id}/lock ---------------------------------------
+# Responder order for lock tests: "is_privilege", "redactions",
+# "production_set_items", "documents.page_count".
+
+
+def test_lock_assigns_and_snapshots(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2, d3 = uuid4(), uuid4(), uuid4()
+    items = [FakeItem(d1, item_id=1), FakeItem(d2, item_id=2), FakeItem(d3, item_id=3)]
+    ps = FakePS()
+    doc_rows = [
+        # (id, control, family_id, custodian, date_sent, date_received,
+        #  page_count, privilege_disposition)
+        (d1, "C-1", None, "Alice", TS, None, 5, None),  # privilege tag -> withhold, 1 page
+        (d2, "C-2", None, "Bob", TS, None, 3, None),    # redactions -> redact_in_part
+        (d3, "C-3", None, "Cara", TS, None, 2, None),   # nothing -> produce
+    ]
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("is_privilege", FakeResult(rows=[(d1,)])),
+            ("redactions", FakeResult(rows=[(d2, 4)])),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.page_count", FakeResult(rows=doc_rows)),
+        ],
+    )
+    out = asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert out.doc_count == 3
+    assert out.page_count == 1 + 3 + 2
+    assert out.bates_begin == "SMITH000001"
+    assert out.bates_end == "SMITH000006"
+    by_doc = {i.document_id: i for i in items}
+    assert by_doc[d1].disposition == "withhold"
+    assert by_doc[d1].pages == 1
+    assert (by_doc[d1].bates_begin, by_doc[d1].bates_end) == ("SMITH000001", "SMITH000001")
+    assert by_doc[d2].disposition == "redact_in_part"
+    assert (by_doc[d2].bates_begin, by_doc[d2].bates_end) == ("SMITH000002", "SMITH000004")
+    assert by_doc[d3].disposition == "produce"
+    assert (by_doc[d3].bates_begin, by_doc[d3].bates_end) == ("SMITH000005", "SMITH000006")
+    assert [by_doc[d].sort_order for d in (d1, d2, d3)] == [1, 2, 3]
+    assert ps.status == "locked"
+    assert ps.locked_by == "u1"
+    assert ps.locked_at is not None
+
+
+def test_lock_produce_override_keeps_full_pages(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    items = [FakeItem(d1, item_id=1)]
+    ps = FakePS()
+    doc_rows = [(d1, "C-1", None, None, None, None, 4, "produce")]
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("is_privilege", FakeResult(rows=[(d1,)])),  # tagged, but override wins
+            ("redactions", FakeResult(rows=[])),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.page_count", FakeResult(rows=doc_rows)),
+        ],
+    )
+    out = asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert items[0].disposition == "produce"
+    assert items[0].pages == 4
+    assert out.page_count == 4
+
+
+def test_lock_empty_set_422(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS()})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_lock_already_locked_409(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="locked")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_lock_blocked_for_reviewer(monkeypatch):
+    _patch(monkeypatch, role="reviewer")
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS()})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 403
