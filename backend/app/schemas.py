@@ -747,6 +747,29 @@ class MergeRequest(BaseModel):
 class MergeResultOut(BaseModel):
     merge_id: int
     winner_id: UUID4
+
+
+class GraphNodeOut(BaseModel):
+    id: UUID4
+    canonical_name: str
+    entity_type: str
+    mention_count: int
+
+
+class GraphEdgeOut(BaseModel):
+    source: UUID4
+    target: UUID4
+    kind: str  # 'stated' | 'cooccurrence'
+    relationship_type: str | None = None
+    weight: int
+
+
+class GraphOut(BaseModel):
+    nodes: list[GraphNodeOut]
+    edges: list[GraphEdgeOut]
+    truncated: bool
+
+
 # --- P2-1: production sets --------------------------------------------------
 
 class ProductionSetCreate(BaseModel):

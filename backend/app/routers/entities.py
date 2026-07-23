@@ -19,6 +19,7 @@ from app.schemas import (
     EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
     TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
+    GraphNodeOut, GraphEdgeOut, GraphOut,
 )
 from app.services.audit import log_action
 from app.services.entity_extraction import EVENT_TYPES
@@ -471,3 +472,69 @@ async def get_production_timeline(
         ) for ev, bates, title in rows],
         total=total, undated_count=undated_count,
     )
+
+
+@router.get("/productions/{production_id}/graph", response_model=GraphOut)
+async def get_production_graph(
+    production_id: int,
+    max_nodes: int = 75,
+    min_shared_docs: int = 2,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    max_nodes = max(1, min(150, max_nodes))
+    min_shared_docs = max(1, min_shared_docs)
+
+    total_entities = (await db.execute(
+        select(func.count(Entity.id)).where(Entity.production_id == production_id)
+    )).scalar() or 0
+
+    node_rows = (await db.execute(
+        select(Entity).where(Entity.production_id == production_id)
+        .order_by(Entity.mention_count.desc(), Entity.id).limit(max_nodes)
+    )).scalars().all()
+    node_ids = {e.id for e in node_rows}
+    nodes = [GraphNodeOut(id=e.id, canonical_name=e.canonical_name,
+                          entity_type=e.entity_type, mention_count=e.mention_count)
+             for e in node_rows]
+
+    edges: list[GraphEdgeOut] = []
+    stated_pairs: set[frozenset] = set()
+    if node_ids:
+        srows = (await db.execute(
+            select(EntityRelationship.source_entity_id, EntityRelationship.target_entity_id,
+                   EntityRelationship.relationship_type,
+                   func.count(EntityRelationship.id).label("weight"))
+            .where(EntityRelationship.source_entity_id.in_(node_ids),
+                   EntityRelationship.target_entity_id.in_(node_ids))
+            .group_by(EntityRelationship.source_entity_id, EntityRelationship.target_entity_id,
+                      EntityRelationship.relationship_type)
+        )).all()
+        for src, tgt, rtype, weight in srows:
+            stated_pairs.add(frozenset((src, tgt)))
+            edges.append(GraphEdgeOut(source=src, target=tgt, kind="stated",
+                                      relationship_type=rtype, weight=weight))
+
+        # Co-occurrence among included nodes; a < b ordering avoids duplicate pairs.
+        # Same production-invariant note as get_entity_connections: rows for one
+        # document always share its production_id (enforced at persist time).
+        em_a = EntityMention.__table__.alias("em_a")
+        em_b = EntityMention.__table__.alias("em_b")
+        crows = (await db.execute(
+            select(em_a.c.entity_id, em_b.c.entity_id,
+                   func.count(func.distinct(em_a.c.document_id)).label("shared"))
+            .select_from(em_a.join(em_b, em_a.c.document_id == em_b.c.document_id))
+            .where(em_a.c.entity_id.in_(node_ids), em_b.c.entity_id.in_(node_ids),
+                   em_a.c.entity_id < em_b.c.entity_id)
+            .group_by(em_a.c.entity_id, em_b.c.entity_id)
+            .having(func.count(func.distinct(em_a.c.document_id)) >= min_shared_docs)
+        )).all()
+        for a, b, shared in crows:
+            if frozenset((a, b)) in stated_pairs:
+                continue
+            edges.append(GraphEdgeOut(source=a, target=b, kind="cooccurrence", weight=shared))
+
+    return GraphOut(nodes=nodes, edges=edges, truncated=total_entities > max_nodes)
