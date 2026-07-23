@@ -5,6 +5,7 @@ import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
+import EntityGraphView from './components/EntityGraphView';
 import EntityTimelineView from './components/EntityTimelineView';
 import IngestWizard from './components/IngestWizard';
 import ProductionSetsPanel from './components/ProductionSetsPanel';
@@ -90,6 +91,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
   const [showEntities, setShowEntities] = useState(initialUrl.view === 'entities');
   const [showTimeline, setShowTimeline] = useState(initialUrl.view === 'timeline');
+  const [showGraph, setShowGraph] = useState(initialUrl.view === 'graph');
   const [entityPanelId, setEntityPanelId] = useState<string | null>(initialUrl.entity ?? null);
 
   // Deep-link into an entity's profile panel from anywhere (chip clicks,
@@ -150,8 +152,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showReview ? 'review' : showEntities ? 'entities' : showTimeline ? 'timeline' : undefined,
-    entity: (showEntities || showTimeline) && entityPanelId ? entityPanelId : undefined,
+    view: showReview ? 'review' : showEntities ? 'entities' : showTimeline ? 'timeline' : showGraph ? 'graph' : undefined,
+    entity: (showEntities || showTimeline || showGraph) && entityPanelId ? entityPanelId : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -437,6 +439,21 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   }
 
+  // Graph view full-screen mode (relationship graph)
+  // Same rationale as the Entities/Timeline onBack above — Back has no
+  // deep-link intent, so clear the stale panel id first.
+  if (showGraph) {
+    return (
+      <EntityGraphView
+        productionId={production.id}
+        onViewDocument={(id) => { setShowGraph(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setEntityPanelId(null); setShowGraph(false); refreshList(); }}
+        initialEntityId={entityPanelId}
+        onOpenEntityChange={setEntityPanelId}
+      />
+    );
+  }
+
   // Batch review full-screen mode
   if (activeBatchId) {
     return (
@@ -496,8 +513,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
            carry over from whatever view was open before. Defense-in-depth
            only: view exclusivity is already structural (branch order above). */
         onOpenReview={() => { setEntityPanelId(null); setShowReview(true); }}
-        onOpenEntities={() => { setEntityPanelId(null); setShowTimeline(false); setShowEntities(true); }}
-        onOpenTimeline={() => { setEntityPanelId(null); setShowEntities(false); setShowTimeline(true); }}
+        onOpenEntities={() => { setEntityPanelId(null); setShowTimeline(false); setShowGraph(false); setShowEntities(true); }}
+        onOpenTimeline={() => { setEntityPanelId(null); setShowEntities(false); setShowGraph(false); setShowTimeline(true); }}
+        onOpenGraph={() => { setEntityPanelId(null); setShowEntities(false); setShowTimeline(false); setShowGraph(true); }}
         onOpenDashboard={() => { setEntityPanelId(null); setShowDashboard(true); }}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
