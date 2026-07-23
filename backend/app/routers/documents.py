@@ -112,9 +112,13 @@ async def list_documents(
     if source_party:
         query = query.where(Document.source_party == source_party)
         count_query = count_query.where(Document.source_party == source_party)
-    if source_type:
-        query = query.where(Document.source_type == source_type)
-        count_query = count_query.where(Document.source_type == source_type)
+    if source_type == "received":
+        query = query.where(Document.source_type == "received")
+        count_query = count_query.where(Document.source_type == "received")
+    elif source_type == "collection":
+        # NULL counts as ours — see services/search.py rationale.
+        query = query.where(Document.source_type.is_distinct_from("received"))
+        count_query = count_query.where(Document.source_type.is_distinct_from("received"))
 
     if cluster_id:
         from app.models import DocumentClusterAssignment
@@ -328,7 +332,12 @@ async def list_source_parties(
         .distinct()
         .order_by(Document.source_party)
     )).all()
-    return {"source_parties": [r[0] for r in rows]}
+    undesignated = (await db.execute(
+        select(func.count(Document.id))
+        .where(Document.production_id == production_id,
+               Document.source_type.is_(None))
+    )).scalar() or 0
+    return {"source_parties": [r[0] for r in rows], "undesignated": undesignated}
 
 
 @router.get("/by-bates")
