@@ -8,7 +8,7 @@ def test_fresh_status_runs_all_stages():
 
 
 def test_done_stages_are_skipped_unless_forced():
-    status = {"clustering": "done", "summaries": "failed", "brief": "pending"}
+    status = {"clustering": "done", "summaries": "failed", "entities": "done", "brief": "pending"}
     assert stages_to_run(status, force=False) == ["summaries", "brief"]
     assert stages_to_run(status, force=True) == list(STAGES)
 
