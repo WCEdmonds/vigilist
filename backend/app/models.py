@@ -617,7 +617,11 @@ class EntityMerge(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
-    winner_entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="CASCADE"), nullable=False)
+    # SET NULL (not CASCADE): a chain merge (A->B then B->C) deletes B. If this
+    # FK cascaded, deleting B would also delete the A->B EntityMerge row,
+    # destroying that merge's audit trail and undo history. SET NULL keeps the
+    # log row; undo_merge treats a null winner_entity_id as "cannot undo".
+    winner_entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id", ondelete="SET NULL"), nullable=True)
     loser_snapshot = Column(JSONB, nullable=False)        # full loser Entity row for undo
     winner_prior = Column(JSONB, nullable=False)          # {"aliases": [...], "mention_count": N} pre-merge
     moved_mention_ids = Column(JSONB, nullable=False, default=list)

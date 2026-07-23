@@ -3,7 +3,7 @@ loser, log everything needed for a mechanical undo."""
 
 import uuid as _uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models import (
     Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
@@ -36,10 +36,28 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
         merged_by=user_id,
     )
 
+    # Preload winner's existing (document_id, start_offset) mention keys so we
+    # can detect collisions with uq_mention_doc_entity_offset before
+    # re-pointing (NULL offsets never collide — Postgres treats NULLs as
+    # distinct under a unique constraint).
+    winner_mention_keys = {
+        (doc_id, offset) for doc_id, offset in (await db.execute(
+            select(EntityMention.document_id, EntityMention.start_offset)
+            .where(EntityMention.entity_id == winner.id, EntityMention.start_offset.is_not(None))
+        )).all()
+    }
+
     mentions = (await db.execute(
         select(EntityMention).where(EntityMention.entity_id == loser.id)
     )).scalars().all()
     for m in mentions:
+        if m.start_offset is not None and (m.document_id, m.start_offset) in winner_mention_keys:
+            # Winner already has a mention at this exact (document, offset);
+            # re-pointing would violate uq_mention_doc_entity_offset. Drop it
+            # — not recorded as moved, so it is permanently lost on undo (same
+            # treatment as a self-edge below).
+            await db.delete(m)
+            continue
         m.entity_id = winner.id
         merge.moved_mention_ids.append(m.id)
 
@@ -58,10 +76,25 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
             continue
         merge.moved_relationship_ids.append(e.id)
 
+    # Preload winner's existing event_ids so we can detect collisions with
+    # uq_event_entity before re-pointing.
+    winner_event_ids = {
+        event_id for (event_id,) in (await db.execute(
+            select(EventParticipant.event_id).where(EventParticipant.entity_id == winner.id)
+        )).all()
+    }
+
     participants = (await db.execute(
         select(EventParticipant).where(EventParticipant.entity_id == loser.id)
     )).scalars().all()
     for p in participants:
+        if p.event_id in winner_event_ids:
+            # Winner already participates in this event; re-pointing would
+            # violate uq_event_entity. Drop it — not recorded as moved, so it
+            # is permanently lost on undo (same treatment as a self-edge
+            # above).
+            await db.delete(p)
+            continue
         p.entity_id = winner.id
         merge.moved_participant_ids.append(p.id)
 
@@ -76,7 +109,9 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
 
     new_aliases = [loser.canonical_name] + list(loser.aliases or [])
     winner.aliases = list(winner.aliases or []) + [a for a in new_aliases if a not in (winner.aliases or [])]
-    winner.mention_count = (winner.mention_count or 0) + (loser.mention_count or 0)
+    # Only mentions actually moved count toward the winner — collided
+    # duplicates were deleted above and must not inflate the total.
+    winner.mention_count = (winner.mention_count or 0) + len(merge.moved_mention_ids)
 
     await db.delete(loser)
     db.add(merge)
@@ -86,6 +121,10 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
 async def undo_merge(db, merge: EntityMerge) -> Entity:
     if merge.undone:
         raise ValueError("Merge already undone")
+    if merge.winner_entity_id is None:
+        # winner_entity_id is SET NULL on delete: the winner was itself later
+        # merged into something else (chain merge) and no longer exists.
+        raise ValueError("Winner entity no longer exists (merged again?) — cannot undo")
     winner = await db.get(Entity, merge.winner_entity_id)
     if winner is None:
         raise ValueError("Winner entity no longer exists (merged again?) — cannot undo")
@@ -121,7 +160,29 @@ async def undo_merge(db, merge: EntityMerge) -> Entity:
         )).scalars().all():
             p.entity_id = restored.id
 
-    winner.aliases = merge.winner_prior["aliases"]
-    winner.mention_count = merge.winner_prior["mention_count"]
+    # Make the re-points above visible before re-deriving counts from live
+    # rows.
+    await db.flush()
+
+    # Re-derive counts from live rows rather than blindly restoring the
+    # pre-merge snapshot: mentions ingested against the winner (or, after
+    # re-pointing, the restored loser) since the merge would otherwise be
+    # silently wiped out by an undo.
+    winner.mention_count = (await db.execute(
+        select(func.count()).select_from(EntityMention).where(EntityMention.entity_id == winner.id)
+    )).scalar() or 0
+    restored.mention_count = (await db.execute(
+        select(func.count()).select_from(EntityMention).where(EntityMention.entity_id == restored.id)
+    )).scalar() or 0
+
+    # Restore winner's prior aliases, but keep any aliases the winner picked
+    # up after the merge that didn't come from the loser (post-merge growth
+    # that undo should not clobber).
+    loser_derived = {snap["canonical_name"], *snap["aliases"]}
+    winner.aliases = merge.winner_prior["aliases"] + [
+        a for a in (winner.aliases or [])
+        if a not in merge.winner_prior["aliases"] and a not in loser_derived
+    ]
+
     merge.undone = True
     return restored
