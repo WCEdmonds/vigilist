@@ -853,3 +853,103 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
 
 export const triggerEntityExtraction = (productionId: number) =>
   request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
+
+// ── Defensibility (Phase 3) ──
+
+export interface SearchTermReportInfo {
+  id: number;
+  production_id: number;
+  name: string;
+  terms: string[];
+  results: {
+    total_docs: number; any_hits: number; any_with_families: number;
+    source_type: string | null;
+    terms: { term: string; hits: number; with_families: number; unique_hits: number }[];
+  } | null;
+  computed_at: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface SampleInfo {
+  id: number;
+  production_id: number;
+  name: string;
+  purpose: string;
+  params: Record<string, unknown>;
+  document_ids: string[];
+  created_by: string;
+  created_at: string;
+}
+
+export interface SampleEstimate {
+  n: number; positives: number; confidence: number;
+  rate: number; ci_low: number; ci_high: number;
+  population: number; estimated_low: number; estimated_high: number;
+}
+
+export interface TarValidationInfo {
+  id: number;
+  production_id: number;
+  project_id: number;
+  params: Record<string, unknown>;
+  results: {
+    confidence: number;
+    control: {
+      n: number; coded: number; uncoded: number; conflicted: number;
+      machine_undecided: number;
+      confusion: { tp: number; fp: number; fn: number; tn: number };
+      richness: { rate: number; low: number; high: number } | null;
+      recall: { rate: number; low: number; high: number } | null;
+      precision: { rate: number; low: number; high: number } | null;
+      notes: string[];
+    };
+    elusion: {
+      n: number; positives: number; rate: number; low: number; high: number;
+      null_set_size: number; estimated_missed_low: number; estimated_missed_high: number;
+    } | null;
+  };
+  created_by: string;
+  created_at: string;
+}
+
+export const listSearchTermReports = (productionId: number) =>
+  request<SearchTermReportInfo[]>(`/api/productions/${productionId}/search-term-reports`);
+
+export const createSearchTermReport = (productionId: number, name: string, terms: string[]) =>
+  request<SearchTermReportInfo>(`/api/productions/${productionId}/search-term-reports`, json({ name, terms }));
+
+export const runSearchTermReport = (reportId: number, sourceType?: string) =>
+  request<SearchTermReportInfo['results']>(`/api/search-term-reports/${reportId}/run`, json({ source_type: sourceType || null }));
+
+export const fetchSearchTermReportCsv = (reportId: number) =>
+  authedBlob(`/api/search-term-reports/${reportId}/csv`);
+
+export const listSamples = (productionId: number) =>
+  request<SampleInfo[]>(`/api/productions/${productionId}/samples`);
+
+export const drawSample = (productionId: number, body: {
+  name: string; purpose: string; size?: number | null;
+  source_type?: string | null; scope?: string | null; project_id?: number | null;
+}) => request<SampleInfo>(`/api/productions/${productionId}/samples`, json(body));
+
+export const getSampleEstimate = (sampleId: number, tagId: number) =>
+  request<SampleEstimate>(`/api/samples/${sampleId}/estimate?tag_id=${tagId}`);
+
+export const listTarValidations = (productionId: number) =>
+  request<TarValidationInfo[]>(`/api/productions/${productionId}/tar-validation`);
+
+export const runTarValidation = (productionId: number, body: {
+  project_id: number; control_sample_id: number; responsive_tag_id: number;
+  nonresponsive_tag_id?: number | null; elusion_sample_id?: number | null;
+  confidence?: number;
+}) => request<TarValidationInfo>(`/api/productions/${productionId}/tar-validation`, json(body));
+
+export const getChainOfCustody = (productionId: number) =>
+  request<Record<string, unknown>>(`/api/productions/${productionId}/chain-of-custody`);
+
+export const getExceptionsReport = (productionId: number) =>
+  request<{ total: number; counts: Record<string, number> }>(`/api/productions/${productionId}/exceptions`);
+
+export const fetchExceptionsCsv = (productionId: number) =>
+  authedBlob(`/api/productions/${productionId}/exceptions/csv`);
