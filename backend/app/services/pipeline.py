@@ -21,8 +21,9 @@ from app.services.clustering import cluster_production
 
 logger = logging.getLogger(__name__)
 
-STAGES = ("clustering", "summaries", "brief")
+STAGES = ("clustering", "summaries", "entities", "brief")
 SUMMARY_BATCH_SIZE = 25
+ENTITY_BATCH_SIZE = 10
 
 
 def stages_to_run(status: dict | None, force: bool) -> list[str]:
@@ -133,6 +134,64 @@ async def _run_summaries(production_id: int) -> None:
                 return
 
 
+async def _pending_extraction_docs(production_id: int, limit: int):
+    async with async_session() as db:
+        return (
+            await db.execute(
+                select(Document)
+                .where(
+                    Document.production_id == production_id,
+                    Document.entities_extracted_at.is_(None),
+                    Document.text_content.isnot(None),
+                )
+                .order_by(Document.bates_begin)
+                .limit(limit)
+            )
+        ).scalars().all()
+
+
+async def _extract_one_document(db, doc) -> bool:
+    """Extract + persist one document. True = marked done. False = left
+    unmarked for a later pipeline run (LLM failure). Never raises."""
+    from app.services.entity_extraction import (
+        extract_document_entities, header_candidates, merge_parsed, persist_extraction,
+    )
+    try:
+        parsed = await extract_document_entities(doc.text_content or "")
+        if parsed is None:
+            return False
+        headers = header_candidates(doc)
+        if headers:
+            parsed = merge_parsed([parsed, {"entities": headers, "events": [], "relationships": []}])
+        await persist_extraction(db, doc.production_id, doc.id, doc.text_content or "", parsed)
+        doc.entities_extracted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        return True
+    except Exception:
+        logger.exception("Entity extraction failed for document %s", doc.id)
+        return False
+
+
+async def _run_entities(production_id: int) -> None:
+    """Extract entities for documents not yet processed, in small batches,
+    one commit per document. A batch where every document fails aborts the
+    stage (rather than spinning); unmarked docs retry on the next run."""
+    while True:
+        pending = await _pending_extraction_docs(production_id, ENTITY_BATCH_SIZE)
+        if not pending:
+            return
+        any_ok = False
+        for doc in pending:
+            async with async_session() as db:
+                live = await db.get(Document, doc.id)
+                if live is None or live.entities_extracted_at is not None:
+                    continue
+                if await _extract_one_document(db, live):
+                    any_ok = True
+                    await db.commit()
+        if not any_ok:
+            raise RuntimeError("entity extraction: entire batch failed (no API key or persistent errors)")
+
+
 async def _run_brief(production_id: int) -> None:
     async with async_session() as db:
         brief = await generate_brief(db, production_id)
@@ -160,6 +219,7 @@ async def _run_brief(production_id: int) -> None:
 _STAGE_RUNNERS = {
     "clustering": _run_clustering,
     "summaries": _run_summaries,
+    "entities": _run_entities,
     "brief": _run_brief,
 }
 
