@@ -19,6 +19,9 @@ from app.models import (
     DocumentDuplicate,
     DocumentTag,
     DuplicateGroup,
+    Entity,
+    EntityMention,
+    EntityRelationship,
     Production,
     Tag,
     User,
@@ -162,6 +165,23 @@ TOOLS: list[dict] = [
             "required": ["production_id"],
         },
     },
+    {
+        "name": "lookup_entity",
+        "description": (
+            "Look up a person or organization in the case ontology by name. Returns "
+            "their profile overview, aliases, how many documents mention them, their "
+            "stated relationships, and sample mention snippets. Use this to answer "
+            "'who is X' or 'how is X connected to Y'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Person or organization name (partial ok)."},
+                "production_id": {"type": "integer", "description": "Optional: restrict to one production id."},
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 TOOL_NAMES: set[str] = {t["name"] for t in TOOLS}
@@ -183,6 +203,8 @@ def tool_use_summary(name: str, tool_input: dict) -> str:
         return f'Finding duplicates of {tool_input.get("bates_or_id", "")}'
     if name == "get_corpus_stats":
         return f'Gathering stats for production {tool_input.get("production_id", "")}'
+    if name == "lookup_entity":
+        return f'Looking up "{tool_input.get("name", "")}" in the case ontology'
     return f"Running {name}"
 
 
@@ -393,6 +415,55 @@ async def _tool_get_corpus_stats(db, user, accessible_ids, tool_input) -> ToolRu
                    result_summary=f"{total_docs} docs")
 
 
+async def _lookup_entity(db, user, accessible_ids, tool_input) -> ToolRun:
+    name = (tool_input.get("name") or "").strip()
+    if not name:
+        return ToolRun(result="Missing name", result_summary="missing name", ok=False)
+    scope = accessible_ids
+    prod_id = tool_input.get("production_id")
+    if prod_id is not None:
+        if prod_id not in accessible_ids:
+            return ToolRun(result=json.dumps({"matches": []}), result_summary="0 entities found")
+        scope = [prod_id]
+
+    rows = (await db.execute(
+        select(Entity)
+        .where(Entity.production_id.in_(scope), Entity.canonical_name.ilike(f"%{name}%"))
+        .order_by(Entity.mention_count.desc())
+        .limit(5)
+    )).scalars().all()
+
+    matches = []
+    for e in rows:
+        doc_count = (await db.execute(
+            select(func.count(func.distinct(EntityMention.document_id)))
+            .where(EntityMention.entity_id == e.id)
+        )).scalar() or 0
+        edges = (await db.execute(
+            select(EntityRelationship.relationship_type, Entity.canonical_name)
+            .join(Entity, Entity.id == EntityRelationship.target_entity_id)
+            .where(EntityRelationship.source_entity_id == e.id)
+            .limit(10)
+        )).all()
+        snippets = (await db.execute(
+            select(EntityMention.context_snippet)
+            .where(EntityMention.entity_id == e.id, EntityMention.context_snippet.isnot(None))
+            .limit(3)
+        )).scalars().all()
+        matches.append({
+            "entity_id": str(e.id), "production_id": e.production_id,
+            "type": e.entity_type, "name": e.canonical_name,
+            "aliases": list(e.aliases or []), "overview": e.overview,
+            "mention_count": e.mention_count, "document_count": doc_count,
+            "relationships": [f"{rt} -> {n}" for rt, n in edges],
+            "sample_mentions": [s[:200] for s in snippets],
+        })
+    return ToolRun(
+        result=json.dumps({"matches": matches}),
+        result_summary=f"{len(matches)} entit{'y' if len(matches) == 1 else 'ies'} found",
+    )
+
+
 _DISPATCH = {
     "search_documents": _tool_search_documents,
     "semantic_search": _tool_semantic_search,
@@ -401,6 +472,7 @@ _DISPATCH = {
     "find_similar_documents": _tool_find_similar_documents,
     "get_duplicates": _tool_get_duplicates,
     "get_corpus_stats": _tool_get_corpus_stats,
+    "lookup_entity": _lookup_entity,
 }
 
 
