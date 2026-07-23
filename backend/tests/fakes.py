@@ -18,10 +18,11 @@ class FakeUser:
 
 
 class FakeResult:
-    def __init__(self, items=None, scalar=None, rows=None):
+    def __init__(self, items=None, scalar=None, rows=None, rowcount=1):
         self._items = items or []
         self._scalar = scalar
         self._rows = rows if rows is not None else []
+        self.rowcount = rowcount
 
     def scalars(self):
         return self

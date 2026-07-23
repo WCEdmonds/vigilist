@@ -110,7 +110,10 @@ def upgrade():
         "entity_merges",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("production_id", sa.Integer(), sa.ForeignKey("productions.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("winner_entity_id", UUID(as_uuid=True), sa.ForeignKey("entities.id", ondelete="CASCADE"), nullable=False),
+        # SET NULL (not CASCADE): a chain merge (A->B then B->C) deletes B; a
+        # cascading FK would also destroy the A->B merge log row (audit +
+        # undo history). SET NULL preserves the log row instead.
+        sa.Column("winner_entity_id", UUID(as_uuid=True), sa.ForeignKey("entities.id", ondelete="SET NULL"), nullable=True),
         sa.Column("loser_snapshot", JSONB(), nullable=False),
         sa.Column("winner_prior", JSONB(), nullable=False),
         sa.Column("moved_mention_ids", JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),

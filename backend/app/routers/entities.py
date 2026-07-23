@@ -3,7 +3,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -306,9 +306,17 @@ async def accept_merge_suggestion(
     accessible = await get_accessible_production_ids(db, user)
     if sugg is None or sugg.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Suggestion not found")
-    if sugg.status != "pending":
-        raise HTTPException(status_code=409, detail="Suggestion already resolved")
     await _require_writer(db, user, sugg.production_id)
+
+    # Atomically claim the suggestion: two concurrent accepts (or an accept
+    # racing a reject) on the same pending row must not both proceed.
+    claimed = await db.execute(
+        update(EntityMergeSuggestion)
+        .where(EntityMergeSuggestion.id == suggestion_id, EntityMergeSuggestion.status == "pending")
+        .values(status="accepted", resolved_by=user.id, resolved_at=func.now())
+    )
+    if claimed.rowcount == 0:
+        raise HTTPException(status_code=409, detail="Suggestion already resolved")
 
     a = await db.get(Entity, sugg.entity_a_id)
     b = await db.get(Entity, sugg.entity_b_id)
@@ -338,11 +346,19 @@ async def reject_merge_suggestion(
     accessible = await get_accessible_production_ids(db, user)
     if sugg is None or sugg.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Suggestion not found")
-    if sugg.status != "pending":
-        raise HTTPException(status_code=409, detail="Suggestion already resolved")
     await _require_writer(db, user, sugg.production_id)
-    sugg.status = "rejected"
-    sugg.resolved_by = user.id
+
+    # Atomically claim the suggestion: see accept_merge_suggestion.
+    claimed = await db.execute(
+        update(EntityMergeSuggestion)
+        .where(EntityMergeSuggestion.id == suggestion_id, EntityMergeSuggestion.status == "pending")
+        .values(status="rejected", resolved_by=user.id, resolved_at=func.now())
+    )
+    if claimed.rowcount == 0:
+        raise HTTPException(status_code=409, detail="Suggestion already resolved")
+
+    await log_action(db, user, "entity_merge_suggestion_rejected", "entity_merge_suggestion",
+                     str(suggestion_id), production_id=sugg.production_id, details={})
     await db.commit()
     return {"ok": True}
 
