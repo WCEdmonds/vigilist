@@ -221,14 +221,15 @@ def test_add_explicit_docs(monkeypatch):
     db = FakeSession(
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
-            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, None), (d2, 1, None, None)])),
         ],
     )
     out = asyncio.run(rps.add_documents(
         set_id=1, body=ProductionSetAddDocuments(document_ids=[d1, d2]),
         db=db, user=FakeUser()))
     assert out == {"added": 2, "skipped_existing": 0,
-                   "skipped_duplicates": 0, "families_added": 0}
+                   "skipped_duplicates": 0, "families_added": 0,
+                   "skipped_received": 0}
     assert len(db.added) == 2
 
 
@@ -239,7 +240,7 @@ def test_add_by_tag(monkeypatch):
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
             ("document_tags", FakeResult(rows=[(d1,), (d2,)])),
-            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, None), (d2, 1, None, None)])),
         ],
     )
     out = asyncio.run(rps.add_documents(
@@ -253,7 +254,7 @@ def test_add_doc_from_other_matter_422(monkeypatch):
     db = FakeSession(
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
-            ("documents.production_id", FakeResult(rows=[(d1, 2, None)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 2, None, None)])),
         ],
     )
     with pytest.raises(HTTPException) as exc:
@@ -289,7 +290,7 @@ def test_add_include_families_pulls_family_members(monkeypatch):
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
             ("family_id IN", FakeResult(rows=[(d1,), (d3,)])),
-            ("documents.production_id", FakeResult(rows=[(d1, 1, "F1")])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, "F1", None)])),
         ],
     )
     out = asyncio.run(rps.add_documents(
@@ -308,7 +309,7 @@ def test_add_exclude_duplicates_keeps_primary(monkeypatch):
         responders=[
             ("document_tags", FakeResult(rows=[(d1,), (d2,)])),
             ("document_duplicates", FakeResult(rows=[(10, d1, "C-2"), (10, d2, "C-1")])),
-            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, None), (d2, 1, None, None)])),
         ],
     )
     out = asyncio.run(rps.add_documents(
@@ -326,7 +327,7 @@ def test_add_exclude_duplicates_never_drops_explicit_ids(monkeypatch):
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
             ("document_duplicates", FakeResult(rows=[(10, d1, "C-2"), (10, d2, "C-1")])),
-            ("documents.production_id", FakeResult(rows=[(d1, 1, None)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, None)])),
         ],
     )
     out = asyncio.run(rps.add_documents(
@@ -344,7 +345,7 @@ def test_add_skips_existing_members(monkeypatch):
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
             ("production_set_items", FakeResult(rows=[(d1,)])),
-            ("documents.production_id", FakeResult(rows=[(d1, 1, None), (d2, 1, None)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, None), (d2, 1, None, None)])),
         ],
     )
     out = asyncio.run(rps.add_documents(
@@ -716,7 +717,7 @@ def test_validation_endpoint_reports_conflicts(monkeypatch):
         responders=[
             ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
             ("production_set_items", FakeResult(items=[item])),
-            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
         ],
     )
     out = asyncio.run(rps.get_validation(set_id=1, db=db, user=FakeUser()))
@@ -733,7 +734,7 @@ def test_lock_409_on_conflicts_without_override(monkeypatch):
         responders=[
             ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
             ("production_set_items", FakeResult(items=items)),
-            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
         ],
     )
     with pytest.raises(HTTPException) as exc:
@@ -754,7 +755,7 @@ def test_lock_override_proceeds_and_stamps_audit(monkeypatch):
             ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
             ("redaction_qc_decisions", FakeResult()),
             ("production_set_items", FakeResult(items=items)),
-            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
             ("is_privilege", FakeResult()),
             ("redactions", FakeResult(rows=[(d1, 2)])),
             ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None)])),
@@ -779,7 +780,7 @@ def test_clean_lock_leaves_override_null(monkeypatch):
         responders=[
             ("coalesce", FakeResult()),
             ("production_set_items", FakeResult(items=items)),
-            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"])])),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None)])),
             ("is_privilege", FakeResult()),
             ("redactions", FakeResult()),
             ("documents.page_count", FakeResult(rows=[(d1, "C-1", None, None, TS, None, 3, None)])),
@@ -788,3 +789,42 @@ def test_clean_lock_leaves_override_null(monkeypatch):
     asyncio.run(rps.lock_production_set(set_id=1, body=None, db=db, user=FakeUser()))
     assert ps.status == "locked"
     assert ps.conflicts_overridden_by is None
+
+
+# --- exclude_received (P0-SP5) ----------------------------------------------
+
+def test_add_exclude_received_drops_received_docs(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2 = uuid4(), uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("document_tags", FakeResult(rows=[(d1,), (d2,)])),
+            ("source_type =", FakeResult(rows=[(d2,)])),  # d2 is received
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, None), (d2, 1, None, "received")])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1,
+        body=ProductionSetAddDocuments(tag_id=5, exclude_received=True),
+        db=db, user=FakeUser()))
+    assert out["added"] == 1
+    assert out["skipped_received"] == 1
+
+
+def test_add_exclude_received_never_drops_explicit(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("source_type =", FakeResult(rows=[(d1,)])),
+            ("documents.production_id", FakeResult(rows=[(d1, 1, None, "received")])),
+        ],
+    )
+    out = asyncio.run(rps.add_documents(
+        set_id=1,
+        body=ProductionSetAddDocuments(document_ids=[d1], exclude_received=True),
+        db=db, user=FakeUser()))
+    assert out["added"] == 1
+    assert out["skipped_received"] == 0
