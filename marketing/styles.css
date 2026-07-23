@@ -261,6 +261,43 @@ html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
   font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.08em;
   text-transform: uppercase; color: #9aa0a8; }
 
+/* graph: ambient float (cards drift; edges anchor close enough) */
+@keyframes gdrift1 { 0%,100% { margin-top: 0; } 50% { margin-top: -7px; } }
+@keyframes gdrift2 { 0%,100% { margin-top: 0; } 50% { margin-top: 8px; } }
+.graph__node--float1 { animation: gdrift1 7s ease-in-out infinite; }
+.graph__node--float2 { animation: gdrift2 5.5s ease-in-out 0.6s infinite; }
+.graph__node--float3 { animation: gdrift1 6.2s ease-in-out 1.4s infinite; }
+.graph__node--float4 { animation: gdrift2 6.8s ease-in-out 0.3s infinite; }
+.graph__node--float5 { animation: gdrift1 5.9s ease-in-out 1.0s infinite; }
+
+/* graph: hover/focus interactivity */
+.graph__node { cursor: pointer; transition: transform .18s ease, box-shadow .18s ease; }
+.graph__node:hover { transform: translate(-50%, -50%) scale(1.07); z-index: 3;
+  box-shadow: 0 16px 36px -8px rgba(0,0,0,0.7); animation-play-state: paused; }
+.graph__edges line, .graph__edge-label { transition: opacity .2s ease, stroke .2s ease; }
+.graph[data-focus] .graph__edges line { opacity: 0.18; }
+.graph[data-focus] .graph__edge-label { opacity: 0.25; }
+.graph[data-focus] .graph__node:not(:hover):not(.graph__node--center) { opacity: 0.55; }
+.graph[data-focus="acme"] line[data-key="acme"],
+.graph[data-focus="dana"] line[data-key="dana"],
+.graph[data-focus="meridian"] line[data-key="meridian"],
+.graph[data-focus="payment"] line[data-key="payment"] { opacity: 1; stroke: var(--marker); stroke-width: 0.6; }
+.graph[data-focus="acme"] .graph__edge-label[data-key="acme"],
+.graph[data-focus="dana"] .graph__edge-label[data-key="dana"],
+.graph[data-focus="meridian"] .graph__edge-label[data-key="meridian"],
+.graph[data-focus="payment"] .graph__edge-label[data-key="payment"] {
+  opacity: 1; color: var(--ink); background: var(--marker); }
+.graph[data-focus="center"] .graph__edges line { opacity: 1; stroke: var(--marker); stroke-width: 0.5; }
+.graph[data-focus="center"] .graph__edge-label { opacity: 1; }
+
+/* ── Wide screens: staggered rail instead of one centered column ── */
+@media (min-width: 1360px) {
+  .band--right .band__narrow { margin-left: auto; }
+  .band--right .section-head { margin-left: auto; }
+  .hero__inner { gap: 90px; }
+  .transcript { margin-left: 80px; }
+}
+
 /* ── Pricing ── */
 .pricing__sub { color: var(--ink-2); font-size: 1.05rem; }
 .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; border: 2px solid var(--redact);
@@ -320,6 +357,9 @@ html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
   .reveal-anim .timecut__bar--old { width: 100%; }
   .reveal-anim .timecut__bar--new { width: 9%; }
   .reveal-anim .graph__edges line { transition: none; stroke-dashoffset: 0; }
+  .graph__node--float1, .graph__node--float2, .graph__node--float3,
+  .graph__node--float4, .graph__node--float5 { animation: none; }
+  .graph__node { transition: none; }
   .card h3 { transition: none; }
   .btn { transition: none; }
 }

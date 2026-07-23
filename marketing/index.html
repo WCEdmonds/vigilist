@@ -159,28 +159,28 @@
           <p>Click any name, anywhere: an AI-written profile, every mention in context, and who they're connected to — employer, counsel, correspondent, party to an agreement — each relationship backed by the phrase in the document that proves it. Key players rank by presence, so the people who matter surface on day one.</p>
           <p class="callout__note">Events — meetings, payments, agreements — are extracted from day one, building toward matter timelines and relationship graphs on the same foundation.</p>
         </div>
-        <div class="callout__visual" aria-hidden="true">
+        <div class="callout__visual">
           <div class="graph reveal">
-            <svg class="graph__edges" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <line x1="42" y1="44" x2="80" y2="18" />
-              <line x1="42" y1="44" x2="82" y2="70" />
-              <line x1="42" y1="44" x2="30" y2="88" />
-              <line x1="42" y1="44" x2="12" y2="20" />
+            <svg class="graph__edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <line data-key="acme" x1="42" y1="44" x2="80" y2="18" />
+              <line data-key="dana" x1="42" y1="44" x2="82" y2="70" />
+              <line data-key="meridian" x1="42" y1="44" x2="30" y2="88" />
+              <line data-key="payment" x1="42" y1="44" x2="12" y2="20" />
             </svg>
-            <div class="graph__node graph__node--center" style="left:42%;top:44%;">
+            <div class="graph__node graph__node--center graph__node--float1" data-key="center" style="left:42%;top:44%;">
               <span class="graph__avatar">JR</span>
               <span class="graph__name">Jorge&nbsp;Rivera</span>
               <span class="graph__meta">CFO&nbsp;·&nbsp;214&nbsp;MENTIONS</span>
             </div>
-            <div class="graph__node" style="left:80%;top:18%;">Acme&nbsp;Corp</div>
-            <div class="graph__node" style="left:82%;top:70%;">Dana&nbsp;Wu</div>
-            <div class="graph__node" style="left:30%;top:88%;">Meridian&nbsp;LLC</div>
-            <div class="graph__node graph__node--event" style="left:12%;top:20%;">PAYMENT&nbsp;·&nbsp;MAR&nbsp;2024</div>
-            <span class="graph__edge-label" style="left:60%;top:27%;">EMPLOYMENT&nbsp;·&nbsp;"CFO&nbsp;SINCE&nbsp;2019"</span>
-            <span class="graph__edge-label" style="left:63%;top:60%;">CORRESPONDENT&nbsp;·&nbsp;41&nbsp;DOCS</span>
-            <span class="graph__edge-label" style="left:33%;top:68%;">PARTY&nbsp;TO&nbsp;AGREEMENT</span>
-            <span class="graph__edge-label" style="left:22%;top:29%;">PARTICIPANT</span>
-            <div class="graph__caption">every&nbsp;edge&nbsp;cites&nbsp;the&nbsp;document&nbsp;that&nbsp;proves&nbsp;it</div>
+            <div class="graph__node graph__node--float2" data-key="acme" style="left:80%;top:18%;">Acme&nbsp;Corp</div>
+            <div class="graph__node graph__node--float3" data-key="dana" style="left:82%;top:70%;">Dana&nbsp;Wu</div>
+            <div class="graph__node graph__node--float4" data-key="meridian" style="left:30%;top:88%;">Meridian&nbsp;LLC</div>
+            <div class="graph__node graph__node--event graph__node--float5" data-key="payment" style="left:12%;top:20%;">PAYMENT&nbsp;·&nbsp;MAR&nbsp;2024</div>
+            <span class="graph__edge-label" data-key="acme" style="left:60%;top:27%;">EMPLOYMENT&nbsp;·&nbsp;"CFO&nbsp;SINCE&nbsp;2019"</span>
+            <span class="graph__edge-label" data-key="dana" style="left:63%;top:60%;">CORRESPONDENT&nbsp;·&nbsp;41&nbsp;DOCS</span>
+            <span class="graph__edge-label" data-key="meridian" style="left:33%;top:68%;">PARTY&nbsp;TO&nbsp;AGREEMENT</span>
+            <span class="graph__edge-label" data-key="payment" style="left:22%;top:29%;">PARTICIPANT</span>
+            <div class="graph__caption">hover&nbsp;a&nbsp;name&nbsp;—&nbsp;every&nbsp;edge&nbsp;cites&nbsp;the&nbsp;document&nbsp;that&nbsp;proves&nbsp;it</div>
           </div>
         </div>
       </div>
@@ -219,7 +219,7 @@
     </section>
 
     <!-- ── DEFENSIBILITY ────────────────────────────────── -->
-    <section id="defensible" class="band band--tight">
+    <section id="defensible" class="band band--tight band--right">
       <div class="container band__narrow">
         <p class="bates">VIGILIST&nbsp;000006</p>
         <h2>The AI that can take the stand.</h2>
@@ -292,7 +292,7 @@
     </section>
 
     <!-- ── FINAL CTA ────────────────────────────────────── -->
-    <section class="band band--dark cta-final">
+    <section class="band band--dark cta-final band--right">
       <div class="container band__narrow">
         <p class="bates bates--light">VIGILIST&nbsp;000009</p>
         <h2>See it on your own production.</h2>

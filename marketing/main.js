@@ -16,3 +16,11 @@ if (!reduce && 'IntersectionObserver' in window) {
   }, { threshold: 0.15 });
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 }
+
+// Entity graph: hovering a node spotlights its connection.
+document.querySelectorAll('.graph__node[data-key]').forEach((node) => {
+  const graph = node.closest('.graph');
+  if (!graph) return;
+  node.addEventListener('mouseenter', () => graph.setAttribute('data-focus', node.dataset.key));
+  node.addEventListener('mouseleave', () => graph.removeAttribute('data-focus'));
+});
