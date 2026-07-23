@@ -274,28 +274,54 @@
         </header>
         <div class="calc reveal">
           <label class="calc__label" for="calc-gb">MATTER&nbsp;SIZE&nbsp;·&nbsp;DRAG&nbsp;TO&nbsp;ESTIMATE<span><b class="calc__gbval">5</b>&nbsp;GB</span></label>
-          <input type="range" id="calc-gb" min="1" max="100" step="1" value="5">
+          <input type="range" id="calc-gb" min="1" max="50" step="1" value="5">
           <p class="calc__out"><span class="calc__price">$90</span><span class="calc__per">/month</span> · roughly <b class="calc__docs">25,000</b> documents — read, coded, and mapped</p>
         </div>
-        <div class="compare">
-          <div class="compare__col compare__col--them">
-            <h3>Traditional platforms</h3>
-            <ul>
-              <li>Quote-only pricing, seat fees, annual minimums</li>
-              <li>Billed on "processed" data — up to 2&times; what you actually sent</li>
-              <li>AI review metered per document or sold as credits</li>
-            </ul>
-          </div>
-          <div class="compare__col compare__col--us">
-            <h3>Vigilist</h3>
-            <ul>
-              <li>$18 / GB / month — the whole bill, AI included</li>
-              <li>Billed on the raw gigabytes you upload</li>
-              <li>No seats, no minimums, no lock-in</li>
-            </ul>
-            <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
-          </div>
+        <div class="compare-wrap reveal">
+          <table class="ctable">
+            <thead>
+              <tr>
+                <th scope="col">Platform</th>
+                <th scope="col">Price</th>
+                <th scope="col">Billed on</th>
+                <th scope="col">AI review</th>
+                <th scope="col">Seats &amp; minimums</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="ctable__us">
+                <th scope="row">Vigilist</th>
+                <td><b>$18 / GB / mo — published</b></td>
+                <td>The raw gigabytes you upload</td>
+                <td>First-pass AI review + validation statistics, included</td>
+                <td>None. No seats, no minimums, no lock-in</td>
+              </tr>
+              <tr>
+                <th scope="row">RelativityOne</th>
+                <td>Quote-only · est. $11–13 / GB / mo, plus provider fees</td>
+                <td>Processed data &amp; peak review volume</td>
+                <td>aiR included since 2026 — est. $0.20–0.25 / doc before that</td>
+                <td>$50–100 / user / mo at many providers · annual commitments</td>
+              </tr>
+              <tr>
+                <th scope="row">DISCO</th>
+                <td>Quote-only · est. $10–16 / GB / mo effective</td>
+                <td>Processed data — more GB than you sent</td>
+                <td>Cecilia AI included</td>
+                <td>Accounts reported at $20k+ / yr · small-matter terms undisclosed</td>
+              </tr>
+              <tr>
+                <th scope="row">Everlaw</th>
+                <td>Quote-only · est. $18–35 / GB / mo + $2–5k / mo platform fee</td>
+                <td>Hosted data</td>
+                <td>Single-doc AI free · batch AI sold as credits</td>
+                <td>No seat fees · the platform fee is the minimum</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+        <p class="ctable__note">Competitor figures are third-party estimates of quote-only pricing and Winter 2026 industry-survey data, as of July 2026. They don't publish prices. We do.</p>
+        <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
       </div>
     </section>
 
