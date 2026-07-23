@@ -5,6 +5,7 @@ import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
+import EntityTimelineView from './components/EntityTimelineView';
 import IngestWizard from './components/IngestWizard';
 import ProductionSetsPanel from './components/ProductionSetsPanel';
 import AuditLog from './components/AuditLog';
@@ -88,6 +89,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
   const [showEntities, setShowEntities] = useState(initialUrl.view === 'entities');
+  const [showTimeline, setShowTimeline] = useState(initialUrl.view === 'timeline');
   const [entityPanelId, setEntityPanelId] = useState<string | null>(initialUrl.entity ?? null);
 
   // Deep-link into an entity's profile panel from anywhere (chip clicks,
@@ -99,7 +101,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setEntityPanelId(id);
     setShowEntities(true);
   };
-  // Not yet called from this task's own UI — wired into Timeline/Graph/chip
+  // Not yet called from this task's own UI — wired into Graph/chip
   // components in follow-on ontology-surface tasks. Referenced here so
   // strict unused-locals checks pass in the meantime.
   void navigateToEntity;
@@ -148,8 +150,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showReview ? 'review' : showEntities ? 'entities' : undefined,
-    entity: showEntities && entityPanelId ? entityPanelId : undefined,
+    view: showReview ? 'review' : showEntities ? 'entities' : showTimeline ? 'timeline' : undefined,
+    entity: (showEntities || showTimeline) && entityPanelId ? entityPanelId : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -415,6 +417,19 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   }
 
+  // Timeline view full-screen mode (chronological case events)
+  if (showTimeline) {
+    return (
+      <EntityTimelineView
+        productionId={production.id}
+        onViewDocument={(id) => { setShowTimeline(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setShowTimeline(false); refreshList(); }}
+        initialEntityId={entityPanelId}
+        onOpenEntityChange={setEntityPanelId}
+      />
+    );
+  }
+
   // Batch review full-screen mode
   if (activeBatchId) {
     return (
@@ -470,7 +485,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         initialQuery={searchQuery}
         onAsk={handleAsk}
         onOpenReview={() => setShowReview(true)}
-        onOpenEntities={() => setShowEntities(true)}
+        onOpenEntities={() => { setShowTimeline(false); setShowEntities(true); }}
+        onOpenTimeline={() => { setShowEntities(false); setShowTimeline(true); }}
         onOpenDashboard={() => setShowDashboard(true)}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
