@@ -1,8 +1,13 @@
-"""Render locked production sets into endorsed PDFs (P2-2). DB + storage.
+"""Render locked production sets into endorsed output (P2-2/P2-5). DB + storage.
 
 Reads ONLY image_paths renditions (never native/text); redact_in_part pages
 are burned via burn_page BEFORE stamping, so redacted pixels cannot reach a
-produced PDF. Pure drawing lives in endorse.py.
+produced artifact. Pure drawing lives in endorse.py.
+
+Output formats (ps.image_format):
+- 'pdf'  — one endorsed PDF per document (P2-2 default)
+- 'tiff' — one 1-bit Group 4 TIFF per PAGE (classic Relativity-compatible);
+  item.output_path holds the first page's path as the progress marker
 """
 
 from __future__ import annotations
@@ -23,9 +28,15 @@ from app.services.redaction_render import burn_page
 
 logger = logging.getLogger(__name__)
 
+NATIVE_SLIP_TITLE = "PRODUCED IN NATIVE FORMAT"
+
 
 def artifact_path(production_id: int, set_id: int, bates_begin: str) -> str:
     return f"productions/{production_id}/production_sets/{set_id}/{bates_begin}.pdf"
+
+
+def tiff_page_path(ps: ProductionSet, page_bates: str) -> str:
+    return f"productions/{ps.production_id}/production_sets/{ps.id}/tiff/{page_bates}.tif"
 
 
 def _load_page(raw_path: str) -> Image.Image | None:
@@ -48,6 +59,10 @@ async def render_item(db: AsyncSession, ps: ProductionSet,
 
     if item.disposition == "withhold":
         pages = [slip_sheet(item.bates_begin, designation)]
+        page_names = [item.bates_begin]
+    elif getattr(item, "produce_native", False):
+        pages = [slip_sheet(item.bates_begin, designation, title=NATIVE_SLIP_TITLE)]
+        page_names = [item.bates_begin]
     else:
         reds_by_page: dict[int, list] = {}
         if item.disposition == "redact_in_part":
@@ -59,6 +74,7 @@ async def render_item(db: AsyncSession, ps: ProductionSet,
         bates = page_bates_numbers(item.bates_begin, ps.prefix, ps.padding,
                                    item.pages or 1)
         pages = []
+        page_names = []
         for idx, raw_path in enumerate(doc.image_paths or [], start=1):
             img = _load_page(raw_path)
             if img is None:
@@ -68,8 +84,21 @@ async def render_item(db: AsyncSession, ps: ProductionSet,
             # guard drift between lock snapshot and current image count
             bates_text = bates[min(idx, len(bates)) - 1]
             pages.append(stamp_page(img, bates_text, designation))
+            page_names.append(bates_text)
         if not pages:
             raise RuntimeError(f"No readable page images for {doc.bates_begin}")
+
+    if getattr(ps, "image_format", "pdf") == "tiff":
+        first_path: str | None = None
+        for page_bates, img in zip(page_names, pages):
+            buf = io.BytesIO()
+            img.convert("1").save(buf, format="TIFF", compression="group4")
+            path = tiff_page_path(ps, page_bates)
+            storage.upload_bytes(buf.getvalue(), path, "image/tiff")
+            if first_path is None:
+                first_path = path
+        item.output_path = first_path
+        return first_path or ""
 
     buf = io.BytesIO()
     pages[0].save(buf, format="PDF", save_all=True,

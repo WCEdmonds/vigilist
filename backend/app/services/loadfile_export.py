@@ -14,7 +14,8 @@ FIELD_SEPARATOR = "\x14"   # DC4
 DAT_COLUMNS = ["BEGBATES", "ENDBATES", "BEGATTACH", "ENDATTACH", "CUSTODIAN",
                "FROM", "TO", "CC", "DATESENT", "DATERECEIVED", "SUBJECT",
                "FILENAME", "FILETYPE", "MD5HASH", "SHA256HASH", "PAGECOUNT",
-               "REDACTED", "WITHHELD", "CONFIDENTIALITY", "TEXTPATH"]
+               "REDACTED", "WITHHELD", "CONFIDENTIALITY", "TEXTPATH",
+               "NATIVELINK"]
 
 
 def _clean(value) -> str:
@@ -41,6 +42,23 @@ def dat_bytes(rows: list[dict]) -> bytes:
 def opt_bytes(entries: list[tuple[str, str, str, int]]) -> bytes:
     lines = [f"{bates},{volume},{path},Y,,,{pages}"
              for bates, volume, path, pages in entries]
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+def opt_bytes_paged(docs: list[tuple[str, list[tuple[str, str]]]]) -> bytes:
+    """Page-level Opticon for TIFF productions.
+
+    docs = (volume, [(page_bates, path), ...]) per document, in sort order.
+    First page row carries the doc break + page count; continuation rows
+    leave both blank — exactly the shape parse_opt groups back into docs.
+    """
+    lines = []
+    for volume, pages in docs:
+        for i, (page_bates, path) in enumerate(pages):
+            if i == 0:
+                lines.append(f"{page_bates},{volume},{path},Y,,,{len(pages)}")
+            else:
+                lines.append(f"{page_bates},{volume},{path},,,,")
     return ("\r\n".join(lines) + "\r\n").encode("utf-8")
 
 
