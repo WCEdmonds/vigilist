@@ -61,6 +61,7 @@ class FakeSession:
         self.responders = responders or []
         self.executed = []
         self.added = []
+        self.deleted = []
 
     async def get(self, model, key):
         return self._get_objects.get((model.__name__, key))
@@ -89,4 +90,4 @@ class FakeSession:
         _fill_timestamps(obj)
 
     async def delete(self, obj):
-        pass
+        self.deleted.append(obj)
