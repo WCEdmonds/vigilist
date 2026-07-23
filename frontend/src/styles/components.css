@@ -379,6 +379,16 @@ mark {
   border-radius: 2px;
 }
 
+/* ── Entity mentions (ontology) ── */
+
+.entity-mark { border-radius: 3px; padding: 0 1px; }
+.entity-mark.entity-person { background: color-mix(in srgb, #4f7cff 22%, transparent); border-bottom: 1px solid #4f7cff; }
+.entity-mark.entity-org { background: color-mix(in srgb, #b4690e 22%, transparent); border-bottom: 1px solid #b4690e; }
+.entity-mark:hover { filter: brightness(1.15); }
+.entity-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.entity-dot.entity-person { background: #4f7cff; }
+.entity-dot.entity-org { background: #b4690e; }
+
 /* ── Keyboard shortcut hint ── */
 
 .kbd {
