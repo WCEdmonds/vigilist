@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
@@ -63,6 +63,16 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [filterFileType, setFilterFileType] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('bates');
   const [filterAiDecision, setFilterAiDecision] = useState<string>('');
+  const [filterSourceParty, setFilterSourceParty] = useState<string>('');
+  const [sourceParties, setSourceParties] = useState<string[]>([]);
+  const [workMode, setWorkModeState] = useState<'all' | 'incoming' | 'outgoing'>(
+    () => (localStorage.getItem(`vigilist:mode:${production.id}`) as 'all' | 'incoming' | 'outgoing') || 'all',
+  );
+  const setWorkMode = (m: 'all' | 'incoming' | 'outgoing') => {
+    setWorkModeState(m);
+    localStorage.setItem(`vigilist:mode:${production.id}`, m);
+  };
+  const sourceTypeParam = workMode === 'incoming' ? 'received' : workMode === 'outgoing' ? 'collection' : undefined;
 
   const [showManageAccess, setShowManageAccess] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -143,13 +153,14 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     loadDocuments();
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
+    getSourceParties(production.id).then(r => setSourceParties(r.source_parties)).catch(e => console.warn('getSourceParties failed:', e));
     refreshClusters();
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId, refreshClusters, filterAiDecision]);
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId, refreshClusters, filterAiDecision, filterSourceParty, workMode]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, filterClusterId ?? undefined, filterAiDecision || undefined);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, filterClusterId ?? undefined, filterAiDecision || undefined, filterSourceParty || undefined, sourceTypeParam);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -189,6 +200,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       const res = await searchDocuments(
         query, 1, perPage, 'relevance', production.id,
         metadata, mode, filterFileType || undefined,
+        filterSourceParty || undefined, sourceTypeParam,
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
@@ -203,7 +215,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   useEffect(() => {
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterFileType]);
+  }, [filterFileType, filterSourceParty, workMode]);
 
   const clearSearch = () => {
     setHasSearched(false);
@@ -425,6 +437,20 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       {/* Content */}
       <div className={`home-shell${railCollapsed ? '' : ' rail-open'}`}>
         <div className="content-area" style={{ paddingTop: 'var(--space-4)', paddingBottom: 'var(--space-8)' }}>
+        {/* Workspace mode: presets the source_type filter; never hides anything a direct link reaches */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 'var(--space-2)' }}>
+          {(['all', 'incoming', 'outgoing'] as const).map(m => (
+            <button
+              key={m}
+              type="button"
+              className={workMode === m ? 'btn btn-primary btn-xs' : 'btn btn-ghost btn-xs'}
+              onClick={() => setWorkMode(m)}
+              title={m === 'incoming' ? 'Focus on received productions' : m === 'outgoing' ? 'Focus on our collection' : 'All documents'}
+            >
+              {m === 'all' ? 'All' : m === 'incoming' ? 'Incoming' : 'Outgoing'}
+            </button>
+          ))}
+        </div>
         <ProductionBrief
           production={production}
           clusters={clusters}
@@ -506,6 +532,18 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   <option value="image">Image (PNG/JPG)</option>
                   <option value="native">All native files</option>
                 </select>
+                <select
+                  aria-label="Filter by source"
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 120 }}
+                  value={filterSourceParty}
+                  onChange={e => { setFilterSourceParty(e.target.value); setDocPage(1); }}
+                >
+                  <option value="">All sources</option>
+                  {sourceParties.map(sp => (
+                    <option key={sp} value={sp}>{sp}</option>
+                  ))}
+                </select>
                 <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportSearchCsv(searchQuery, production.id)}>
                   Export CSV
                 </button>
@@ -562,6 +600,18 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   <option value="email">Email (.msg/.eml)</option>
                   <option value="image">Image (PNG/JPG)</option>
                   <option value="native">All native files</option>
+                </select>
+                <select
+                  aria-label="Filter by source"
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 120 }}
+                  value={filterSourceParty}
+                  onChange={e => { setFilterSourceParty(e.target.value); setDocPage(1); }}
+                >
+                  <option value="">All sources</option>
+                  {sourceParties.map(sp => (
+                    <option key={sp} value={sp}>{sp}</option>
+                  ))}
                 </select>
                 <label htmlFor="filter-ai" className="visually-hidden">Filter by AI decision</label>
                 <select

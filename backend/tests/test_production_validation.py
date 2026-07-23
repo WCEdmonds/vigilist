@@ -25,7 +25,7 @@ class FakeDecision:
 
 
 def _db(doc_rows, privileged=(), red_rows=(), decisions=()):
-    """doc_rows: (id, control, override, image_paths); red_rows: (id, count, changed)."""
+    """doc_rows: (id, control, override, image_paths, source_type, source_party); red_rows: (id, count, changed)."""
     return FakeSession(responders=[
         ("documents.image_paths", FakeResult(rows=list(doc_rows))),
         ("is_privilege", FakeResult(rows=[(d,) for d in privileged])),
@@ -40,16 +40,16 @@ def _run(db, doc_ids):
 
 def test_clean_set_no_conflicts():
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, ["p1.jpg"])])
+    db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)])
     out = _run(db, [d1])
     assert out["total"] == 0
     assert out == {"qc_pending": [], "privilege_produce": [],
-                   "no_images": [], "total": 0}
+                   "no_images": [], "received_document": [], "total": 0}
 
 
 def test_redactions_without_approval_conflict():
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, ["p1.jpg"])], red_rows=[(d1, 2, TS)])
+    db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)], red_rows=[(d1, 2, TS)])
     out = _run(db, [d1])
     assert out["total"] == 1
     assert out["qc_pending"][0]["control_number"] == "C-1"
@@ -58,7 +58,7 @@ def test_redactions_without_approval_conflict():
 
 def test_fresh_approved_qc_no_conflict():
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, ["p1.jpg"])],
+    db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)],
              red_rows=[(d1, 2, TS)],
              decisions=[FakeDecision(d1, "approved", TS + timedelta(hours=1), 2)])
     out = _run(db, [d1])
@@ -68,7 +68,7 @@ def test_fresh_approved_qc_no_conflict():
 def test_stale_approval_conflicts():
     # redaction changed AFTER the decision -> auto-invalidated -> pending
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, ["p1.jpg"])],
+    db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)],
              red_rows=[(d1, 2, TS + timedelta(hours=2))],
              decisions=[FakeDecision(d1, "approved", TS + timedelta(hours=1), 2)])
     out = _run(db, [d1])
@@ -77,7 +77,7 @@ def test_stale_approval_conflicts():
 
 def test_rejected_qc_conflicts():
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, ["p1.jpg"])],
+    db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)],
              red_rows=[(d1, 2, TS)],
              decisions=[FakeDecision(d1, "rejected", TS + timedelta(hours=1), 2)])
     out = _run(db, [d1])
@@ -86,7 +86,7 @@ def test_rejected_qc_conflicts():
 
 def test_privilege_produce_override_conflicts():
     d1 = uuid4()
-    db = _db([(d1, "C-1", "produce", ["p1.jpg"])], privileged=[d1])
+    db = _db([(d1, "C-1", "produce", ["p1.jpg"], None, None)], privileged=[d1])
     out = _run(db, [d1])
     assert len(out["privilege_produce"]) == 1
     assert out["total"] == 1
@@ -94,14 +94,14 @@ def test_privilege_produce_override_conflicts():
 
 def test_privileged_withhold_is_fine():
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, [])], privileged=[d1])  # withhold, no images OK
+    db = _db([(d1, "C-1", None, [], None, None)], privileged=[d1])  # withhold, no images OK
     out = _run(db, [d1])
     assert out["total"] == 0
 
 
 def test_no_images_conflict_for_produce_doc():
     d1 = uuid4()
-    db = _db([(d1, "C-1", None, [])])
+    db = _db([(d1, "C-1", None, [], None, None)])
     out = _run(db, [d1])
     assert len(out["no_images"]) == 1
 
@@ -109,3 +109,19 @@ def test_no_images_conflict_for_produce_doc():
 def test_empty_doc_ids():
     out = _run(FakeSession(), [])
     assert out["total"] == 0
+
+
+def test_received_document_conflict():
+    d1 = uuid4()
+    db = _db([(d1, "C-1", None, ["p1.jpg"], "received", "ABC Corp")])
+    out = _run(db, [d1])
+    assert len(out["received_document"]) == 1
+    assert "ABC Corp" in out["received_document"][0]["detail"]
+    assert out["total"] == 1
+
+
+def test_null_source_type_not_flagged():
+    d1 = uuid4()
+    db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)])
+    out = _run(db, [d1])
+    assert out["received_document"] == []
