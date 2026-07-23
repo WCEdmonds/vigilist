@@ -415,15 +415,15 @@ async def _tool_get_corpus_stats(db, user, accessible_ids, tool_input) -> ToolRu
                    result_summary=f"{total_docs} docs")
 
 
-async def _lookup_entity(db, user, accessible_ids, tool_input) -> ToolRun:
+async def _tool_lookup_entity(db, user, accessible_ids, tool_input) -> ToolRun:
     name = (tool_input.get("name") or "").strip()
     if not name:
-        return ToolRun(result="Missing name", result_summary="missing name", ok=False)
+        return ToolRun(result="Error: name is required.", result_summary="No name", ok=False)
     scope = accessible_ids
-    prod_id = tool_input.get("production_id")
+    prod_id = _clamp_production(tool_input.get("production_id"), accessible_ids)
+    if tool_input.get("production_id") is not None and prod_id is None:
+        return ToolRun(result=json.dumps({"matches": []}), result_summary="0 entities found")
     if prod_id is not None:
-        if prod_id not in accessible_ids:
-            return ToolRun(result=json.dumps({"matches": []}), result_summary="0 entities found")
         scope = [prod_id]
 
     rows = (await db.execute(
@@ -443,6 +443,7 @@ async def _lookup_entity(db, user, accessible_ids, tool_input) -> ToolRun:
             select(EntityRelationship.relationship_type, Entity.canonical_name)
             .join(Entity, Entity.id == EntityRelationship.target_entity_id)
             .where(EntityRelationship.source_entity_id == e.id)
+            .distinct()
             .limit(10)
         )).all()
         snippets = (await db.execute(
@@ -450,10 +451,11 @@ async def _lookup_entity(db, user, accessible_ids, tool_input) -> ToolRun:
             .where(EntityMention.entity_id == e.id, EntityMention.context_snippet.isnot(None))
             .limit(3)
         )).scalars().all()
+        overview = (e.overview or None) and e.overview[:600]
         matches.append({
             "entity_id": str(e.id), "production_id": e.production_id,
             "type": e.entity_type, "name": e.canonical_name,
-            "aliases": list(e.aliases or []), "overview": e.overview,
+            "aliases": list(e.aliases or [])[:10], "overview": overview,
             "mention_count": e.mention_count, "document_count": doc_count,
             "relationships": [f"{rt} -> {n}" for rt, n in edges],
             "sample_mentions": [s[:200] for s in snippets],
@@ -472,7 +474,7 @@ _DISPATCH = {
     "find_similar_documents": _tool_find_similar_documents,
     "get_duplicates": _tool_get_duplicates,
     "get_corpus_stats": _tool_get_corpus_stats,
-    "lookup_entity": _lookup_entity,
+    "lookup_entity": _tool_lookup_entity,
 }
 
 
