@@ -331,7 +331,12 @@ async def list_source_parties(
         .distinct()
         .order_by(Document.source_party)
     )).all()
-    return {"source_parties": [r[0] for r in rows]}
+    undesignated = (await db.execute(
+        select(func.count(Document.id))
+        .where(Document.production_id == production_id,
+               Document.source_type.is_(None))
+    )).scalar() or 0
+    return {"source_parties": [r[0] for r in rows], "undesignated": undesignated}
 
 
 @router.get("/by-bates")

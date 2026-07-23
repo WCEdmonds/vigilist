@@ -74,7 +74,14 @@ export function listDocuments(page = 1, perPage = 50, productionId?: number, tag
 }
 
 export const getSourceParties = (productionId: number) =>
-  request<{ source_parties: string[] }>(`/api/documents/source-parties?production_id=${productionId}`);
+  request<{ source_parties: string[]; undesignated: number }>(`/api/documents/source-parties?production_id=${productionId}`);
+
+export const designateSources = (productionId: number, sourceType: 'collection' | 'received', sourceParty?: string) =>
+  request<{ updated: number }>(`/api/productions/${productionId}/source-designation`, json({
+    source_type: sourceType,
+    source_party: sourceParty || null,
+    only_undesignated: true,
+  }));
 
 export const getDocument = (id: string) =>
   request<DocumentDetail>(`/api/documents/${id}`);
