@@ -318,7 +318,10 @@ def test_reject_suggestion_logs_audit_action(monkeypatch):
     monkeypatch.setattr(er, "log_action", fake_log)
 
     sugg = FakeSuggestion(1, 1, uuid.uuid4(), uuid.uuid4())
-    db = FakeSession(get_objects={("EntityMergeSuggestion", 1): sugg})
+    db = FakeSession(
+        get_objects={("EntityMergeSuggestion", 1): sugg},
+        responders=[("UPDATE entity_merge_suggestions", FakeResult(rowcount=1))],
+    )
     out = asyncio.run(er.reject_merge_suggestion(suggestion_id=1, db=db, user=FakeUser()))
     assert out == {"ok": True}
     assert audit_calls == [("entity_merge_suggestion_rejected", "entity_merge_suggestion", "1",

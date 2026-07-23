@@ -61,15 +61,27 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
 }
 
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string) {
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string, sourceParty?: string, sourceType?: string) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
   if (fileType) params.set('file_type', fileType);
   if (clusterId) params.set('cluster_id', String(clusterId));
   if (aiDecision) params.set('ai_decision', aiDecision);
+  if (sourceParty) params.set('source_party', sourceParty);
+  if (sourceType) params.set('source_type', sourceType);
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
+
+export const getSourceParties = (productionId: number) =>
+  request<{ source_parties: string[]; undesignated: number }>(`/api/documents/source-parties?production_id=${productionId}`);
+
+export const designateSources = (productionId: number, sourceType: 'collection' | 'received', sourceParty?: string) =>
+  request<{ updated: number }>(`/api/productions/${productionId}/source-designation`, json({
+    source_type: sourceType,
+    source_party: sourceParty || null,
+    only_undesignated: true,
+  }));
 
 export const getDocument = (id: string) =>
   request<DocumentDetail>(`/api/documents/${id}`);
@@ -182,6 +194,8 @@ export async function searchDocuments(
   metadata?: Record<string, string>,
   mode?: 'fulltext' | 'semantic',
   fileType?: string,
+  sourceParty?: string,
+  sourceType?: string,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -190,6 +204,8 @@ export async function searchDocuments(
   }
   if (mode) params.set('mode', mode);
   if (fileType) params.set('file_type', fileType);
+  if (sourceParty) params.set('source_party', sourceParty);
+  if (sourceType) params.set('source_type', sourceType);
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
@@ -425,14 +441,14 @@ export interface ProposedColumn {
   source: 'alias' | 'ai' | 'unmapped';
 }
 
-export const analyzeLoadFile = (productionId: number) =>
+export const analyzeLoadFile = (productionId: number, loadId?: string) =>
   request<{
     format: { encoding: string; delimiter: string };
     columns: ProposedColumn[];
     sample_rows: Record<string, string>[];
     total_rows: number;
   }>(
-    '/api/ingest/analyze', json({ production_id: productionId }),
+    '/api/ingest/analyze', json({ production_id: productionId, load_id: loadId }),
   );
 
 export const startProcessing = (
@@ -441,6 +457,9 @@ export const startProcessing = (
   sourceFormat: 'relativity' | 'generic_pdf' | 'native' = 'relativity',
   fieldMapping: Record<string, string> = {},
   custodian: string = '',
+  sourceParty: string = '',
+  sourceType: 'collection' | 'received' = 'collection',
+  loadId?: string,
 ) =>
   request<IngestJob>('/api/ingest/process', json({
     production_id: productionId,
@@ -448,6 +467,9 @@ export const startProcessing = (
     source_format: sourceFormat,
     field_mapping: fieldMapping,
     custodian,
+    source_party: sourceParty,
+    source_type: sourceType,
+    load_id: loadId,
   }));
 
 export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
@@ -651,3 +673,142 @@ export function getDocumentFamily(docId: string): Promise<FamilyThread> {
   return request<FamilyThread>(`/api/documents/${docId}/family`);
 }
 
+
+// ── Production sets (P2) ──
+
+export interface ProductionSetInfo {
+  id: number;
+  production_id: number;
+  name: string;
+  status: 'draft' | 'locked';
+  prefix: string;
+  padding: number;
+  start_number: number;
+  sort_key: string;
+  designation: string | null;
+  created_by: string;
+  created_at: string;
+  locked_by: string | null;
+  locked_at: string | null;
+  doc_count: number;
+  page_count: number | null;
+  bates_begin: string | null;
+  bates_end: string | null;
+  render_status: string;
+  render_error: string | null;
+  rendered_at: string | null;
+  rendered_count: number;
+  package_status: string;
+  package_error: string | null;
+  package_path: string | null;
+  packaged_at: string | null;
+  conflicts_overridden_by: string | null;
+  conflicts_overridden_at: string | null;
+}
+
+export interface ProductionSetMember {
+  document_id: string;
+  control_number: string;
+  sort_order: number | null;
+  bates_begin: string | null;
+  bates_end: string | null;
+  pages: number | null;
+  disposition: string | null;
+  designation: string | null;
+}
+
+export interface ValidationConflict {
+  document_id: string;
+  control_number: string;
+  detail: string;
+}
+
+export interface ValidationReport {
+  qc_pending: ValidationConflict[];
+  privilege_produce: ValidationConflict[];
+  no_images: ValidationConflict[];
+  received_document: ValidationConflict[];
+  total: number;
+}
+
+export interface ManifestReport {
+  production_set: Record<string, unknown>;
+  counts: Record<string, number>;
+  bates_range: { begin: string | null; end: string | null };
+  continuity: { ok: boolean; errors: string[] };
+  artifacts: { bates_begin: string; path: string | null; sha256?: string; bytes?: number }[];
+  generated_at: string;
+}
+
+export const listProductionSets = (productionId: number) =>
+  request<ProductionSetInfo[]>(`/api/productions/${productionId}/production-sets`);
+
+export const createProductionSet = (productionId: number, body: {
+  name: string; prefix: string; padding?: number; start_number?: number;
+  sort_key?: string; designation?: string | null;
+}) => request<ProductionSetInfo>(`/api/productions/${productionId}/production-sets`, json(body));
+
+export const getProductionSet = (setId: number) =>
+  request<ProductionSetInfo>(`/api/production-sets/${setId}`);
+
+export const getProductionSetMembers = (setId: number) =>
+  request<ProductionSetMember[]>(`/api/production-sets/${setId}/documents`);
+
+export const addProductionSetDocuments = (setId: number, body: {
+  document_ids?: string[]; tag_id?: number; include_families?: boolean;
+  exclude_duplicates?: boolean; exclude_received?: boolean;
+}) => request<{ added: number; skipped_existing: number; skipped_duplicates: number; families_added: number; skipped_received: number }>(
+  `/api/production-sets/${setId}/documents`, json(body));
+
+export const removeProductionSetDocuments = (setId: number, documentIds: string[]) =>
+  request<{ removed: number }>(`/api/production-sets/${setId}/documents`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document_ids: documentIds }),
+  });
+
+export const deleteProductionSet = (setId: number) =>
+  request<{ ok: boolean }>(`/api/production-sets/${setId}`, { method: 'DELETE' });
+
+export const getProductionSetValidation = (setId: number) =>
+  request<ValidationReport>(`/api/production-sets/${setId}/validation`);
+
+export const lockProductionSet = (setId: number, overrideConflicts = false) =>
+  request<{ doc_count: number; page_count: number; bates_begin: string; bates_end: string }>(
+    `/api/production-sets/${setId}/lock`, json({ override_conflicts: overrideConflicts }));
+
+export const renderProductionSet = (setId: number) =>
+  request<{ documents: number; batches: number }>(`/api/production-sets/${setId}/render`, { method: 'POST' });
+
+export const getProductionSetManifest = (setId: number) =>
+  request<ManifestReport>(`/api/production-sets/${setId}/manifest`);
+
+export const packageProductionSet = (setId: number) =>
+  request<{ documents: number }>(`/api/production-sets/${setId}/package`, { method: 'POST' });
+
+async function authedBlob(url: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    const token = await currentUser.getIdToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* Response body not JSON — use default error detail */
+    }
+    throw new Error(detail);
+  }
+  return res.blob();
+}
+
+export const fetchProducedPdf = (setId: number, documentId: string) =>
+  authedBlob(`/api/production-sets/${setId}/documents/${documentId}/pdf`);
+
+export const fetchProductionPackage = (setId: number) =>
+  authedBlob(`/api/production-sets/${setId}/package`);

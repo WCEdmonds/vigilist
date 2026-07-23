@@ -4,6 +4,8 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+import re
+
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -67,6 +69,19 @@ async def create_production_for_ingest(
     return {"production_id": production.id, "production_name": production.name}
 
 
+_LOAD_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,32}$")
+
+
+def _load_prefix_from(body: dict) -> str | None:
+    """'loads/{load_id}/' storage namespace for this load, or None (legacy)."""
+    load_id = body.get("load_id") or None
+    if load_id is None:
+        return None
+    if not _LOAD_ID_RE.fullmatch(str(load_id)):
+        raise HTTPException(status_code=422, detail="invalid load_id")
+    return f"loads/{load_id}/"
+
+
 @router.post("/ingest/analyze", response_model=AnalyzeResponse)
 async def analyze_ingest(
     body: dict,
@@ -90,8 +105,9 @@ async def analyze_ingest(
         raise HTTPException(status_code=404, detail="Production not found")
     if production.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
+    load_prefix = _load_prefix_from(body)
     try:
-        return await run_in_threadpool(analyze_load_file, int(production_id))
+        return await run_in_threadpool(analyze_load_file, int(production_id), load_prefix)
     except Exception as e:
         logger.exception("Analyze failed for production %s", production_id)
         raise HTTPException(status_code=400, detail=f"Could not analyze load file: {e}")
@@ -136,6 +152,30 @@ async def start_processing(
     field_mapping = body.get("field_mapping") or {}
     if source_format == "native":
         field_mapping = {"custodian": (body.get("custodian") or "").strip() or None}
+    source_party = (body.get("source_party") or "").strip() or None
+    source_type = body.get("source_type") or None
+    if source_type not in (None, "collection", "received"):
+        raise HTTPException(status_code=422, detail="source_type must be 'collection' or 'received'")
+    field_mapping = {**field_mapping, "source_party": source_party, "source_type": source_type}
+    load_prefix = _load_prefix_from(body)
+    if load_prefix:
+        field_mapping["load_prefix"] = load_prefix
+    if source_format in ("generic_pdf", "native"):
+        # Continue the '{PREFIX} NNNNNN' control sequence across loads so a
+        # second load can't collide with the bates unique key and be skipped.
+        from app.services.ingest import compute_control_offset
+        from app.services.ingest_pdf import derive_bates_prefix
+
+        control_prefix = derive_bates_prefix(production.name)
+        bates_rows = (await db.execute(
+            select(Document.bates_begin).where(
+                Document.production_id == production.id,
+                Document.bates_begin.like(f"{control_prefix} %"),
+            )
+        )).all()
+        offset = compute_control_offset([r[0] for r in bates_rows], control_prefix)
+        if offset:
+            field_mapping["control_offset"] = offset
     batch_size = 10 if source_format in ("generic_pdf", "native") else INGEST_BATCH_SIZE
 
     if task_service.is_configured():
@@ -143,12 +183,12 @@ async def start_processing(
         try:
             if source_format == "generic_pdf":
                 from app.services.ingest_pdf import list_pdf_sources
-                total_files = len(list_pdf_sources(production.id))
+                total_files = len(list_pdf_sources(production.id, load_prefix))
             elif source_format == "native":
                 from app.services.ingest_native import list_native_sources
-                total_files = len(list_native_sources(production.id))
+                total_files = len(list_native_sources(production.id, load_prefix))
             else:
-                records, _ = bootstrap_ingest_source(production.id)
+                records, _ = bootstrap_ingest_source(production.id, load_prefix)
                 total_files = len(records)
         except Exception as e:
             logger.exception("Failed to parse ingest source")

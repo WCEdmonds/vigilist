@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 _METADATA_TARGETS = {
     "custodian", "date_sent", "date_received", "date_created", "date_modified",
     "file_hash_md5", "file_hash_sha256", "file_type", "file_name", "source_path",
+    "source_party",
     "email_from", "email_to", "email_cc", "email_bcc", "email_subject",
     "family_id", "thread_id", "is_inclusive",
 }

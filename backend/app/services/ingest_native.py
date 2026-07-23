@@ -28,12 +28,12 @@ EMAIL_EXTS = {".eml", ".msg", ".pst", ".ost"}
 _PST_EXTS = {".pst", ".ost"}
 
 
-def list_native_sources(production_id: int) -> list[dict]:
+def list_native_sources(production_id: int, load_prefix: str | None = None) -> list[dict]:
     """List ALL uploaded files for a production, sorted deterministically.
 
     Mirrors ``list_pdf_sources`` but is not filtered by extension.
     """
-    prefix = f"productions/{production_id}/raw/"
+    prefix = f"productions/{production_id}/raw/{load_prefix or ''}"
     all_files = sorted(list_files(prefix))
     items: list[dict] = []
     for path in all_files:
@@ -301,6 +301,7 @@ async def ingest_native_batch(
         _persist_document,
         _persist_documents,
         _persist_job_errors,
+        _stamp_source,
     )
     from app.services.ingest_pdf import derive_bates_prefix
 
@@ -309,9 +310,12 @@ async def ingest_native_batch(
         return
     production = await db.get(Production, production_id)
     prefix = derive_bates_prefix(production.name if production else "")
-    custodian = (job.field_mapping or {}).get("custodian")
+    fm = job.field_mapping or {}
+    custodian = fm.get("custodian")
+    load_prefix = fm.get("load_prefix")
+    offset = int(fm.get("control_offset") or 0)
 
-    items = list_native_sources(production_id)
+    items = list_native_sources(production_id, load_prefix)
     errors: list[str] = list(job.errors or [])
 
     slice_pairs = [(idx, items[idx]) for idx in range(start_idx, min(end_idx, len(items)))]
@@ -327,7 +331,7 @@ async def ingest_native_batch(
         existing = {row[0] for row in result.all()}
 
     for global_index, item in slice_pairs:
-        control_number = f"{prefix} {global_index + 1:06d}"
+        control_number = f"{prefix} {offset + global_index + 1:06d}"
         if item["storage_path"] in existing:
             await _incr_skipped(db, job_id)
             continue
@@ -336,7 +340,7 @@ async def ingest_native_batch(
             if ext in EMAIL_EXTS:
                 docs = await asyncio.to_thread(
                     process_native_email,
-                    custodian, production_id, item, global_index, prefix, errors,
+                    custodian, production_id, item, offset + global_index, prefix, errors,
                 )
                 if not docs:
                     await _incr_skipped(db, job_id)
@@ -344,15 +348,18 @@ async def ingest_native_batch(
                 # Commit the whole family in one transaction: if it fails
                 # partway, nothing persists, so a retry re-expands the container
                 # cleanly instead of finding a lone parent and skipping it.
+                for d in docs:
+                    _stamp_source(d, job)
                 await _persist_documents(db, job_id, docs)
             else:
                 doc = await asyncio.to_thread(
                     process_native_record,
-                    custodian, production_id, item, global_index, prefix, errors,
+                    custodian, production_id, item, offset + global_index, prefix, errors,
                 )
                 if doc is None:
                     await _incr_skipped(db, job_id)
                     continue
+                _stamp_source(doc, job)
                 await _persist_document(db, job_id, doc)
         except Exception as e:
             logger.exception("Failed to process native file %s", item.get("relative_path"))

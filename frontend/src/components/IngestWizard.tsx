@@ -9,6 +9,8 @@ import type { ClassifyEstimate, IngestJob } from '../types';
 interface Props {
   onClose: () => void;
   onComplete: () => void;
+  /** When set, the wizard offers adding this load to the open matter. */
+  existingProduction?: { id: number; name: string };
 }
 
 type Stage = 'setup' | 'uploading' | 'mapping' | 'processing' | 'complete' | 'error';
@@ -20,13 +22,17 @@ const CANONICAL_FIELDS = [
   'email_cc', 'email_bcc', 'email_subject',
 ] as const;
 
-export default function IngestWizard({ onClose, onComplete }: Props) {
+export default function IngestWizard({ onClose, onComplete, existingProduction }: Props) {
   const [name, setName] = useState('');
+  const [target, setTarget] = useState<'existing' | 'new'>(existingProduction ? 'existing' : 'new');
+  const [loadId] = useState(() => crypto.randomUUID().slice(0, 8));
   const [description, setDescription] = useState('');
   const [caseContext, setCaseContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [mode, setMode] = useState<'relativity' | 'generic_pdf' | 'native'>('relativity');
   const [custodian, setCustodian] = useState('');
+  const [sourceType, setSourceType] = useState<'collection' | 'received'>('collection');
+  const [sourceParty, setSourceParty] = useState('');
   const [modeWarning, setModeWarning] = useState('');
   const [stage, setStage] = useState<Stage>('setup');
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
@@ -115,8 +121,10 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     }
   };
 
+  const addToExisting = target === 'existing' && !!existingProduction;
+
   const handleStart = async () => {
-    if (!name.trim() || files.length === 0) return;
+    if ((!addToExisting && !name.trim()) || files.length === 0) return;
     setError('');
 
     // In PDF mode, only upload the PDFs (skip everything else in the folder)
@@ -134,14 +142,19 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     setUploadProgress({ uploaded: 0, total: uploadList.length, bytesUploaded: 0, totalBytes, startTime: Date.now() });
 
     try {
-      // Phase 1: Create production in backend to get real production_id
-      // This also syncs Firebase custom claims so we can write to Storage
-      const { production_id } = await createProductionForIngest(name.trim(), description.trim(), caseContext.trim());
-
-      // Refresh the Firebase token to pick up the new custom claims
-      const currentUser = auth.currentUser;
-      if (currentUser) {
-        await currentUser.getIdToken(true); // force refresh
+      // Phase 1: target an existing matter, or create a new one (which also
+      // syncs Firebase custom claims so we can write to Storage).
+      let production_id: number;
+      if (addToExisting && existingProduction) {
+        production_id = existingProduction.id;
+      } else {
+        const created = await createProductionForIngest(name.trim(), description.trim(), caseContext.trim());
+        production_id = created.production_id;
+        // Refresh the Firebase token to pick up the new custom claims
+        const currentUser = auth.currentUser;
+        if (currentUser) {
+          await currentUser.getIdToken(true); // force refresh
+        }
       }
 
       // Phase 2: Upload files to Firebase Storage under the real production path
@@ -155,7 +168,9 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
         new Promise((resolve, reject) => {
           const parts = file.webkitRelativePath.split('/');
           const relativePath = parts.slice(1).join('/');
-          const storagePath = `productions/${production_id}/raw/${relativePath}`;
+          // Every load gets its own namespace so a second load's DAT/OPT and
+          // control numbering can't collide with earlier loads.
+          const storagePath = `productions/${production_id}/raw/loads/${loadId}/${relativePath}`;
           const task = uploadBytesResumable(ref(firebaseStorage, storagePath), file);
           let fileBytesTransferred = 0;
 
@@ -185,13 +200,13 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
       // For generic_pdf, go straight to processing — there is no DAT load file to map.
       totalFilesRef.current = uploadList.length;
       if (mode === 'relativity') {
-        const analysis = await analyzeLoadFile(production_id);
+        const analysis = await analyzeLoadFile(production_id, loadId);
         setMappingProdId(production_id);
         setColumns(analysis.columns);
         setStage('mapping');
       } else {
         setStage('processing');
-        const ingestJob = await startProcessing(production_id, uploadList.length, mode, {}, custodian);
+        const ingestJob = await startProcessing(production_id, uploadList.length, mode, {}, custodian, sourceParty, sourceType, loadId);
         setJob(ingestJob);
         pollStatus(ingestJob.id);
       }
@@ -208,7 +223,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
     );
     setStage('processing');
     try {
-      const ingestJob = await startProcessing(mappingProdId, totalFilesRef.current, 'relativity', fieldMapping);
+      const ingestJob = await startProcessing(mappingProdId, totalFilesRef.current, 'relativity', fieldMapping, '', sourceParty, sourceType, loadId);
       setJob(ingestJob);
       pollStatus(ingestJob.id);
     } catch (e: unknown) {
@@ -385,18 +400,46 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
           <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
             {stage === 'setup' && (
               <>
+                {existingProduction && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Destination
+                    </label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={target === 'existing' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                        onClick={() => setTarget('existing')}
+                      >
+                        Add to {existingProduction.name}
+                      </button>
+                      <button
+                        type="button"
+                        className={target === 'new' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                        onClick={() => setTarget('new')}
+                      >
+                        Start a new matter
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {!addToExisting && (
                 <div>
                   <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     Production Name
                   </label>
                   <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="e.g., SCHLEGEL_PROD001" />
                 </div>
+                )}
+                {!addToExisting && (
                 <div>
                   <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     Description (optional)
                   </label>
                   <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Brief description" />
                 </div>
+                )}
+                {!addToExisting && (
                 <div>
                   <label className="input-label" htmlFor="ingest-case-context">
                     About this case <span className="brief-ai-mark">✦</span>
@@ -415,6 +458,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     placeholder="e.g. Product-liability suit over the March 2024 recall. Relevant: anything about the recall decision, board discussions, or customer injuries."
                   />
                 </div>
+                )}
                 <div>
                   <label style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     Upload Type
@@ -441,6 +485,35 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                     >
                       Native files
                     </button>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)', display: 'block', marginBottom: 4 }}>Document source</span>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={sourceType === 'collection' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                        onClick={() => setSourceType('collection')}
+                      >
+                        Our collection
+                      </button>
+                      <button
+                        type="button"
+                        className={sourceType === 'received' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                        onClick={() => setSourceType('received')}
+                      >
+                        Received production
+                      </button>
+                    </div>
+                    <label style={{ display: 'block', marginTop: 8 }}>
+                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>Source label (optional)</span>
+                      <input
+                        className="input"
+                        value={sourceParty}
+                        onChange={e => setSourceParty(e.target.value)}
+                        placeholder={sourceType === 'received' ? 'e.g. ABC Corp' : 'e.g. Our Collection'}
+                        maxLength={255}
+                      />
+                    </label>
                   </div>
                   {mode === 'native' && (
                     <label style={{ display: 'block', marginTop: 8 }}>
@@ -513,7 +586,7 @@ export default function IngestWizard({ onClose, onComplete }: Props) {
                 <button
                   className="btn btn-primary"
                   onClick={handleStart}
-                  disabled={!name.trim() || files.length === 0}
+                  disabled={(!addToExisting && !name.trim()) || files.length === 0}
                   style={{ width: '100%' }}
                 >
                   Start Ingest
