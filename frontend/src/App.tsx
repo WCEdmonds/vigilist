@@ -5,6 +5,7 @@ import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import IngestWizard from './components/IngestWizard';
+import ProductionSetsPanel from './components/ProductionSetsPanel';
 import AuditLog from './components/AuditLog';
 import ManageAccess from './components/ManageAccess';
 import ProductionSettings from './components/ProductionSettings';
@@ -480,6 +481,14 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             <button className="btn btn-secondary btn-xs" onClick={() => handleDesignateAll('received')}>Received production</button>
             <button className="btn btn-secondary btn-xs" onClick={() => handleDesignateAll('collection')}>Our collection</button>
           </div>
+        )}
+        {workMode === 'outgoing' && (
+          <ProductionSetsPanel
+            productionId={production.id}
+            tags={allTags}
+            selectedIds={selectedIds}
+            onOpenDoc={setViewDocId}
+          />
         )}
         <ProductionBrief
           production={production}
