@@ -329,6 +329,8 @@ html:not(.reveal-anim) .graph__edges line { stroke-dashoffset: 0; }
 .ctable__us th { box-shadow: inset 6px 0 0 var(--marker); }
 .ctable__note { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em;
   color: var(--ink-2); margin: 14px 2px 30px; }
+.adv-head { font-size: 1.4rem; margin: 44px 0 20px; }
+.grid--adv { margin-bottom: 36px; }
 
 /* ── Final CTA / footer ── */
 .cta-final { text-align: left; }
