@@ -1,11 +1,7 @@
 """add search term reports
 
-Also rejoins the two parallel head-merge migrations (b4c5d6e7f8a9 and
-v4d5e6f7a8b9 — two sessions fixed the same split simultaneously) into a
-single head.
-
 Revision ID: a3b4c5d6e7f8
-Revises: b4c5d6e7f8a9, v4d5e6f7a8b9
+Revises: b4c5d6e7f8a9
 Create Date: 2026-07-23
 """
 from alembic import op
@@ -13,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "a3b4c5d6e7f8"
-down_revision = ("b4c5d6e7f8a9", "v4d5e6f7a8b9")
+down_revision = "b4c5d6e7f8a9"
 branch_labels = None
 depends_on = None
 
