@@ -64,6 +64,7 @@ Rules:
 - "participants", "source" and "target" must use the "name" of an entity in "entities".
 - Skip generic references ("the plaintiff", "opposing counsel") that are never tied to a name.
 - Only include relationships the document itself states or clearly shows; never infer from mere co-occurrence.
+- Never include character offsets or positions; return only verbatim strings.
 - Respond with ONLY the JSON object, no other text."""
 
 
@@ -73,6 +74,15 @@ def build_extraction_prompt(document_text: str) -> str:
 
 def _clean_str(v, limit: int = 500) -> str:
     return str(v).strip()[:limit] if isinstance(v, (str, int, float)) else ""
+
+
+def _as_list(v, limit: int | None = None) -> list:
+    """Validate-by-isinstance: anything that isn't a list (dict, int, bool,
+    str, None, ...) becomes an empty list instead of raising downstream when
+    sliced/iterated. Optionally truncates to `limit` items."""
+    if not isinstance(v, list):
+        return []
+    return v[:limit] if limit is not None else v
 
 
 def parse_extraction_response(raw: str) -> dict:
@@ -93,24 +103,24 @@ def parse_extraction_response(raw: str) -> dict:
         return empty
 
     entities = []
-    for ent in (data.get("entities") or [])[:MAX_ENTITIES]:
+    for ent in _as_list(data.get("entities"), MAX_ENTITIES):
         if not isinstance(ent, dict):
             continue
         name = _clean_str(ent.get("name"))
         etype = _clean_str(ent.get("type"), 10)
         if not name or etype not in ENTITY_TYPES:
             continue
-        forms = [_clean_str(f) for f in (ent.get("surface_forms") or []) if _clean_str(f)]
+        forms = [_clean_str(f) for f in _as_list(ent.get("surface_forms")) if _clean_str(f)]
         entities.append({
             "name": name,
             "type": etype,
             "surface_forms": (forms or [name])[:MAX_SURFACE_FORMS],
             "role": _clean_str(ent.get("role")) or None,
-            "emails": [_clean_str(e).lower() for e in (ent.get("emails") or []) if "@" in _clean_str(e)],
+            "emails": [_clean_str(e).lower() for e in _as_list(ent.get("emails")) if "@" in _clean_str(e)],
         })
 
     events = []
-    for ev in (data.get("events") or [])[:MAX_EVENTS]:
+    for ev in _as_list(data.get("events"), MAX_EVENTS):
         if not isinstance(ev, dict):
             continue
         desc = _clean_str(ev.get("description"), 2000)
@@ -121,11 +131,11 @@ def parse_extraction_response(raw: str) -> dict:
             "description": desc,
             "type": etype if etype in EVENT_TYPES else "other",
             "date": _clean_str(ev.get("date"), 10) or None,
-            "participants": [_clean_str(p) for p in (ev.get("participants") or []) if _clean_str(p)],
+            "participants": [_clean_str(p) for p in _as_list(ev.get("participants")) if _clean_str(p)],
         })
 
     relationships = []
-    for rel in (data.get("relationships") or [])[:MAX_RELATIONSHIPS]:
+    for rel in _as_list(data.get("relationships"), MAX_RELATIONSHIPS):
         if not isinstance(rel, dict):
             continue
         src, tgt = _clean_str(rel.get("source")), _clean_str(rel.get("target"))
@@ -144,6 +154,8 @@ def parse_extraction_response(raw: str) -> dict:
 
 def slice_text(text: str, window: int = 140_000, overlap: int = 2_000) -> list[str]:
     """Split long text into overlapping windows for per-slice extraction."""
+    window = max(1, window)
+    overlap = max(0, min(overlap, window - 1))
     if len(text) <= window:
         return [text]
     slices, start = [], 0
