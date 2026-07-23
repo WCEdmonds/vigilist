@@ -304,3 +304,84 @@ async def remove_documents(
     await db.commit()
     # count of requested ids (fake sessions have no rowcount)
     return {"removed": len(body.document_ids)}
+
+
+@router.post("/production-sets/{set_id}/lock", response_model=ProductionSetLockOut)
+async def lock_production_set(
+    set_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ps = await _load_set(db, user, set_id, require_manager=True)
+    if ps.status != "draft":
+        raise HTTPException(status_code=409, detail="Production set is already locked")
+
+    items = (await db.execute(
+        select(ProductionSetItem).where(ProductionSetItem.production_set_id == set_id)
+    )).scalars().all()
+    if not items:
+        raise HTTPException(status_code=422, detail="Cannot lock an empty production set")
+    doc_ids = [i.document_id for i in items]
+
+    doc_rows = (await db.execute(
+        select(Document.id, Document.bates_begin, Document.family_id,
+               Document.custodian, Document.date_sent, Document.date_received,
+               Document.page_count, Document.privilege_disposition)
+        .where(Document.id.in_(doc_ids))
+    )).all()
+
+    priv_rows = (await db.execute(
+        select(DocumentTag.document_id)
+        .join(Tag, Tag.id == DocumentTag.tag_id)
+        .where(Tag.is_privilege.is_(True), DocumentTag.document_id.in_(doc_ids))
+    )).all()
+    privileged = {r[0] for r in priv_rows}
+
+    red_rows = (await db.execute(
+        select(Redaction.document_id, func.count(Redaction.id))
+        .where(Redaction.document_id.in_(doc_ids))
+        .group_by(Redaction.document_id)
+    )).all()
+    red_counts = {r[0]: r[1] for r in red_rows}
+
+    members: list[MemberInfo] = []
+    meta: dict = {}  # document_id -> (disposition, pages)
+    for did, control, family_id, custodian, date_sent, date_received, page_count, override in doc_rows:
+        disposition = effective_disposition(
+            has_privilege_tag=did in privileged,
+            has_redactions=red_counts.get(did, 0) > 0,
+            override=override,
+        ) or "produce"
+        meta[did] = (disposition, pages_for(disposition, page_count or 1))
+        members.append(MemberInfo(
+            document_id=did, control_number=control, family_id=family_id,
+            custodian=custodian, doc_date=date_sent or date_received,
+        ))
+
+    ordered = order_members(members, ps.sort_key)
+    assignments = assign_bates(
+        [(m.document_id, meta[m.document_id][1]) for m in ordered],
+        ps.prefix, ps.padding, ps.start_number,
+    )
+    items_by_doc = {i.document_id: i for i in items}
+    for did, sort_order, begin, end in assignments:
+        item = items_by_doc[did]
+        item.sort_order = sort_order
+        item.bates_begin = begin
+        item.bates_end = end
+        item.disposition, item.pages = meta[did]
+
+    ps.status = "locked"
+    ps.locked_by = user.id
+    ps.locked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    summary = {
+        "doc_count": len(assignments),
+        "page_count": sum(meta[d][1] for d in items_by_doc),
+        "bates_begin": assignments[0][2],
+        "bates_end": assignments[-1][3],
+    }
+    await log_action(db, user, "production_set_locked", "production_set", str(set_id),
+                     production_id=ps.production_id, details=summary)
+    await db.commit()
+    return ProductionSetLockOut(**summary)
