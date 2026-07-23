@@ -219,3 +219,183 @@ def parse_email_addresses(raw: str | None) -> list[tuple[str, str]]:
         return []
     pairs = getaddresses([raw.replace(";", ",")])
     return [(name.strip(), addr.strip().lower()) for name, addr in pairs if "@" in addr]
+
+
+# ── Persistence + LLM call (imports kept local to preserve the pure top half) ──
+
+import asyncio as _asyncio
+import uuid as _uuid
+
+from app.config import settings
+
+EXTRACTION_MODEL = "claude-haiku-4-5"   # keep in sync with services/ai.py haiku usage
+_EXTRACT_MAX_ATTEMPTS = 3
+_RETRYABLE_ERRORS: tuple[type[BaseException], ...] | None = None
+
+
+def _retryable_errors() -> tuple[type[BaseException], ...]:
+    # Same lazy-resolve pattern as services/ai_review.py — see rationale there.
+    global _RETRYABLE_ERRORS
+    if _RETRYABLE_ERRORS is None:
+        try:
+            import anthropic
+            _RETRYABLE_ERRORS = (anthropic.RateLimitError, anthropic.APIStatusError, anthropic.APIConnectionError)
+        except Exception:
+            _RETRYABLE_ERRORS = ()
+    return _RETRYABLE_ERRORS
+
+
+def merge_parsed(results: list[dict]) -> dict:
+    """Merge per-slice parses; entities dedupe by (type, name), keeping the
+    union of surface forms/emails; events and relationships concatenate."""
+    by_key: dict = {}
+    events, relationships = [], []
+    for r in results:
+        for ent in r["entities"]:
+            key = (ent["type"], ent["name"].lower())
+            if key in by_key:
+                have = by_key[key]
+                have["surface_forms"] = list(dict.fromkeys(have["surface_forms"] + ent["surface_forms"]))
+                have["emails"] = list(dict.fromkeys(have["emails"] + ent["emails"]))
+                have["role"] = have["role"] or ent["role"]
+            else:
+                by_key[key] = dict(ent)
+        events.extend(r["events"])
+        relationships.extend(r["relationships"])
+    return {"entities": list(by_key.values()), "events": events, "relationships": relationships}
+
+
+async def extract_document_entities(text: str) -> dict | None:
+    """Run LLM extraction over the document (sliced if long). None = hard
+    failure or missing key (retry later); a dict with empty lists is a real
+    'nothing found' result."""
+    if not settings.anthropic_api_key:
+        return None
+    import anthropic  # lazy: keep the SDK off the startup path
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    retryable = _retryable_errors()
+    parsed_slices: list[dict] = []
+    for chunk in slice_text(text):
+        raw = None
+        for attempt in range(_EXTRACT_MAX_ATTEMPTS):
+            try:
+                response = await client.messages.create(
+                    model=EXTRACTION_MODEL,
+                    max_tokens=4000,
+                    system=EXTRACTION_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": build_extraction_prompt(chunk)}],
+                )
+                raw = next((b.text for b in response.content if b.type == "text"), "")
+                break
+            except retryable as e:
+                status = getattr(e, "status_code", None)
+                if status is not None and status not in (408, 429) and status < 500:
+                    logger.error("Extraction failed with non-retryable status %s: %s", status, e)
+                    return None
+                logger.warning("Extraction attempt %d/%d failed: %s", attempt + 1, _EXTRACT_MAX_ATTEMPTS, e)
+                if attempt < _EXTRACT_MAX_ATTEMPTS - 1:
+                    await _asyncio.sleep(2 * (attempt + 1))
+            except Exception as e:
+                logger.error("Extraction failed: %s", e)
+                return None
+        if raw is None:
+            return None
+        parsed_slices.append(parse_extraction_response(raw))
+    return merge_parsed(parsed_slices)
+
+
+def header_candidates(doc) -> list[dict]:
+    """Deterministic person candidates from parsed email header columns."""
+    out, seen = [], set()
+    for field in (doc.email_from, doc.email_to, doc.email_cc, doc.email_bcc):
+        for name, addr in parse_email_addresses(field):
+            if addr in seen:
+                continue
+            seen.add(addr)
+            display = name or addr.split("@", 1)[0]
+            out.append({"name": display, "type": "person",
+                        "surface_forms": [f for f in (name, addr) if f], "role": None, "emails": [addr]})
+    return out
+
+
+async def persist_extraction(db, production_id: int, document_id, text: str, parsed: dict) -> dict:
+    """Write one document's extraction into the ontology. Caller commits."""
+    from sqlalchemy import select
+    from app.models import (Entity, EntityMention, EntityMergeSuggestion,
+                            EntityRelationship, EventParticipant, OntologyEvent)
+    from app.services.entity_resolution import match_entity, normalize_name
+
+    existing = list((await db.execute(
+        select(Entity).where(Entity.production_id == production_id)
+    )).scalars().all())
+
+    stats = {"entities": 0, "mentions": 0, "events": 0, "relationships": 0, "suggestions": 0}
+    name_to_entity: dict[str, Entity] = {}
+
+    for cand in parsed["entities"]:
+        decision = match_entity(cand, existing)
+        if decision[0] == "attach":
+            entity = decision[1]
+            new_aliases = [f for f in cand["surface_forms"]
+                           if normalize_name(f) != normalize_name(entity.canonical_name)
+                           and f not in (entity.aliases or [])]
+            if new_aliases:
+                entity.aliases = list(entity.aliases or []) + new_aliases
+            if cand["emails"]:
+                attrs = dict(entity.attributes or {})
+                attrs["emails"] = list(dict.fromkeys((attrs.get("emails") or []) + cand["emails"]))
+                entity.attributes = attrs
+        else:
+            entity = Entity(
+                id=_uuid.uuid4(), production_id=production_id, entity_type=cand["type"],
+                canonical_name=cand["name"], aliases=list(cand["surface_forms"]),
+                attributes={k: v for k, v in (("role", cand["role"]), ("emails", cand["emails"])) if v},
+                mention_count=0,
+            )
+            db.add(entity)
+            existing.append(entity)
+            stats["entities"] += 1
+            if decision[0] == "suggest":
+                _, other, score, rationale = decision
+                db.add(EntityMergeSuggestion(
+                    production_id=production_id, entity_a_id=entity.id, entity_b_id=other.id,
+                    score=score, rationale=rationale, status="pending",
+                ))
+                stats["suggestions"] += 1
+
+        name_to_entity[cand["name"].lower()] = entity
+        mentions = locate_mentions(text or "", cand["surface_forms"])
+        if not mentions and cand["surface_forms"]:
+            # OCR drift: not locatable verbatim — record one offset-less mention
+            mentions = [{"surface_text": cand["surface_forms"][0], "start_offset": None,
+                         "end_offset": None, "context_snippet": None}]
+        for m in mentions:
+            db.add(EntityMention(production_id=production_id, entity_id=entity.id,
+                                 document_id=document_id, **m))
+        entity.mention_count = (entity.mention_count or 0) + len(mentions)
+        stats["mentions"] += len(mentions)
+
+    for ev in parsed["events"]:
+        event_date, precision = parse_event_date(ev["date"])
+        event = OntologyEvent(production_id=production_id, event_type=ev["type"],
+                              description=ev["description"], event_date=event_date,
+                              date_precision=precision, document_id=document_id)
+        event.participants = [
+            EventParticipant(entity_id=name_to_entity[p.lower()].id)
+            for p in dict.fromkeys(ev["participants"]) if p.lower() in name_to_entity
+        ]
+        db.add(event)
+        stats["events"] += 1
+
+    for rel in parsed["relationships"]:
+        src = name_to_entity.get(rel["source"].lower())
+        tgt = name_to_entity.get(rel["target"].lower())
+        if src is None or tgt is None or src.id == tgt.id:
+            continue
+        db.add(EntityRelationship(production_id=production_id, source_entity_id=src.id,
+                                  target_entity_id=tgt.id, relationship_type=rel["type"],
+                                  description=rel["evidence"], document_id=document_id))
+        stats["relationships"] += 1
+
+    return stats
