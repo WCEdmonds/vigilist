@@ -4,6 +4,10 @@ in-memory zipfile fixtures, not mocks of the zipfile library."""
 import io
 import zipfile
 
+import fitz  # PyMuPDF
+
+from app.services import ingest_native as ingest_native_mod
+from app.services import storage as storage_mod
 from app.services.ingest_native import build_zip_documents
 
 
@@ -203,3 +207,166 @@ def test_corrupt_zip_becomes_single_error_container_row():
     assert docs[0].extraction_status == "error"
     assert docs[0].file_type == "zip"
     assert docs[0].extraction_error
+
+
+def test_absolute_path_entry_is_skipped_and_noted():
+    zip_bytes = _make_zip({"/etc/evil.txt": b"nope", "C:/also/evil.txt": b"nope2", "ok.txt": b"fine"})
+
+    docs = build_zip_documents(
+        zip_bytes,
+        container_control="PREFIX 000008",
+        production_id=1,
+        source_path="uploads/absolute.zip",
+        custodian=None,
+    )
+
+    container = docs[0]
+    children = docs[1:]
+    assert len(children) == 1
+    assert children[0].file_name == "ok.txt"
+    assert container.extraction_status == "partial"
+    assert "traversal" in container.extraction_error
+    assert "evil.txt" in container.extraction_error
+
+
+# --- Finding 1: bounded decompression reads (bomb-proofing) ------------------
+#
+# CPython's zipfile happens to bound ZipExtFile.read() to info.file_size (and
+# raises BadZipFile on a CRC mismatch if a header lies about that size), but
+# _ZipExploder must not depend on that stdlib implementation detail — the
+# guard has to be enforced from actual bytes read, independent of what the
+# header claims. _read_bounded ignores info.file_size entirely, so it is
+# tested directly here for that exact property, plus an integration test
+# through build_zip_documents confirming the skip-with-note plumbing.
+
+
+def test_read_bounded_stops_at_limit_regardless_of_header_claim():
+    """The bounded read must never surface more than `limit` bytes, and must
+    return None (not a truncated/partial buffer) once the true decompressed
+    size exceeds it — this is the guard itself, independent of any header
+    field."""
+    payload = b"\x00" * (5 * 1024 * 1024)
+    zip_bytes = _make_zip({"big.bin": payload})
+    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    info = zf.getinfo("big.bin")
+    assert info.file_size == len(payload)  # honestly labeled; irrelevant to _read_bounded
+
+    exploder = ingest_native_mod._ZipExploder()
+
+    # A limit far below the true size: the entry never lands in memory whole.
+    assert exploder._read_bounded(zf, info, limit=1024) is None
+
+    # A limit at/above the true size returns the exact real bytes.
+    assert exploder._read_bounded(zf, info, limit=len(payload)) == payload
+
+
+def test_oversized_entry_skipped_with_note_and_never_lands_as_a_document(monkeypatch):
+    """Integration check: with the per-entry cap lowered, a genuinely large
+    entry is skipped (with a note) and produces no child document at all —
+    the bounded read, not a trusted header claim, is what stops it."""
+    monkeypatch.setattr(ingest_native_mod, "_ZIP_MAX_ENTRY_BYTES", 1024)
+
+    big_payload = b"\x00" * (5 * 1024 * 1024)  # compresses to a few KB; decompressed is 5MB
+    zip_bytes = _make_zip({"huge.bin": big_payload, "small.txt": b"tiny"})
+
+    docs = build_zip_documents(
+        zip_bytes,
+        container_control="PREFIX 000012",
+        production_id=1,
+        source_path="uploads/huge.zip",
+        custodian=None,
+    )
+
+    container = docs[0]
+    children = docs[1:]
+    assert len(children) == 1
+    assert children[0].file_name == "small.txt"
+    assert all(d.file_name != "huge.bin" for d in docs)
+    assert container.extraction_status == "partial"
+    assert "huge.bin" in container.extraction_error
+    assert "exceeds" in container.extraction_error
+
+
+def _tiny_pdf_bytes() -> bytes:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "hello from zip pdf")
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkeypatch):
+    """Finding 2(a): a PDF found inside a zip must go through the SAME
+    page-render path as a top-level PDF (child doc with page_count set) and
+    join the container's family."""
+    uploaded: list[str] = []
+    monkeypatch.setattr(
+        storage_mod,
+        "upload_bytes",
+        lambda data, remote, content_type=None: uploaded.append(remote) or remote,
+    )
+
+    zip_bytes = _make_zip({"doc.pdf": _tiny_pdf_bytes()})
+
+    docs = build_zip_documents(
+        zip_bytes,
+        container_control="PREFIX 000013",
+        production_id=1,
+        source_path="uploads/withpdf.zip",
+        custodian="Alice",
+        ocr_fn=lambda jpeg_bytes: "",
+    )
+
+    container = docs[0]
+    children = docs[1:]
+    assert len(children) == 1
+    child = children[0]
+    assert child.file_type == "pdf"
+    assert child.file_name == "doc.pdf"
+    assert child.page_count == 1
+    assert "hello from zip pdf" in (child.text_content or "")
+    assert child.extraction_status == "ok"
+    assert child.family_id == container.family_id == "PREFIX 000013"
+    assert len(uploaded) == 1
+    assert container.extraction_status == "ok"
+
+
+def _tiny_eml_bytes(subject: str = "Zip Test", body: str = "hello from eml") -> bytes:
+    return (
+        "From: a@example.com\r\n"
+        "To: b@example.com\r\n"
+        f"Subject: {subject}\r\n"
+        "Date: Mon, 1 Jan 2024 00:00:00 +0000\r\n"
+        "Message-ID: <abc@example.com>\r\n"
+        "\r\n"
+        f"{body}\r\n"
+    ).encode("utf-8")
+
+
+def test_email_entry_in_zip_force_reassigns_family_to_zip_container():
+    """Finding 2(b): an email container found inside a zip expands like a
+    top-level email, but every resulting doc's family_id must be
+    FORCE-REASSIGNED to the zip's family (not the message's own control
+    number, which is what build_email_documents would set by default)."""
+    zip_bytes = _make_zip({"message.eml": _tiny_eml_bytes()})
+
+    docs = build_zip_documents(
+        zip_bytes,
+        container_control="PREFIX 000014",
+        production_id=1,
+        source_path="uploads/withemail.zip",
+        custodian=None,
+        ocr_fn=lambda jpeg_bytes: "",
+    )
+
+    container = docs[0]
+    children = docs[1:]
+    assert len(children) == 1
+    child = children[0]
+    assert child.file_type == "email"
+    assert child.email_subject == "Zip Test"
+    # NOT "PREFIX 000014 .0001" (the message's own control number) —
+    # force-reassigned to the zip container's family.
+    assert child.family_id == container.family_id == "PREFIX 000014"
+    assert container.extraction_status == "ok"

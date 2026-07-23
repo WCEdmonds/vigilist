@@ -338,7 +338,13 @@ def _serialize_message(parsed: ParsedMessage) -> bytes:
 
 
 def _zip_is_traversal(name: str) -> bool:
-    return ".." in name.replace("\\", "/").split("/")
+    normalized = name.replace("\\", "/")
+    if normalized.startswith("/"):
+        return True
+    # Drive-letter absolute path, e.g. "C:/evil.txt" or "C:\evil.txt".
+    if len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+        return True
+    return ".." in normalized.split("/")
 
 
 class _ZipExploder:
@@ -352,11 +358,16 @@ class _ZipExploder:
     appended as-is; downstream dispatch routes ``.zip`` through the generic
     extractor, which reports it "unsupported" — never explodes it further).
 
-    Guards are checked with the entry's CLAIMED uncompressed size
-    (``info.file_size``) before any bytes are read/decompressed, so a zip
-    bomb (many entries each claiming close to the per-entry cap) can never
-    push the running total past ``_ZIP_MAX_TOTAL_BYTES`` — the cap check
-    always runs before the read that would grow the total.
+    Guards are enforced against ACTUAL decompressed bytes, never the entry's
+    CLAIMED uncompressed size (``info.file_size``) alone — that field is
+    attacker-controlled header metadata and cannot be trusted to gate a
+    decompression. The claimed size is used only as a cheap pre-check to skip
+    obviously-oversized entries before opening them; the real enforcement is
+    ``_read_bounded``, a chunked read that aborts the moment an entry's TRUE
+    decompressed size would exceed the per-entry cap or the remaining
+    aggregate budget. A lying header (claims 1MB, actually deflates to
+    gigabytes) can never make it past this bound — the entry is skipped with
+    a note instead of being read to completion.
     """
 
     def __init__(self) -> None:
@@ -364,6 +375,21 @@ class _ZipExploder:
         self.skip_notes: list[str] = []
         self.total_bytes = 0
         self.truncated = False
+
+    def _read_bounded(self, zf: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int) -> bytes | None:
+        """Read an entry with a hard output bound. None = exceeded (skip + note)."""
+        chunks: list[bytes] = []
+        read = 0
+        with zf.open(info) as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                read += len(chunk)
+                if read > limit:
+                    return None
+                chunks.append(chunk)
+        return b"".join(chunks)
 
     def explode(self, data: bytes, depth: int) -> None:
         try:
@@ -384,29 +410,51 @@ class _ZipExploder:
                 if info.flag_bits & 0x1:
                     self.skip_notes.append(f"skipped {name}: encrypted")
                     continue
+                mb = _ZIP_MAX_ENTRY_BYTES // (1024 * 1024)
+                # Cheap header pre-check: a fast path that skips obviously
+                # oversized CLAIMS without opening the entry. This is NOT the
+                # enforcement — the header is attacker-controlled and a lying
+                # entry (small claim, huge real payload) would sail through
+                # this check, which is exactly why the bounded read below is
+                # what actually gates the decompression.
                 if info.file_size > _ZIP_MAX_ENTRY_BYTES:
-                    mb = _ZIP_MAX_ENTRY_BYTES // (1024 * 1024)
                     self.skip_notes.append(f"skipped {name}: exceeds {mb}MB uncompressed limit")
                     continue
-                # Cap checks run BEFORE reading/decompressing this entry so a
-                # zip-bomb-style container can never push total_bytes over the
-                # aggregate cap, even transiently.
+                # Entry-count cap runs before any read, same as before.
                 if len(self.entries) >= _ZIP_MAX_ENTRIES:
                     self.truncated = True
                     self.skip_notes.append(
                         f"entry cap ({_ZIP_MAX_ENTRIES}) reached; remaining entries skipped"
                     )
                     return
-                if self.total_bytes + info.file_size > _ZIP_MAX_TOTAL_BYTES:
+                remaining_budget = _ZIP_MAX_TOTAL_BYTES - self.total_bytes
+                if remaining_budget <= 0:
                     self.truncated = True
                     self.skip_notes.append(
                         "total uncompressed size cap (1GB) reached; remaining entries skipped"
                     )
                     return
+                limit = min(_ZIP_MAX_ENTRY_BYTES, remaining_budget)
                 try:
-                    entry_bytes = zf.read(info)
+                    entry_bytes = self._read_bounded(zf, info, limit)
                 except Exception as e:
                     self.skip_notes.append(f"skipped {name}: could not read ({e})")
+                    continue
+                if entry_bytes is None:
+                    # The ACTUAL decompressed size exceeded the bound —
+                    # regardless of what the header claimed. If the aggregate
+                    # budget was the binding constraint (limit was clamped
+                    # below the per-entry cap), the whole container is out of
+                    # room; otherwise it's just this one oversized entry.
+                    if limit < _ZIP_MAX_ENTRY_BYTES:
+                        self.truncated = True
+                        self.skip_notes.append(
+                            "total uncompressed size cap (1GB) reached; remaining entries skipped"
+                        )
+                        return
+                    self.skip_notes.append(
+                        f"skipped {name}: decompressed size exceeds {mb}MB uncompressed limit"
+                    )
                     continue
                 self.total_bytes += len(entry_bytes)
                 ext = os.path.splitext(name)[1].lower()
