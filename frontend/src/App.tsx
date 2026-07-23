@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { bulkTag, createTag, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
@@ -66,6 +66,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [filterAiDecision, setFilterAiDecision] = useState<string>('');
   const [filterSourceParty, setFilterSourceParty] = useState<string>('');
   const [sourceParties, setSourceParties] = useState<string[]>([]);
+  const [undesignatedCount, setUndesignatedCount] = useState(0);
   const [workMode, setWorkModeState] = useState<'all' | 'incoming' | 'outgoing'>(
     () => (localStorage.getItem(`vigilist:mode:${production.id}`) as 'all' | 'incoming' | 'outgoing') || 'all',
   );
@@ -154,7 +155,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     loadDocuments();
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
-    getSourceParties(production.id).then(r => setSourceParties(r.source_parties)).catch(e => console.warn('getSourceParties failed:', e));
+    getSourceParties(production.id).then(r => { setSourceParties(r.source_parties); setUndesignatedCount(r.undesignated); }).catch(e => console.warn('getSourceParties failed:', e));
     refreshClusters();
   }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId, refreshClusters, filterAiDecision, filterSourceParty, workMode]);
 
@@ -217,6 +218,18 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterFileType, filterSourceParty, workMode]);
+
+  const handleDesignateAll = async (sourceType: 'collection' | 'received') => {
+    try {
+      const r = await designateSources(production.id, sourceType);
+      showToast(`Marked ${r.updated} document${r.updated === 1 ? '' : 's'} as ${sourceType === 'received' ? 'received' : 'our collection'}`, 'success');
+      getSourceParties(production.id).then(x => { setSourceParties(x.source_parties); setUndesignatedCount(x.undesignated); }).catch(() => {});
+      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+      else loadDocuments(docPage);
+    } catch (e) {
+      showToast(`Could not designate: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
+    }
+  };
 
   const clearSearch = () => {
     setHasSearched(false);
@@ -452,6 +465,23 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             </button>
           ))}
         </div>
+        {undesignatedCount > 0 && workMode !== 'all' && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap',
+            fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)',
+            background: 'rgba(154,103,0,0.06)', border: '1px solid rgba(154,103,0,0.25)',
+            borderRadius: 'var(--radius-md)', padding: 'var(--space-2) var(--space-3)',
+            marginBottom: 'var(--space-2)',
+          }}>
+            <span>
+              <strong>{undesignatedCount}</strong> document{undesignatedCount === 1 ? '' : 's'} in this matter
+              {' '}ha{undesignatedCount === 1 ? 's' : 've'} no source designation (ingested before sources existed).
+              Mark them all as:
+            </span>
+            <button className="btn btn-secondary btn-xs" onClick={() => handleDesignateAll('received')}>Received production</button>
+            <button className="btn btn-secondary btn-xs" onClick={() => handleDesignateAll('collection')}>Our collection</button>
+          </div>
+        )}
         {workMode === 'outgoing' && (
           <ProductionSetsPanel
             productionId={production.id}
@@ -571,7 +601,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterAiDecision) && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterAiDecision || filterSourceParty || workMode !== 'all') && (
           <div>
             <div className="section-header">
               <h2 className="section-title">
@@ -908,6 +938,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       {/* Ingest wizard modal */}
       {showIngestWizard && (
         <IngestWizard
+          existingProduction={{ id: production.id, name: production.name }}
           onClose={() => setShowIngestWizard(false)}
           onComplete={() => { setShowIngestWizard(false); onIngestComplete(); }}
         />
