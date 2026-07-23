@@ -65,8 +65,12 @@ def test_graph_truncation_flag(monkeypatch):
 def test_graph_clamps_params(monkeypatch):
     _patch(monkeypatch)
     db = FakeSession(responders=[
-        ("as count_1", FakeResult(scalar=0)),
+        ("AS count_1", FakeResult(scalar=200)),
+        ("FROM entities", FakeResult(items=[])),
+        ("target_entity_id", FakeResult(rows=[])),
+        ("em_a", FakeResult(rows=[])),
     ])
     out = asyncio.run(er.get_production_graph(
         production_id=1, max_nodes=10_000, min_shared_docs=0, db=db, user=FakeUser()))
     assert out.nodes == [] and out.edges == []
+    assert out.truncated is True  # 200 > clamped max_nodes of 150
