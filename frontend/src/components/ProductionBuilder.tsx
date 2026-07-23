@@ -52,6 +52,9 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
   const [startHint, setStartHint] = useState('');
   const [sortKey, setSortKey] = useState('control_number');
   const [designation, setDesignation] = useState('');
+  const [imageFormat, setImageFormat] = useState<'pdf' | 'tiff'>('pdf');
+  const [nativeTypes, setNativeTypes] = useState<string[]>([]);
+  const [volumeCap, setVolumeCap] = useState('');
 
   // draft controls
   const [addTagId, setAddTagId] = useState<number | ''>('');
@@ -121,6 +124,9 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
     const s = await createProductionSet(productionId, {
       name, prefix, padding, start_number: startNumber, sort_key: sortKey,
       designation: designation || null,
+      image_format: imageFormat,
+      native_file_types: nativeTypes,
+      volume_max_mb: volumeCap ? Number(volumeCap) : null,
     });
     setSet(s);
     setValidation({ qc_pending: [], privilege_produce: [], no_images: [], received_document: [], total: 0 });
@@ -217,6 +223,40 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
             <label><span style={fieldLabel}>Confidentiality designation (stamped on every page; optional)</span>
               <input className="input" value={designation} onChange={e => setDesignation(e.target.value)} placeholder="e.g. CONFIDENTIAL" maxLength={100} />
             </label>
+            <div>
+              <span style={fieldLabel}>Image format</span>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button"
+                  className={imageFormat === 'pdf' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                  onClick={() => setImageFormat('pdf')}>
+                  PDF per document
+                </button>
+                <button type="button"
+                  className={imageFormat === 'tiff' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                  onClick={() => setImageFormat('tiff')}>
+                  Single-page TIFF (classic)
+                </button>
+              </div>
+            </div>
+            <div>
+              <span style={fieldLabel}>Produce natively (instead of images; produce-disposition docs only)</span>
+              <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 4, fontSize: 'var(--text-xs)', flexWrap: 'wrap' }}>
+                {['spreadsheet', 'presentation', 'audio', 'video'].map(t => (
+                  <label key={t}>
+                    <input
+                      type="checkbox"
+                      checked={nativeTypes.includes(t)}
+                      onChange={e => setNativeTypes(prev => e.target.checked ? [...prev, t] : prev.filter(x => x !== t))}
+                    />
+                    {' '}{t}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <label style={{ maxWidth: 260 }}><span style={fieldLabel}>Max volume size (MB, optional)</span>
+              <input className="input" type="number" min={50} value={volumeCap}
+                onChange={e => setVolumeCap(e.target.value)} placeholder="single volume" />
+            </label>
             <button className="btn btn-primary" disabled={busy || !name.trim() || !prefix.trim()} onClick={handleCreate}>
               Create draft
             </button>
@@ -305,6 +345,11 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
             <div style={{ fontSize: 'var(--text-sm)' }}>
               <strong>{set.doc_count}</strong> docs · <strong>{set.page_count ?? '—'}</strong> pages · {set.bates_begin} – {set.bates_end}
               {set.designation && <> · {set.designation}</>}
+              {' '}· {(set.image_format || 'pdf').toUpperCase()}
+              {set.volume_max_mb ? <> · volumes ≤ {set.volume_max_mb} MB</> : null}
+              {set.native_file_types && set.native_file_types.length > 0 && (
+                <> · native: {set.native_file_types.join(', ')}</>
+              )}
               {set.conflicts_overridden_by && (
                 <div style={{ ...fieldLabel, color: '#9a6700' }}>Conflicts overridden by {set.conflicts_overridden_by}</div>
               )}

@@ -704,6 +704,9 @@ export interface ProductionSetInfo {
   packaged_at: string | null;
   conflicts_overridden_by: string | null;
   conflicts_overridden_at: string | null;
+  image_format: string;
+  native_file_types: string[];
+  volume_max_mb: number | null;
 }
 
 export interface ProductionSetMember {
@@ -746,6 +749,7 @@ export const listProductionSets = (productionId: number) =>
 export const createProductionSet = (productionId: number, body: {
   name: string; prefix: string; padding?: number; start_number?: number;
   sort_key?: string; designation?: string | null;
+  image_format?: string; native_file_types?: string[]; volume_max_mb?: number | null;
 }) => request<ProductionSetInfo>(`/api/productions/${productionId}/production-sets`, json(body));
 
 export const getProductionSet = (setId: number) =>
