@@ -459,6 +459,9 @@ class ProductionSet(Base):
     package_error = Column(Text, nullable=True)
     package_path = Column(String(500), nullable=True)
     packaged_at = Column(DateTime, nullable=True)
+    # P2-3.5 — validation conflict override audit (Relativity "Restriction override by/on")
+    conflicts_overridden_by = Column(String(128), nullable=True)
+    conflicts_overridden_at = Column(DateTime, nullable=True)
 
     items = relationship("ProductionSetItem", back_populates="production_set", cascade="all, delete-orphan")
 
