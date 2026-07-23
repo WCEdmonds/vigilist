@@ -10,15 +10,33 @@ import re
 from difflib import SequenceMatcher
 
 _HONORIFICS = {"mr", "mrs", "ms", "dr", "prof", "hon", "esq", "jr", "sr", "ii", "iii"}
+_SUFFIX_TOKENS = _HONORIFICS | {"inc", "llc", "llp", "ltd", "lp", "plc", "pc", "pa", "co", "corp"}
 _SIMILARITY_THRESHOLD = 0.85
 
 
+def _clean_tokens(part: str) -> list:
+    return re.sub(r"[^\w\s]", " ", part).split()
+
+
 def normalize_name(name: str) -> str:
-    """Lowercase, strip punctuation/honorifics, swap 'Last, First' to 'first last'."""
+    """Lowercase, strip punctuation/honorifics, swap 'Last, First' to 'first last'.
+
+    Trailing comma-parts that are purely suffix tokens (honorifics like "Jr.",
+    corporate suffixes like "Inc.") are peeled off before the Last/First swap
+    decision, then rejoined afterward (honorifics are stripped by the final
+    token filter; corporate suffixes survive it).
+    """
     s = name.strip().lower()
-    if s.count(",") == 1:
-        last, first = s.split(",")
-        s = f"{first.strip()} {last.strip()}"
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    suffix_parts = []
+    while len(parts) > 1 and _clean_tokens(parts[-1]) and set(_clean_tokens(parts[-1])) <= _SUFFIX_TOKENS:
+        suffix_parts.insert(0, parts.pop())
+    if len(parts) == 2:
+        s = f"{parts[1]} {parts[0]}"  # "Last, First" -> "first last"
+    else:
+        s = " ".join(parts)
+    if suffix_parts:
+        s = s + " " + " ".join(suffix_parts)  # corporate suffixes rejoin (honorifics die below)
     s = re.sub(r"[^\w\s]", " ", s)
     tokens = [t for t in s.split() if t not in _HONORIFICS]
     return " ".join(tokens)
@@ -45,13 +63,28 @@ def match_entity(candidate: dict, existing: list) -> tuple:
     cand_emails = set(candidate.get("emails") or [])
     same_type = [e for e in existing if e.entity_type == candidate["type"]]
 
-    for e in same_type:
-        if normalize_name(e.canonical_name) == cand_norm and cand_norm:
-            return ("attach", e)
-        if cand_norm in {normalize_name(a) for a in (e.aliases or [])}:
-            return ("attach", e)
-        if cand_emails & {em.lower() for em in (e.attributes or {}).get("emails", [])}:
-            return ("attach", e)
+    # Pass 1: exact normalized name match.
+    if cand_norm:
+        for e in same_type:
+            if normalize_name(e.canonical_name) == cand_norm:
+                return ("attach", e)
+
+    # Pass 2: alias match — skip empty/degenerate aliases on both sides.
+    if cand_norm:
+        for e in same_type:
+            alias_norms = {normalize_name(a) for a in (e.aliases or []) if a}
+            if cand_norm in {a for a in alias_norms if a}:
+                return ("attach", e)
+
+    # Pass 3: shared email — only truthy, "@"-containing addresses count.
+    cand_emails_valid = {em.lower() for em in cand_emails if em and "@" in em}
+    if cand_emails_valid:
+        for e in same_type:
+            e_emails_valid = {
+                em.lower() for em in (e.attributes or {}).get("emails", []) if em and "@" in em
+            }
+            if cand_emails_valid & e_emails_valid:
+                return ("attach", e)
 
     best = None  # (score, entity, rationale)
     for e in same_type:
