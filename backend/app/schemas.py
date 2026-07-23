@@ -834,6 +834,29 @@ class SampleOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# --- P3-3: TAR validation ---------------------------------------------------
+
+class TarValidationCreate(BaseModel):
+    project_id: int
+    control_sample_id: int
+    responsive_tag_id: int
+    nonresponsive_tag_id: int | None = None
+    elusion_sample_id: int | None = None
+    confidence: int = 95
+
+
+class TarValidationOut(BaseModel):
+    id: int
+    production_id: int
+    project_id: int
+    params: dict
+    results: dict
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- P3-1: search-term hit reports ------------------------------------------
 
 class SearchTermReportCreate(BaseModel):

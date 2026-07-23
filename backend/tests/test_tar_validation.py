@@ -91,3 +91,125 @@ def test_elusion_math_and_extrapolation():
     assert e["estimated_missed_low"] == int(e["low"] * 10_000)
     assert e["estimated_missed_high"] == int(e["high"] * 10_000)
     assert e["estimated_missed_low"] < 200 < e["estimated_missed_high"]
+
+
+# --- endpoints ---------------------------------------------------------------
+
+import pytest
+from fastapi import HTTPException
+
+import app.routers.tar as rt
+from app.schemas import TarValidationCreate
+from tests.fakes import FakeUser
+
+
+class FakeProject:
+    def __init__(self, project_id=3, production_id=1):
+        self.id = project_id
+        self.production_id = production_id
+
+
+class FakePersistedSample:
+    def __init__(self, sample_id, purpose, production_id=1):
+        self.id = sample_id
+        self.production_id = production_id
+        self.purpose = purpose
+        self.document_ids = ["d0"]
+
+
+def _patch(monkeypatch, role="manager", accessible=(1,)):
+    async def fake_accessible(db, user):
+        return list(accessible)
+
+    async def fake_role(db, user, production_id):
+        return role
+
+    logged = []
+
+    async def fake_log(db, user, action, *a, **kw):
+        logged.append(action)
+
+    async def fake_build(db, production_id, project_id, control, resp, nonresp,
+                         elusion, confidence):
+        return {"confidence": confidence, "project_id": project_id,
+                "control": {"recall": {"rate": 0.9}},
+                "elusion": None, "generated_at": "now"}
+
+    monkeypatch.setattr(rt, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(rt, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(rt, "log_action", fake_log)
+    monkeypatch.setattr(rt, "build_validation", fake_build)
+    return logged
+
+
+def test_run_validation_persists_and_audits(monkeypatch):
+    logged = _patch(monkeypatch)
+    db = FakeSession(get_objects={
+        ("ReviewProject", 3): FakeProject(),
+        ("Sample", 10): FakePersistedSample(10, "control"),
+    })
+    out = asyncio.run(rt.run_validation(
+        production_id=1,
+        body=TarValidationCreate(project_id=3, control_sample_id=10,
+                                 responsive_tag_id=7),
+        db=db, user=FakeUser()))
+    assert out.results["control"]["recall"]["rate"] == 0.9
+    assert len(db.added) == 1
+    assert "tar_validation_run" in logged
+
+
+def test_run_validation_rejects_wrong_purpose(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={
+        ("ReviewProject", 3): FakeProject(),
+        ("Sample", 10): FakePersistedSample(10, "richness"),
+    })
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rt.run_validation(
+            production_id=1,
+            body=TarValidationCreate(project_id=3, control_sample_id=10,
+                                     responsive_tag_id=7),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_run_validation_rejects_foreign_project(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={
+        ("ReviewProject", 3): FakeProject(production_id=2),
+        ("Sample", 10): FakePersistedSample(10, "control"),
+    })
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rt.run_validation(
+            production_id=1,
+            body=TarValidationCreate(project_id=3, control_sample_id=10,
+                                     responsive_tag_id=7),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_run_validation_rejects_elusion_purpose_mismatch(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={
+        ("ReviewProject", 3): FakeProject(),
+        ("Sample", 10): FakePersistedSample(10, "control"),
+        ("Sample", 11): FakePersistedSample(11, "richness"),
+    })
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rt.run_validation(
+            production_id=1,
+            body=TarValidationCreate(project_id=3, control_sample_id=10,
+                                     responsive_tag_id=7, elusion_sample_id=11),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_run_validation_blocked_for_reviewer(monkeypatch):
+    _patch(monkeypatch, role="reviewer")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rt.run_validation(
+            production_id=1,
+            body=TarValidationCreate(project_id=3, control_sample_id=10,
+                                     responsive_tag_id=7),
+            db=FakeSession(), user=FakeUser()))
+    assert exc.value.status_code == 403
