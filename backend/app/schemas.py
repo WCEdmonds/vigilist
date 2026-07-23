@@ -770,6 +770,16 @@ class GraphOut(BaseModel):
     truncated: bool
 
 
+class ChipEntityOut(BaseModel):
+    entity_id: UUID4
+    canonical_name: str
+    entity_type: str
+
+
+class EntitiesSummaryOut(BaseModel):
+    summaries: dict[str, list[ChipEntityOut]]
+
+
 # --- P2-1: production sets --------------------------------------------------
 
 class ProductionSetCreate(BaseModel):

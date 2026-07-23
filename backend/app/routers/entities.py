@@ -14,8 +14,8 @@ from app.models import (
 )
 from app.routers.auth import get_current_user
 from app.schemas import (
-    DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
-    EntityDocMentionOut, EntityDocumentMentionsOut, EntityListItemOut,
+    ChipEntityOut, DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
+    EntityDocMentionOut, EntityDocumentMentionsOut, EntitiesSummaryOut, EntityListItemOut,
     EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
     TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
@@ -40,6 +40,45 @@ async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> E
     if entity is None or entity.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
+
+
+@router.get("/documents/entities-summary", response_model=EntitiesSummaryOut)
+async def get_entities_summary(
+    ids: str = "",
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Batch: top-3 entities per document for row chips. Scoped; bad ids skipped."""
+    raw = [s.strip() for s in ids.split(",") if s.strip()]
+    if len(raw) > 100:
+        raise HTTPException(status_code=422, detail="Too many ids (max 100)")
+    doc_ids = []
+    for s in raw:
+        try:
+            doc_ids.append(UUID(s))
+        except ValueError:
+            continue
+    if not doc_ids:
+        return EntitiesSummaryOut(summaries={})
+
+    accessible = await get_accessible_production_ids(db, user)
+    rows = (await db.execute(
+        select(EntityMention.document_id, Entity,
+               func.count(EntityMention.id).label("cnt"))
+        .join(Entity, EntityMention.entity_id == Entity.id)
+        .where(EntityMention.document_id.in_(doc_ids),
+               EntityMention.production_id.in_(accessible))
+        .group_by(EntityMention.document_id, Entity.id)
+        .order_by(EntityMention.document_id, func.count(EntityMention.id).desc())
+    )).all()
+
+    summaries: dict[str, list[ChipEntityOut]] = {}
+    for doc_id, ent, _cnt in rows:
+        bucket = summaries.setdefault(str(doc_id), [])
+        if len(bucket) < 3:
+            bucket.append(ChipEntityOut(entity_id=ent.id, canonical_name=ent.canonical_name,
+                                        entity_type=ent.entity_type))
+    return EntitiesSummaryOut(summaries=summaries)
 
 
 @router.get("/documents/{doc_id}/entities", response_model=DocumentEntitiesOut)
