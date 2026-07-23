@@ -61,6 +61,22 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
         m.entity_id = winner.id
         merge.moved_mention_ids.append(m.id)
 
+    # Preload winner's existing edge keys so we can detect collisions with
+    # uq_edge_pair_type_doc before re-pointing.
+    winner_edge_keys = {
+        (source_id, target_id, rel_type, doc_id)
+        for source_id, target_id, rel_type, doc_id in (await db.execute(
+            select(
+                EntityRelationship.source_entity_id,
+                EntityRelationship.target_entity_id,
+                EntityRelationship.relationship_type,
+                EntityRelationship.document_id
+            ).where(
+                (EntityRelationship.source_entity_id == winner.id)
+                | (EntityRelationship.target_entity_id == winner.id))
+        )).all()
+    }
+
     edges = (await db.execute(
         select(EntityRelationship).where(
             (EntityRelationship.source_entity_id == loser.id)
@@ -73,6 +89,12 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
             e.target_entity_id = winner.id
         if e.source_entity_id == e.target_entity_id:
             await db.delete(e)  # became a self-edge; drop (not restored on undo)
+            continue
+        if (e.source_entity_id, e.target_entity_id, e.relationship_type, e.document_id) in winner_edge_keys:
+            # Winner already has an edge with this key; re-pointing would violate
+            # uq_edge_pair_type_doc. Drop it — not recorded as moved, so it is
+            # permanently lost on undo (same treatment as a self-edge above).
+            await db.delete(e)
             continue
         merge.moved_relationship_ids.append(e.id)
 

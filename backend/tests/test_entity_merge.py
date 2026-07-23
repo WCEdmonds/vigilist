@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 import app.routers.entities as er
-from app.models import Entity, EntityMention, EntityMerge, EventParticipant
+from app.models import Entity, EntityMention, EntityMerge, EntityRelationship, EventParticipant
 from app.schemas import MergeRequest
 from app.services.entity_merge import merge_entities, undo_merge
 from tests.fakes import FakeResult, FakeSession, FakeUser
@@ -16,6 +16,7 @@ from tests.fakes import FakeResult, FakeSession, FakeUser
 # before the generic "entity_mentions" / "event_participants" responders,
 # since those are substrings of every query against those tables).
 _WINNER_MENTION_KEYS_SQL = "entity_mentions.document_id, entity_mentions.start_offset"
+_WINNER_EDGE_KEYS_SQL = "entity_relationships.relationship_type, entity_relationships.document_id"
 _WINNER_EVENT_IDS_SQL = "SELECT event_participants.event_id"
 _LIVE_MENTION_COUNT_SQL = "SELECT count(*) AS count_1"
 
@@ -34,11 +35,12 @@ def _mentions_for(loser, n=2):
                           start_offset=i, end_offset=i + 8) for i in range(n)]
 
 
-def _db(loser_mentions, winner_mention_rows=None, winner_event_rows=None, loser_participants=None):
+def _db(loser_mentions, winner_mention_rows=None, winner_edge_rows=None, winner_event_rows=None, loser_relationships=None, loser_participants=None):
     return FakeSession(responders=[
         (_WINNER_MENTION_KEYS_SQL, FakeResult(rows=winner_mention_rows or [])),
         ("entity_mentions", FakeResult(items=loser_mentions)),
-        ("entity_relationships", FakeResult(items=[])),
+        (_WINNER_EDGE_KEYS_SQL, FakeResult(rows=winner_edge_rows or [])),
+        ("entity_relationships", FakeResult(items=loser_relationships or [])),
         (_WINNER_EVENT_IDS_SQL, FakeResult(rows=winner_event_rows or [])),
         ("event_participants", FakeResult(items=loser_participants or [])),
         ("entity_merge_suggestions", FakeResult(items=[])),
@@ -117,6 +119,31 @@ def test_merge_participant_collision_drops_duplicate_row():
     assert other.entity_id == winner.id
     assert other.id in merge.moved_participant_ids
     assert merge.moved_participant_ids == [201]
+
+
+def test_merge_relationship_collision_drops_duplicate_edge():
+    winner, loser = _pair()
+    third = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+                   canonical_name="Alice Smith", aliases=[], attributes={}, mention_count=1)
+    doc_shared, doc_other = uuid.uuid4(), uuid.uuid4()
+    # Both winner and loser have "colleague" edge to third in same document
+    collide = EntityRelationship(id=400, production_id=1, source_entity_id=loser.id,
+                                 target_entity_id=third.id, relationship_type="colleague",
+                                 document_id=doc_shared, description="works with")
+    # Loser has "colleague" edge to third in a different document
+    other = EntityRelationship(id=401, production_id=1, source_entity_id=loser.id,
+                               target_entity_id=third.id, relationship_type="colleague",
+                               document_id=doc_other, description="works with")
+    # Winner already has the same edge (source->target, type, doc) as collide will become
+    # After collision detection, the edge key will be (winner.id, third.id, "colleague", doc_shared)
+    winner_edge_row = (winner.id, third.id, "colleague", doc_shared)
+    db = _db([], winner_edge_rows=[winner_edge_row], loser_relationships=[collide, other])
+    merge = asyncio.run(merge_entities(db, winner, loser, "u1"))
+    assert collide in db.deleted
+    assert collide.id not in merge.moved_relationship_ids
+    assert other.source_entity_id == winner.id
+    assert other.id in merge.moved_relationship_ids
+    assert merge.moved_relationship_ids == [401]
 
 
 def test_undo_restores_loser_and_repoints():
