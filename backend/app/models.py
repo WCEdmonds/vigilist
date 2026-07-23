@@ -541,6 +541,24 @@ class Sample(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+class TarValidationReport(Base):
+    """A persisted TAR validation run (P3-3): recall/precision vs a blind
+    control set + elusion over the null set. The artifact for declarations."""
+
+    __tablename__ = "tar_validation_reports"
+    __table_args__ = (
+        Index("ix_tar_validation_reports_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(Integer, ForeignKey("review_projects.id", ondelete="CASCADE"), nullable=False)
+    params = Column(JSONB, nullable=False)
+    results = Column(JSONB, nullable=False)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 class DuplicateGroup(Base):
     __tablename__ = "duplicate_groups"
 

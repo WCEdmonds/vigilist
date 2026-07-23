@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
 from app.models import Document, DocumentTag, Sample, User
+from app.models_review import AIReviewResult
 from app.routers.auth import get_current_user
 from app.schemas import SampleCreate, SampleOut
 from app.services.audit import log_action
@@ -14,7 +15,7 @@ from app.services.sampling_stats import Z, acceptance, sample_size, wilson_ci
 
 router = APIRouter(prefix="/api", tags=["sampling"])
 
-PURPOSES = ("richness", "acceptance", "control")
+PURPOSES = ("richness", "acceptance", "control", "elusion")
 
 
 def _validate_stats_params(confidence: int, margin: float, expected_rate: float):
@@ -84,9 +85,21 @@ async def draw_sample(
         raise HTTPException(status_code=422, detail=f"purpose must be one of {PURPOSES}")
     if body.source_type not in (None, "collection", "received"):
         raise HTTPException(status_code=422, detail="source_type must be 'collection' or 'received'")
+    if body.scope not in (None, "machine_negative"):
+        raise HTTPException(status_code=422, detail="scope must be 'machine_negative' or omitted")
+    if body.scope == "machine_negative" and not body.project_id:
+        raise HTTPException(status_code=422, detail="project_id is required for machine_negative scope")
     _validate_stats_params(body.confidence, body.margin, body.expected_rate)
 
     scope = _scope_conditions(production_id, body.source_type)
+    if body.scope == "machine_negative":
+        # The project's null set: documents the classifier called not_relevant.
+        scope.append(Document.id.in_(
+            select(AIReviewResult.document_id).where(
+                AIReviewResult.project_id == body.project_id,
+                AIReviewResult.ai_decision == "not_relevant",
+            )
+        ))
     population = (await db.execute(
         select(func.count(Document.id)).where(*scope)
     )).scalar() or 0
@@ -106,6 +119,7 @@ async def draw_sample(
         params={"population": population, "confidence": body.confidence,
                 "margin": body.margin, "expected_rate": body.expected_rate,
                 "source_type": body.source_type, "requested_size": body.size,
+                "scope": body.scope, "project_id": body.project_id,
                 "size": len(doc_ids)},
         document_ids=doc_ids, created_by=user.id,
     )
