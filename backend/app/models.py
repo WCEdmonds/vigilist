@@ -67,6 +67,11 @@ class Organization(Base):
     # Extra individual emails (lowercase) whose new productions file under this
     # org even though their domain isn't a member domain.
     creator_emails = Column(ARRAY(String), nullable=False, server_default="{}")
+    # P4-1 — enterprise SSO: Identity Platform provider bound to this org
+    # (e.g. "saml.acme"); when enforced, member-domain users MUST sign in
+    # through it (creator_emails exempt as the lockout escape hatch).
+    sso_provider_id = Column(String(100), nullable=True)
+    sso_enforced = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     productions = relationship("Production", back_populates="organization")
