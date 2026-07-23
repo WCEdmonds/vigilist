@@ -5,7 +5,7 @@ import EntityPanel from './EntityPanel';
 
 interface Props {
   productionId: number;
-  initialEntityId?: string | null;
+  openEntityId?: string | null;
   onViewDocument: (docId: string) => void;
   onBack: () => void;
   onOpenEntityChange?: (id: string | null) => void;
@@ -31,7 +31,7 @@ function groupKey(e: TimelineEvent): string {
   return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
 
-export default function EntityTimelineView({ productionId, initialEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
+export default function EntityTimelineView({ productionId, openEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [undatedCount, setUndatedCount] = useState(0);
@@ -39,10 +39,9 @@ export default function EntityTimelineView({ productionId, initialEntityId, onVi
   const [entityFilter, setEntityFilter] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState('');
   const [filterOptions, setFilterOptions] = useState<EntityListItem[]>([]);
-  const [openEntityId, setOpenEntityId] = useState<string | null>(initialEntityId ?? null);
   const [showUndated, setShowUndated] = useState(false);
 
-  const openEntity = (id: string | null) => { setOpenEntityId(id); onOpenEntityChange?.(id); };
+  const openEntity = (id: string | null) => { onOpenEntityChange?.(id); };
 
   useEffect(() => {
     listEntities(productionId, undefined, undefined, 1, 100)

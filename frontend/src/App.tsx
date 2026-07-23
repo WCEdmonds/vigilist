@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
@@ -29,7 +29,7 @@ import { useOnboarding } from './hooks/useOnboarding';
 import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
-import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
+import type { ChipEntity, ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -94,6 +94,13 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [showGraph, setShowGraph] = useState(initialUrl.view === 'graph');
   const [entityPanelId, setEntityPanelId] = useState<string | null>(initialUrl.entity ?? null);
 
+  // Ambient entity chips shown on doc-list/search rows — a cache keyed by
+  // document id, populated one batch call per newly-seen page of rows.
+  const [entityChips, setEntityChips] = useState<Record<string, ChipEntity[]>>({});
+  // Ids already requested (or in flight), so a re-render with the same page
+  // doesn't refire the batch call. Not state — it never drives a render.
+  const chipsFetched = useRef<Set<string>>(new Set());
+
   // Deep-link into an entity's profile panel from anywhere (chip clicks,
   // timeline participants, graph nodes, etc.) — closes other full-screen
   // views/the doc viewer and opens the Entities workspace with the panel seeded.
@@ -103,10 +110,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setEntityPanelId(id);
     setShowEntities(true);
   };
-  // Not yet called from this task's own UI — wired into Graph/chip
-  // components in follow-on ontology-surface tasks. Referenced here so
-  // strict unused-locals checks pass in the meantime.
-  void navigateToEntity;
 
   // AI chat, docked in the context rail (session-only conversation). The
   // production id lets doc-less questions be grounded in the production
@@ -240,6 +243,19 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterFileType, filterSourceParty, workMode]);
+
+  // Ambient entity chips: batch-fetch summaries for whichever page of rows
+  // is currently on screen (doc list or search results), one call per newly
+  // seen id set. Mirrors ProductionBrief's expand-effect ref-guard pattern.
+  useEffect(() => {
+    const rowIds = hasSearched ? searchResults.map(r => r.id) : documents.map(d => d.id);
+    const toFetch = rowIds.filter(id => !chipsFetched.current.has(id));
+    if (toFetch.length === 0) return;
+    toFetch.forEach(id => chipsFetched.current.add(id));
+    getEntitiesSummary(toFetch)
+      .then(r => setEntityChips(prev => ({ ...prev, ...r.summaries })))
+      .catch(e => console.warn('getEntitiesSummary failed:', e));
+  }, [hasSearched, documents, searchResults]);
 
   const handleDesignateAll = async (sourceType: 'collection' | 'received') => {
     try {
@@ -387,6 +403,17 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   };
 
+  // Ambient entity chip — clicking retargets the (possibly already-open)
+  // Entities panel via navigateToEntity rather than bubbling into the row's
+  // own click handler (which opens the document).
+  const entityChip = (c: ChipEntity) => (
+    <button key={c.entity_id} className="badge badge-gray" style={{ cursor: 'pointer' }}
+            onClick={ev => { ev.stopPropagation(); navigateToEntity(c.entity_id); }}>
+      <span className={`entity-dot entity-${c.entity_type}`} style={{ marginRight: 3 }}>●</span>
+      {c.canonical_name}
+    </button>
+  );
+
   // Re-fetch the doc list (or re-run the active search) after leaving the
   // review workspace, since markers/tags may have changed there. Called from
   // event handlers only — never from a render-time effect.
@@ -418,7 +445,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         productionId={production.id}
         onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
         onBack={() => { setEntityPanelId(null); setShowEntities(false); refreshList(); }}
-        initialEntityId={entityPanelId}
+        openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
       />
     );
@@ -433,7 +460,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         productionId={production.id}
         onViewDocument={(id) => { setShowTimeline(false); setViewDocId(id); refreshList(); }}
         onBack={() => { setEntityPanelId(null); setShowTimeline(false); refreshList(); }}
-        initialEntityId={entityPanelId}
+        openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
       />
     );
@@ -448,7 +475,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         productionId={production.id}
         onViewDocument={(id) => { setShowGraph(false); setViewDocId(id); refreshList(); }}
         onBack={() => { setEntityPanelId(null); setShowGraph(false); refreshList(); }}
-        initialEntityId={entityPanelId}
+        openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
       />
     );
@@ -574,6 +601,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           onSelectCluster={setFilterClusterId}
           onViewDocument={setViewDocId}
           onPipelineSettled={refreshClusters}
+          onOpenEntity={navigateToEntity}
         />
 
         {/* My Review Batches */}
@@ -672,6 +700,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 onSelect={setViewDocId}
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelect}
+                entityChips={entityChips}
+                onOpenEntity={navigateToEntity}
               />
             </div>
           </>
@@ -805,6 +835,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                       <th style={{ width: 80 }}>Type</th>
                       <th>Theme</th>
                       <th>AI</th>
+                      <th>People/Orgs</th>
                       <th>Pages</th>
                       <th>Tags</th>
                       <th>Notes</th>
@@ -858,6 +889,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                         </td>
                         <td className="meta-cell">{themeChip(d)}</td>
                         <td className="meta-cell">{aiMarker(d)}</td>
+                        <td className="meta-cell">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -909,6 +941,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                         ))}
                         {themeChip(d)}
                         {aiMarker(d)}
+                        {(entityChips[d.id] || []).slice(0, 3).map(entityChip)}
                       </div>
                     </div>
                   </div>

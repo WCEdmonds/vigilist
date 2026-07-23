@@ -6,7 +6,7 @@ import EntityPanel from './EntityPanel';
 
 interface Props {
   productionId: number;
-  initialEntityId?: string | null;
+  openEntityId?: string | null;
   onViewDocument: (docId: string) => void;
   onBack: () => void;
   onOpenEntityChange?: (id: string | null) => void;
@@ -20,11 +20,10 @@ interface Transform {
 
 const NODE_COLOR: Record<string, string> = { person: '#4f7cff', org: '#b4690e' };
 
-export default function EntityGraphView({ productionId, initialEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
+export default function EntityGraphView({ productionId, openEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [layout, setLayout] = useState<PositionedNode[]>([]);
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, k: 1 });
-  const [openEntityId, setOpenEntityId] = useState<string | null>(initialEntityId ?? null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   // Tracks the current pointer-drag target ('background' or a node id) across
@@ -32,7 +31,7 @@ export default function EntityGraphView({ productionId, initialEntityId, onViewD
   // during render.
   const dragTargetRef = useRef<string | null>(null);
 
-  const openEntity = (id: string | null) => { setOpenEntityId(id); onOpenEntityChange?.(id); };
+  const openEntity = (id: string | null) => { onOpenEntityChange?.(id); };
 
   useEffect(() => {
     getGraph(productionId)

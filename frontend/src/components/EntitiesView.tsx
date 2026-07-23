@@ -7,19 +7,17 @@ interface Props {
   productionId: number;
   onViewDocument: (docId: string) => void;
   onBack: () => void;
-  initialEntityId?: string | null;
+  openEntityId?: string | null;
   onOpenEntityChange?: (id: string | null) => void;
 }
 
-export default function EntitiesView({ productionId, onViewDocument, onBack, initialEntityId, onOpenEntityChange }: Props) {
+export default function EntitiesView({ productionId, onViewDocument, onBack, openEntityId, onOpenEntityChange }: Props) {
   const [entities, setEntities] = useState<EntityListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [suggestions, setSuggestions] = useState<MergeSuggestion[]>([]);
-  const [openEntityId, setOpenEntityId] = useState<string | null>(initialEntityId ?? null);
   const openEntity = (id: string | null) => {
-    setOpenEntityId(id);
     onOpenEntityChange?.(id);
   };
   const [busy, setBusy] = useState<number | null>(null);
