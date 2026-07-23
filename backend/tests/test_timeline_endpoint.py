@@ -61,6 +61,11 @@ def test_per_page_clamp_pure():
 
 def test_timeline_clamps_per_page(monkeypatch):
     _patch(monkeypatch)
+    spy_calls = []
+    def spy(v):
+        spy_calls.append(v)
+        return 100
+    monkeypatch.setattr(er, "_clamp_per_page", spy)
     db = FakeSession(responders=[
         ("count(ontology_events", FakeResult(scalar=0)),
         ("FROM ontology_events", FakeResult(rows=[])),
@@ -69,6 +74,7 @@ def test_timeline_clamps_per_page(monkeypatch):
     out = asyncio.run(er.get_production_timeline(
         production_id=1, per_page=5000, db=db, user=FakeUser()))
     assert out.events == [] and out.total == 0
+    assert spy_calls == [5000]
 
 
 def test_timeline_null_date_serializes_none(monkeypatch):
