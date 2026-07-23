@@ -144,3 +144,8 @@ def test_max_rounds_terminates():
     # The tool-calling rounds pass tools=...; the final cap-overflow turn must omit it.
     assert "tools" in client.messages.calls[0]
     assert "tools" not in client.messages.calls[-1]
+
+
+def test_chat_system_prompt_includes_entity_cite_scheme():
+    from app.services.ai import CHAT_SYSTEM_PROMPT
+    assert "entity:" in CHAT_SYSTEM_PROMPT and "lookup_entity" in CHAT_SYSTEM_PROMPT

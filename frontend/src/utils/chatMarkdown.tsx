@@ -6,9 +6,10 @@ import type { ReactNode } from 'react';
  * transcript. This covers that subset deterministically with React elements
  * (no HTML injection). Anything unrecognized falls through as plain text. */
 
-const INLINE_PATTERN = /(\[[^\]]+\]\(doc:[^)]+\)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+const INLINE_PATTERN = /(\[[^\]]+\]\(doc:[^)]+\)|\[[^\]]+\]\(entity:[^)]+\)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
 
 const DOC_LINK = /^\[([^\]]+)\]\(doc:([^)]+)\)$/;
+const ENTITY_LINK = /^\[([^\]]+)\]\(entity:([^)]+)\)$/;
 const ANY_LINK = /^\[([^\]]+)\]\([^)]+\)$/;
 
 function renderInline(text: string, keyBase: string): ReactNode[] {
@@ -21,13 +22,23 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
     const token = match[0];
     const key = `${keyBase}-i${i++}`;
     const docLink = DOC_LINK.exec(token);
-    const anyLink = docLink ? null : ANY_LINK.exec(token);
+    const entityLink = docLink ? null : ENTITY_LINK.exec(token);
+    const anyLink = docLink || entityLink ? null : ANY_LINK.exec(token);
     if (docLink) {
       // The chat model cites documents as [BATES](doc:BATES). Rendered as a
       // button; ChatPanel opens the document via click delegation.
       out.push(
         <button key={key} type="button" className="chat-doc-link" data-doc-target={docLink[2].trim()}>
           {docLink[1]}
+        </button>,
+      );
+    } else if (entityLink) {
+      // The chat model cites people/organizations as [Name](entity:<uuid>).
+      // Rendered as a button; ChatPanel opens the entity profile via click
+      // delegation.
+      out.push(
+        <button key={key} type="button" className="chat-entity-link" data-entity-target={entityLink[2].trim()}>
+          {entityLink[1]}
         </button>,
       );
     } else if (anyLink) {

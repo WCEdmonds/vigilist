@@ -1032,6 +1032,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             setSearchTotal(results.length);
           }}
           onAttached={focusChat}
+          onOpenEntity={navigateToEntity}
         />
       </div>
 
