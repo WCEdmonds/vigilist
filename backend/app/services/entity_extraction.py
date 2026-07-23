@@ -247,9 +247,13 @@ def _retryable_errors() -> tuple[type[BaseException], ...]:
 
 def merge_parsed(results: list[dict]) -> dict:
     """Merge per-slice parses; entities dedupe by (type, name), keeping the
-    union of surface forms/emails; events and relationships concatenate."""
+    union of surface forms/emails. Events and relationships also dedupe
+    (slices overlap by design, so the same event/relationship can be
+    re-extracted from two adjacent slices) — first occurrence wins, order
+    preserved via dict insertion order."""
     by_key: dict = {}
-    events, relationships = [], []
+    events_by_key: dict = {}
+    relationships_by_key: dict = {}
     for r in results:
         for ent in r["entities"]:
             key = (ent["type"], ent["name"].lower())
@@ -260,9 +264,17 @@ def merge_parsed(results: list[dict]) -> dict:
                 have["role"] = have["role"] or ent["role"]
             else:
                 by_key[key] = dict(ent)
-        events.extend(r["events"])
-        relationships.extend(r["relationships"])
-    return {"entities": list(by_key.values()), "events": events, "relationships": relationships}
+        for ev in r["events"]:
+            ev_key = (ev["description"].lower(), ev["type"], ev["date"])
+            events_by_key.setdefault(ev_key, ev)
+        for rel in r["relationships"]:
+            rel_key = (rel["source"].lower(), rel["target"].lower(), rel["type"])
+            relationships_by_key.setdefault(rel_key, rel)
+    return {
+        "entities": list(by_key.values()),
+        "events": list(events_by_key.values()),
+        "relationships": list(relationships_by_key.values()),
+    }
 
 
 async def extract_document_entities(text: str) -> dict | None:
@@ -323,7 +335,7 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
     """Write one document's extraction into the ontology. Caller commits."""
     from sqlalchemy import select
     from app.models import (Entity, EntityMention, EntityMergeSuggestion,
-                            EntityRelationship, EventParticipant, OntologyEvent)
+                             EntityRelationship, EventParticipant, OntologyEvent)
     from app.services.entity_resolution import match_entity, normalize_name
 
     existing = list((await db.execute(
@@ -332,6 +344,13 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
 
     stats = {"entities": 0, "mentions": 0, "events": 0, "relationships": 0, "suggestions": 0}
     name_to_entity: dict[str, Entity] = {}
+    # Two candidates can resolve to the same entity (e.g. one attaches via
+    # alias) with overlapping surface forms, so locate_mentions can rediscover
+    # the same offset twice across candidates — track what's already been
+    # added this call so we never emit a duplicate (entity_id, start_offset)
+    # row (would violate uq_mention_doc_entity_offset at commit). Offset-less
+    # (OCR-drift) mentions key on (entity.id, None) — at most one per entity.
+    seen_mentions: set[tuple] = set()
 
     for cand in parsed["entities"]:
         decision = match_entity(cand, existing)
@@ -370,17 +389,23 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
             # OCR drift: not locatable verbatim — record one offset-less mention
             mentions = [{"surface_text": cand["surface_forms"][0], "start_offset": None,
                          "end_offset": None, "context_snippet": None}]
+        inserted = 0
         for m in mentions:
+            mention_key = (entity.id, m["start_offset"])
+            if mention_key in seen_mentions:
+                continue
+            seen_mentions.add(mention_key)
             db.add(EntityMention(production_id=production_id, entity_id=entity.id,
-                                 document_id=document_id, **m))
-        entity.mention_count = (entity.mention_count or 0) + len(mentions)
-        stats["mentions"] += len(mentions)
+                                  document_id=document_id, **m))
+            inserted += 1
+        entity.mention_count = (entity.mention_count or 0) + inserted
+        stats["mentions"] += inserted
 
     for ev in parsed["events"]:
         event_date, precision = parse_event_date(ev["date"])
         event = OntologyEvent(production_id=production_id, event_type=ev["type"],
-                              description=ev["description"], event_date=event_date,
-                              date_precision=precision, document_id=document_id)
+                               description=ev["description"], event_date=event_date,
+                               date_precision=precision, document_id=document_id)
         event.participants = [
             EventParticipant(entity_id=name_to_entity[p.lower()].id)
             for p in dict.fromkeys(ev["participants"]) if p.lower() in name_to_entity
@@ -388,14 +413,23 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
         db.add(event)
         stats["events"] += 1
 
+    # Belt-and-braces: slices can overlap (merge_parsed already dedupes across
+    # slices), but also guard within this call so two candidates that resolve
+    # to the same pair of entities never emit a duplicate edge (would violate
+    # uq_edge_pair_type_doc at commit).
+    seen_relationships: set[tuple] = set()
     for rel in parsed["relationships"]:
         src = name_to_entity.get(rel["source"].lower())
         tgt = name_to_entity.get(rel["target"].lower())
         if src is None or tgt is None or src.id == tgt.id:
             continue
+        rel_key = (src.id, tgt.id, rel["type"])
+        if rel_key in seen_relationships:
+            continue
+        seen_relationships.add(rel_key)
         db.add(EntityRelationship(production_id=production_id, source_entity_id=src.id,
-                                  target_entity_id=tgt.id, relationship_type=rel["type"],
-                                  description=rel["evidence"], document_id=document_id))
+                                   target_entity_id=tgt.id, relationship_type=rel["type"],
+                                   description=rel["evidence"], document_id=document_id))
         stats["relationships"] += 1
 
     return stats
