@@ -29,6 +29,10 @@ class FakePS:
         self.render_status = kw.get("render_status", "not_started")
         self.render_error = None
         self.rendered_at = None
+        self.package_status = kw.get("package_status", "not_started")
+        self.package_error = None
+        self.package_path = kw.get("package_path", None)
+        self.packaged_at = None
 
 
 class FakeItem:
@@ -602,3 +606,96 @@ def test_detail_includes_render_progress(monkeypatch):
     out = asyncio.run(rps.get_production_set(set_id=1, db=db, user=FakeUser()))
     assert out.render_status == "rendering"
     assert out.rendered_count == 1
+
+
+# --- manifest + packaging endpoints (P2-3) ---------------------------------
+
+def test_manifest_requires_locked(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="draft")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.get_manifest(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_manifest_returns_continuity(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    item = FakeItem(d1, item_id=1, sort_order=1, bates_begin="SMITH000001",
+                    bates_end="SMITH000002", pages=2, disposition="produce")
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS(status="locked")},
+        responders=[("FROM production_set_items", FakeResult(items=[item]))],
+    )
+    out = asyncio.run(rps.get_manifest(set_id=1, db=db, user=FakeUser()))
+    assert out["continuity"]["ok"] is True
+    assert out["counts"]["documents"] == 1
+
+
+def test_package_requires_rendered(monkeypatch):
+    _patch(monkeypatch)
+    ps = FakePS(status="locked", render_status="rendering")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.package_production_set(
+            set_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_package_409_while_packaging(monkeypatch):
+    _patch(monkeypatch)
+    ps = FakePS(status="locked", render_status="rendered", package_status="packaging")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.package_production_set(
+            set_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_package_trigger_fallback(monkeypatch):
+    _patch(monkeypatch)
+    monkeypatch.setattr(rps.tasks, "is_configured", lambda: False)
+    ps = FakePS(status="locked", render_status="rendered")
+    bg = FakeBackgroundTasks()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[("count", FakeResult(scalar=4))],
+    )
+    out = asyncio.run(rps.package_production_set(
+        set_id=1, background_tasks=bg, db=db, user=FakeUser()))
+    assert out == {"documents": 4}
+    assert ps.package_status == "packaging"
+    assert len(bg.tasks) == 1
+
+
+def test_package_worker_delegates(monkeypatch):
+    called = {}
+
+    async def fake_package_set(db, set_id):
+        called["set"] = set_id
+
+    monkeypatch.setattr(rps, "package_set", fake_package_set)
+    out = asyncio.run(rps.package_worker_handler(
+        body={"set_id": 5}, db=FakeSession(), _verified=None))
+    assert out == {"ok": True}
+    assert called == {"set": 5}
+
+
+def test_package_download_404_until_packaged(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="locked")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.download_package(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_package_download_redirects(monkeypatch):
+    _patch(monkeypatch)
+    monkeypatch.setattr(rps, "get_signed_url",
+                        lambda path, **kw: f"https://signed.example/{path}")
+    ps = FakePS(status="locked", package_status="packaged",
+                package_path="productions/1/production_sets/1/package/SMITH_production.zip")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps})
+    out = asyncio.run(rps.download_package(set_id=1, db=db, user=FakeUser()))
+    assert out.status_code == 307
+    assert out.headers["location"].endswith("SMITH_production.zip")
