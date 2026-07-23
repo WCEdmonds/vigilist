@@ -373,3 +373,89 @@ export interface ClusterDocument {
   bates_begin: string;
   title: string | null;
 }
+
+// ── Ontology ──
+
+export interface EntityMentionSpan {
+  surface_text: string;
+  start_offset: number | null;
+  end_offset: number | null;
+}
+
+export interface DocEntity {
+  id: string;
+  entity_type: 'person' | 'org';
+  canonical_name: string;
+  mention_count: number;
+  mentions: EntityMentionSpan[];
+}
+
+export interface EntityProfile {
+  id: string;
+  production_id: number;
+  entity_type: 'person' | 'org';
+  canonical_name: string;
+  aliases: string[];
+  attributes: { role?: string; emails?: string[] };
+  overview: string | null;
+  mention_count: number;
+  document_count: number;
+}
+
+export interface EntityDocMentions {
+  document_id: string;
+  bates_begin: string;
+  title: string | null;
+  mentions: { surface_text: string; context_snippet: string | null; start_offset: number | null }[];
+}
+
+export interface EntityMentionsPage {
+  documents: EntityDocMentions[];
+  total: number;
+}
+
+export interface EntityConnection {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: 'person' | 'org';
+  relationship_type?: string | null;
+  description?: string | null;
+  document_id?: string | null;
+  shared_doc_count?: number | null;
+}
+
+export interface SharedEvent {
+  event_id: number;
+  description: string;
+  event_type: string;
+  event_date: string | null;
+  document_id: string;
+}
+
+export interface EntityConnections {
+  stated: EntityConnection[];
+  cooccurrence: EntityConnection[];
+  shared_events: SharedEvent[];
+}
+
+export interface EntityListItem {
+  id: string;
+  entity_type: 'person' | 'org';
+  canonical_name: string;
+  mention_count: number;
+  document_count: number;
+}
+
+export interface EntityListPage {
+  entities: EntityListItem[];
+  total: number;
+}
+
+export interface MergeSuggestion {
+  id: number;
+  score: number;
+  rationale: string;
+  status: string;
+  entity_a: EntityListItem;
+  entity_b: EntityListItem;
+}
