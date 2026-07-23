@@ -1,7 +1,7 @@
 """add ontology tables (entities, mentions, events, edges, merges)
 
 Revision ID: u3c4d5e6f7g8
-Revises: t2b3c4d5e6f7
+Revises: e1f2a3b4c5d6
 Create Date: 2026-07-22
 """
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision = "u3c4d5e6f7g8"
-down_revision = "t2b3c4d5e6f7"
+down_revision = "e1f2a3b4c5d6"
 branch_labels = None
 depends_on = None
 

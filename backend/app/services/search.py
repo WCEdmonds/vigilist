@@ -110,12 +110,15 @@ async def search_documents(
     accessible_production_ids: list[int] | None = None,
     metadata_filters: dict[str, str] | None = None,
     file_type: str | None = None,
+    source_party: str | None = None,
+    source_type: str | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     tsquery_str = build_tsquery(query) if query else ""
     has_text_query = bool(tsquery_str)
 
-    if not has_text_query and not metadata_filters and not file_type:
+    if (not has_text_query and not metadata_filters and not file_type
+            and not source_party and not source_type):
         return [], 0
 
     conditions = []
@@ -143,6 +146,15 @@ async def search_documents(
         elif file_type in FILE_TYPE_EXTENSIONS:
             exts = FILE_TYPE_EXTENSIONS[file_type]
             conditions.append(or_(*[func.lower(Document.native_path).like(f"%{ext}") for ext in exts]))
+    if source_party:
+        conditions.append(Document.source_party == source_party)
+    if source_type == "received":
+        conditions.append(Document.source_type == "received")
+    elif source_type == "collection":
+        # Undesignated (NULL) documents count as ours: only loads explicitly
+        # marked as received are "incoming". Keeps the toggle meaningful on
+        # matters ingested before source designation existed.
+        conditions.append(Document.source_type.is_distinct_from("received"))
 
     if has_text_query:
         rank = func.ts_rank(Document.text_search_vector, tsquery).label("rank")

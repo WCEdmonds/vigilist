@@ -10,7 +10,7 @@ import logging
 # are structural (used to locate text/native files); the rest are typed columns.
 CANONICAL_FIELDS: list[str] = [
     "bates_begin", "bates_end", "page_count", "text_link", "native_link",
-    "custodian", "date_sent", "date_received", "date_created", "date_modified",
+    "custodian", "source_party", "date_sent", "date_received", "date_created", "date_modified",
     "file_hash_md5", "file_hash_sha256", "file_type", "file_name", "source_path",
     "email_from", "email_to", "email_cc", "email_bcc", "email_subject",
     "family_id", "thread_id", "is_inclusive",
@@ -23,6 +23,7 @@ ALIAS_DICT: dict[str, list[str]] = {
     "text_link": ["Text Link", "Extracted Text", "OCR Path", "TextLink", "Text Path"],
     "native_link": ["Native Link", "NativeLink", "Native Path", "File Path", "Native File"],
     "custodian": ["Custodian", "Cust", "Custodian Name", "Source Custodian"],
+    "source_party": ["Source Party", "Producing Party", "Party", "Production Source"],
     "date_sent": ["Date Sent", "Sent", "DateSent", "Sent Date", "Email Sent Date"],
     "date_received": ["Date Received", "Received", "DateReceived", "Received Date"],
     "date_created": ["Date Created", "Created", "DateCreated", "Creation Date", "File Created"],
