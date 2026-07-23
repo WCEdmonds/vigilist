@@ -56,3 +56,41 @@ def test_never_matches_across_entity_types():
     e = E("Rivera", etype="org")
     kind, *_ = match_entity({"name": "Rivera", "type": "person", "surface_forms": [], "emails": []}, [e])
     assert kind == "create"
+
+
+def test_two_comma_person_name_normalizes():
+    assert normalize_name("Rivera, Jorge, Jr.") == "jorge rivera"
+
+
+def test_org_comma_suffix_normalizes():
+    assert normalize_name("Acme Corp, Inc.") == "acme corp inc" == normalize_name("Acme Corp Inc")
+
+
+def test_empty_or_honorific_only_candidate_creates():
+    e = E("", aliases=[""])
+    kind, ent = match_entity({"name": "", "type": "person", "surface_forms": [], "emails": []}, [e])
+    assert (kind, ent) == ("create", None)
+    kind, ent = match_entity({"name": "Esq.", "type": "person", "surface_forms": [], "emails": []}, [e])
+    assert (kind, ent) == ("create", None)
+
+
+def test_blank_email_never_attaches():
+    e = E("Someone Else", emails=[""])
+    kind, *_ = match_entity(
+        {"name": "Totally Unrelated Name", "type": "person", "surface_forms": [], "emails": [""]}, [e])
+    assert kind == "create"
+
+
+def test_exact_name_beats_earlier_degenerate_match():
+    e1 = E("Totally Different", emails=[""])
+    e2 = E("Jorge Rivera")
+    kind, ent = match_entity(
+        {"name": "Jorge Rivera", "type": "person", "surface_forms": [], "emails": [""]}, [e1, e2])
+    assert (kind, ent) == ("attach", e2)
+
+
+def test_org_comma_form_attaches_to_noncomma_canonical():
+    e = E("Acme Corp Inc", etype="org")
+    kind, ent = match_entity(
+        {"name": "Acme Corp, Inc.", "type": "org", "surface_forms": [], "emails": []}, [e])
+    assert (kind, ent) == ("attach", e)
