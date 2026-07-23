@@ -427,6 +427,55 @@ class RedactionQCDecision(Base):
     decided_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
+class ProductionSet(Base):
+    """A deliverable volume built within a matter (P2-1). NOT the Production
+    model above — that is the matter/case container."""
+
+    __tablename__ = "production_sets"
+    __table_args__ = (
+        UniqueConstraint("production_id", "name", name="uq_prodset_name"),
+        Index("ix_production_sets_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    status = Column(String(20), nullable=False, default="draft")  # 'draft' | 'locked'
+    prefix = Column(String(50), nullable=False)
+    padding = Column(Integer, nullable=False, default=6)
+    start_number = Column(Integer, nullable=False, default=1)
+    sort_key = Column(String(30), nullable=False, default="control_number")
+    designation = Column(String(100), nullable=True)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    locked_by = Column(String(128), nullable=True)
+    locked_at = Column(DateTime, nullable=True)
+
+    items = relationship("ProductionSetItem", back_populates="production_set", cascade="all, delete-orphan")
+
+
+class ProductionSetItem(Base):
+    __tablename__ = "production_set_items"
+    __table_args__ = (
+        UniqueConstraint("production_set_id", "document_id", name="uq_prodset_item_doc"),
+        Index("ix_prodset_items_set_id", "production_set_id"),
+        Index("ix_prodset_items_document_id", "document_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_set_id = Column(Integer, ForeignKey("production_sets.id", ondelete="CASCADE"), nullable=False)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    # Filled at lock, NULL while draft, immutable after:
+    sort_order = Column(Integer, nullable=True)
+    bates_begin = Column(String(50), nullable=True)
+    bates_end = Column(String(50), nullable=True)
+    pages = Column(Integer, nullable=True)          # snapshot: 1 for withhold, else page_count
+    disposition = Column(String(20), nullable=True) # snapshot: 'produce' | 'redact_in_part' | 'withhold'
+    designation = Column(String(100), nullable=True)  # per-item override of the set default
+
+    production_set = relationship("ProductionSet", back_populates="items")
+
+
 class DuplicateGroup(Base):
     __tablename__ = "duplicate_groups"
 
