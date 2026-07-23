@@ -26,6 +26,7 @@ from app.schemas import (
     ProductionSetAddDocuments,
     ProductionSetCreate,
     ProductionSetLockOut,
+    ProductionSetLockRequest,
     ProductionSetMemberOut,
     ProductionSetOut,
     ProductionSetRemoveDocuments,
@@ -36,6 +37,7 @@ from app.services.oidc import verify_cloud_tasks_request
 from app.services.privilege import effective_disposition
 from app.services.production_export import compute_manifest, package_set
 from app.services.production_render import finalize_if_complete, render_batch
+from app.services.production_validation import compute_conflicts
 from app.services.storage import get_signed_url
 from app.services.production_numbering import (
     SORT_KEYS,
@@ -314,9 +316,26 @@ async def remove_documents(
     return {"removed": len(body.document_ids)}
 
 
+@router.get("/production-sets/{set_id}/validation")
+async def get_validation(
+    set_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Relativity-style staging validation: conflicts that must be resolved
+    or explicitly overridden before the set can be locked."""
+    ps = await _load_set(db, user, set_id)
+    items = (await db.execute(
+        select(ProductionSetItem)
+        .where(ProductionSetItem.production_set_id == set_id)
+    )).scalars().all()
+    return await compute_conflicts(db, ps, [i.document_id for i in items])
+
+
 @router.post("/production-sets/{set_id}/lock", response_model=ProductionSetLockOut)
 async def lock_production_set(
     set_id: int,
+    body: ProductionSetLockRequest | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -330,6 +349,21 @@ async def lock_production_set(
     if not items:
         raise HTTPException(status_code=422, detail="Cannot lock an empty production set")
     doc_ids = [i.document_id for i in items]
+
+    conflicts = await compute_conflicts(db, ps, doc_ids)
+    if conflicts["total"]:
+        counts = {k: len(v) for k, v in conflicts.items() if k != "total"}
+        if not (body and body.override_conflicts):
+            summary = ", ".join(f"{k}={v}" for k, v in counts.items())
+            raise HTTPException(
+                status_code=409,
+                detail=f"Validation conflicts: {summary}. Resolve them or lock with override_conflicts.")
+        ps.conflicts_overridden_by = user.id
+        ps.conflicts_overridden_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await log_action(db, user, "production_set_conflicts_overridden",
+                         "production_set", str(set_id),
+                         production_id=ps.production_id,
+                         details={**counts, "total": conflicts["total"]})
 
     doc_rows = (await db.execute(
         select(Document.id, Document.bates_begin, Document.family_id,
