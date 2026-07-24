@@ -147,8 +147,12 @@ one-off script needed.
 - `stop_reason == "max_tokens"` (truncated verdict list) → treat as failure,
   do not apply a partial parse.
 - `stop_reason == "refusal"` (Opus 5 safety classifiers; unlikely on
-  chronology text) → treat as failure the same way — job shows
-  `review_failed`, nothing applied, re-run later.
+  chronology text) → **server-side fallback to Opus 4.8** (user decision):
+  the request carries `fallbacks=[{"model": "claude-opus-4-8"}]` with beta
+  header `server-side-fallback-2026-07-01`, so a declined call re-runs on
+  Opus 4.8 automatically and its verdicts are used (the serving model is
+  recorded in the run audit row). Only if the whole chain refuses does the
+  run fail with nothing applied.
 
 ## Cost
 

@@ -17,7 +17,8 @@
 - **Lazy `anthropic` import** inside functions only — CI runs alembic under minimal deps; module import must succeed without the SDK (mirror `entity_extraction.py`).
 - **Confidence gate:** verdicts with `confidence < 0.8` are skipped and counted, never applied.
 - **Human-edit guardrail:** event ids present in `audit_logs` rows with `action == "event_edited"` are never deleted, merged away, or edited; they may be a merge *keeper* but keeper corrections are skipped for them.
-- **No partial application:** a truncated (`stop_reason == "max_tokens"`), refused (`stop_reason == "refusal"` — Opus 5 safety classifiers), or unparseable response fails the run; nothing is applied.
+- **No partial application:** a truncated (`stop_reason == "max_tokens"`) or unparseable response fails the run; nothing is applied.
+- **Refusal → Opus 4.8 fallback (user decision):** the review call opts into server-side fallbacks (beta header `server-side-fallback-2026-07-01`, `fallbacks=[{"model": "claude-opus-4-8"}]`), so an Opus 5 safety-classifier decline re-runs automatically on Opus 4.8 and those verdicts are used; the serving model is recorded in the run audit row. A final `stop_reason == "refusal"` (whole chain refused) fails the run with nothing applied.
 - Backend tests: fake-session style (`tests/fakes.py`), run with `python -m pytest` from `backend/`. Frontend: `npm run build` must pass; lint is red on main (known baseline — don't try to fix unrelated lint).
 - Work happens on branch `feat/timeline-ai-review` in worktree `F:/Users/WCEdm/Documents/Developer/descubre/.claude/worktrees/timeline-t4-look`.
 
@@ -670,8 +671,8 @@ def test_run_truncated_response_fails_applies_nothing(monkeypatch):
 
 
 def test_run_refusal_fails_applies_nothing(monkeypatch):
-    # Opus 5 safety classifiers can decline a request (HTTP 200 +
-    # stop_reason "refusal"); unlikely on chronology text, but the guard
+    # The call carries a server-side fallback to Opus 4.8, so a final
+    # stop_reason of "refusal" means the WHOLE chain declined; the guard
     # must hold: fail the run, apply nothing.
     ev = _event(4)
     async def fake_call(content):
@@ -706,6 +707,10 @@ async def _call_review_model(user_content: str) -> tuple[str, str, dict]:
     last_err: Exception | None = None
     for attempt in range(_REVIEW_MAX_ATTEMPTS):
         try:
+            # Refusal fallback (user decision): an Opus 5 safety-classifier
+            # decline re-runs server-side on Opus 4.8 in the same call.
+            # `fallbacks` + its beta are newer than the SDK's typed surface,
+            # so they ride extra_body/extra_headers — harmless once typed.
             async with client.messages.stream(
                 model=REVIEW_MODEL,
                 max_tokens=64000,
@@ -714,11 +719,14 @@ async def _call_review_model(user_content: str) -> tuple[str, str, dict]:
                 messages=[{"role": "user", "content": user_content}],
                 output_config={"format": {"type": "json_schema",
                                           "schema": REVIEW_SCHEMA}},
+                extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01"},
+                extra_body={"fallbacks": [{"model": "claude-opus-4-8"}]},
             ) as stream:
                 response = await stream.get_final_message()
             raw = next((b.text for b in response.content if b.type == "text"), "")
             usage = {"input_tokens": response.usage.input_tokens,
-                     "output_tokens": response.usage.output_tokens}
+                     "output_tokens": response.usage.output_tokens,
+                     "served_by": response.model}
             return raw, response.stop_reason, usage
         except retryable as e:
             last_err = e
@@ -760,6 +768,7 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
     if stop_reason == "max_tokens":
         raise ReviewError("Review response truncated (max_tokens) — nothing applied")
     if stop_reason == "refusal":
+        # Whole fallback chain (Opus 5 → Opus 4.8) declined — nothing applied.
         raise ReviewError("Review declined by model safety classifiers — nothing applied")
 
     verdicts = parse_review_response(raw)
