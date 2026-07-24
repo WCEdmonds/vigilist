@@ -1913,3 +1913,24 @@ mark {
   border-color: var(--color-ink);
   box-shadow: var(--shadow-xs);
 }
+
+/* ── Merge review queue (entities view) ── */
+.merge-queue { border-top: 5px solid var(--color-marker); }
+.merge-row {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-neutral-100);
+}
+.merge-row:first-of-type { border-top: none; }
+.merge-count {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--color-neutral-500);
+}
+.merge-vs { color: var(--color-stamp); font-weight: 600; }
+.merge-rationale {
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  font-style: italic;
+  padding-left: var(--space-2);
+  margin-top: 2px;
+}

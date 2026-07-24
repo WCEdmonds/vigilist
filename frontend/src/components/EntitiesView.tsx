@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { acceptMergeSuggestion, listEntities, listMergeSuggestions, rejectMergeSuggestion, triggerEntityExtraction } from '../api/client';
+import { entityDisplayName } from '../utils/entityDisplay';
 import type { EntityListItem, MergeSuggestion } from '../types';
 import EntityPanel from './EntityPanel';
 
@@ -78,6 +79,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
       <div className="panel-header" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="btn btn-ghost btn-xs" onClick={onBack}>← Back</button>
         <span style={{ fontWeight: 600 }}>People &amp; Organizations ({total})</span>
+        <span className="bates-chip">CAST&nbsp;OF&nbsp;CHARACTERS</span>
         <input
           className="input"
           placeholder="Search entities…"
@@ -115,9 +117,10 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
 
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
         {suggestions.length > 0 && (
-          <div className="card" style={{ marginBottom: 16, padding: 'var(--space-4)' }}>
-            <div className="panel-header" style={{ padding: 0 }}>
-              Possible duplicates — same person? ({suggestions.length})
+          <div className="card merge-queue" style={{ marginBottom: 16, padding: 'var(--space-4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-1)' }}>
+              <span className="bates-chip">MERGE&nbsp;REVIEW&nbsp;·&nbsp;{suggestions.length}</span>
+              <span className="def-meta">The AI thinks these may be the same. Nothing merges without you.</span>
             </div>
             {resolveError && (
               <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-danger-700)' }}>
@@ -125,21 +128,23 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
               </div>
             )}
             {suggestions.map(s => (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-                <span>
+              <div key={s.id} className="merge-row">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(s.entity_a.id)}>
-                    {s.entity_a.canonical_name}
-                  </button> ({s.entity_a.mention_count})
-                  {' ↔ '}
+                    {entityDisplayName(s.entity_a.canonical_name)}
+                  </button>
+                  <span className="merge-count">{s.entity_a.mention_count}×</span>
+                  <span className="merge-vs">↔</span>
                   <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(s.entity_b.id)}>
-                    {s.entity_b.canonical_name}
-                  </button> ({s.entity_b.mention_count})
-                </span>
-                <span style={{ opacity: 0.6, fontSize: 'var(--text-xs)' }}>{s.rationale}</span>
-                <span style={{ marginLeft: 'auto' }}>
-                  <button className="btn btn-xs" disabled={busy === s.id} onClick={() => resolve(s.id, true)}>Same — merge</button>
-                  <button className="btn btn-ghost btn-xs" disabled={busy === s.id} onClick={() => resolve(s.id, false)}>Different</button>
-                </span>
+                    {entityDisplayName(s.entity_b.canonical_name)}
+                  </button>
+                  <span className="merge-count">{s.entity_b.mention_count}×</span>
+                  <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+                    <button className="btn btn-secondary btn-xs" disabled={busy === s.id} onClick={() => resolve(s.id, true)}>Same — merge</button>
+                    <button className="btn btn-ghost btn-xs" disabled={busy === s.id} onClick={() => resolve(s.id, false)}>Different</button>
+                  </span>
+                </div>
+                <div className="merge-rationale">"{s.rationale}"</div>
               </div>
             ))}
           </div>
@@ -152,18 +157,19 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           <tbody>
             {entities.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => openEntity(e.id)}>
-                <td>{e.canonical_name}</td>
+                <td style={{ fontWeight: 600 }}>{entityDisplayName(e.canonical_name)}</td>
                 <td><span className={`entity-dot entity-${e.entity_type}`} style={{ marginRight: 5 }}>●</span>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
-                <td>{e.mention_count}</td>
-                <td>{e.document_count}</td>
+                <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{e.mention_count.toLocaleString()}</td>
+                <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{e.document_count.toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {entities.length === 0 && (
           <div className="empty-state">
-            <div>No entities extracted yet.</div>
-            <button className="btn btn-xs" style={{ marginTop: 8 }} disabled={extracting} onClick={() => startExtraction(false)}>
+            <div style={{ fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)', fontWeight: 700 }}>No cast of characters yet.</div>
+            <div style={{ maxWidth: '46ch' }}>The AI reads the corpus and builds it: every person and organization, resolved across aliases, every relationship cited to its document.</div>
+            <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} disabled={extracting} onClick={() => startExtraction(false)}>
               {extracting ? 'Extracting…' : 'Extract entities'}
             </button>
           </div>
