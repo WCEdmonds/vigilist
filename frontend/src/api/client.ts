@@ -870,7 +870,7 @@ export function getTimeline(
 }
 
 /**
- * Correct or clear an event's date. Manager+ only (403 otherwise).
+ * Correct or clear an event's date. Any writer role (403 if read-only).
  * `eventDate` accepts YYYY, YYYY-MM or YYYY-MM-DD; pass null to clear the date
  * and its precision. Omitting `eventDate` leaves the date untouched.
  */
@@ -883,7 +883,7 @@ export const updateEvent = (
   body: JSON.stringify(body),
 });
 
-/** Delete a spurious event (participants cascade). Manager+ only. */
+/** Delete a spurious event (participants cascade). Any writer role (403 if read-only). */
 export const deleteEvent = (eventId: number) =>
   request<{ ok: boolean }>(`/api/events/${eventId}`, { method: 'DELETE' });
 
