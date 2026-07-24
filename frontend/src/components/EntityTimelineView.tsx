@@ -396,11 +396,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
         <div className="chrono-body">
           <div className={`chrono-card is-${tier}`}>
             <div className="chrono-card-head">
-              {/* Event types wear the record's stamp badge on carded tiers;
-                  routine lines stay quiet text so they never compete. */}
-              <span className={tier === 'routine' ? 'chrono-type' : 'stamp-badge stamp-badge--ink'}>
-                {TYPE_LABELS[e.event_type] || e.event_type}
-              </span>
+              <span className="chrono-type">{TYPE_LABELS[e.event_type] || e.event_type}</span>
               <div className="chrono-acts">
                 {confirming ? (
                   <span className="chrono-confirm">
@@ -459,7 +455,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
                 {e.bates_begin}{e.title ? ` · ${e.title}` : ''}
               </button>
               {e.participants.map(p => (
-                <button key={p.entity_id} className="entity-chip" onClick={() => openEntity(p.entity_id)}>
+                <button key={p.entity_id} className="chrono-party" onClick={() => openEntity(p.entity_id)}>
                   <span className={`entity-dot entity-${p.entity_type}`}>●</span>
                   {entityDisplayName(p.canonical_name, p.entity_type)}
                 </button>

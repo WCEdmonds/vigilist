@@ -1,25 +1,28 @@
 /* ──────────────────────────────────────────────────────────────────────────
-   Chronology (EntityTimelineView) — in the record language
-   (docs/design/design-language.md).
+   Chronology (EntityTimelineView) — the T4 ledger treatment.
 
    The screen is modelled on the artifact a litigator actually builds by hand:
    a case chronology. Three columns — a right-aligned date gutter set in
-   tabular mono, a continuous ink spine, and the event itself. Month/year
-   chapters are docket-style epoch stamps (mono, stamp blue) whose redact-
-   black rule notches the spine and sticks to the top of the scroll port, so
-   the reader always knows where in time they are.
+   tabular mono, a continuous navy ink spine, and the event itself. Month/year
+   chapters notch the spine in brass under a serif month and stick to the top
+   of the scroll port, so the reader always knows where in time they are.
 
    The spine is the data visualisation: each event's node glyph is sized and
    shaped by significance (1-5), so scanning the rail alone shows the shape of
    the case — long runs of hairline ticks (routine chatter) punctuated by the
-   filled discs and marker-ringed diamonds that actually moved it. Marker
-   yellow keeps its record meaning here: the AI marked these as pivotal.
-   ────────────────────────────────────────────────────────────────────────── */
+   filled discs and brass-ringed diamonds that actually moved it.
+
+   This screen keeps its own warmer palette deliberately: the navy/brass pair
+   below is scoped here so drift in the app-wide accent variables cannot mute
+   it. Only the squared segmented control is inherited from the record
+   language. ────────────────────────────────────────────────────────────── */
 
 .chrono {
   --chrono-gutter: 88px;
   --chrono-rail: 30px;
-  --chrono-spine-ink: rgba(20, 24, 29, 0.2);
+  --chrono-spine-ink: rgba(44, 62, 107, 0.22);
+  --chrono-brass: #c49a4a;
+  --chrono-notable: #6478a3;
   --chrono-page: var(--color-parchment-light);
 
   position: relative;
@@ -37,8 +40,8 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  background: rgba(251, 251, 248, 0.88);
-  border-bottom: 1px solid rgba(20, 24, 29, 0.1);
+  background: rgba(255, 253, 248, 0.86);
+  border-bottom: 1px solid rgba(44, 62, 107, 0.1);
   backdrop-filter: blur(6px);
   z-index: 5;
 }
@@ -81,7 +84,7 @@
   display: inline-flex;
   padding: 2px;
   gap: 2px;
-  border: 1px solid rgba(20, 24, 29, 0.15);
+  border: 1px solid rgba(44, 62, 107, 0.16);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.6);
 }
@@ -159,8 +162,8 @@
   max-height: 288px;
   overflow-y: auto;
   padding: var(--space-1);
-  background: var(--color-card);
-  border: 1px solid var(--color-neutral-200);
+  background: var(--color-ivory);
+  border: 1px solid rgba(44, 62, 107, 0.14);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
 }
@@ -264,10 +267,9 @@
   align-items: start;
 }
 
-/* ── Chapter (month / year) — the docket epoch stamp, spread across the
-   three-column grid: mono stamp-blue label in the gutter, the epoch's
-   redact-black rule notching the spine and running on across the body.
-   Notches the spine, sticks to the top. ── */
+/* ── Chapter (month / year) — a serif month over a mono year in the gutter,
+   the epoch's brass notch cutting the spine and a faint rule running on
+   across the body. Notches the spine, sticks to the top. ── */
 
 .chrono-chapter {
   position: sticky;
@@ -286,18 +288,18 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 3px;
-  padding: 0 var(--space-3) 4px 0;
+  padding: 0 var(--space-3) 2px 0;
   text-align: right;
 }
 
 .chrono-chapter-month {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
   font-weight: var(--font-semibold);
   line-height: 1;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--color-stamp);
+  color: var(--color-ink);
 }
 
 .chrono-chapter-year {
@@ -313,7 +315,7 @@
   align-self: stretch;
   width: 2px;
   min-height: 30px;
-  background: var(--color-redact);
+  background: var(--chrono-brass);
 }
 
 .chrono-chapter-rule {
@@ -327,8 +329,8 @@
 .chrono-chapter-rule::before {
   content: '';
   flex: 1;
-  height: 2px;
-  background: var(--color-redact);
+  height: 1px;
+  background: rgba(139, 115, 85, 0.3);
 }
 
 .chrono-chapter-tally {
@@ -355,7 +357,7 @@
 .chrono-row.is-routine .chrono-date { color: var(--color-neutral-400); }
 
 /* "c." marks a circa date — month- or year-only precision. */
-.chrono-circa { color: var(--color-brass); }
+.chrono-circa { color: var(--chrono-brass); }
 
 .chrono-node {
   display: flex;
@@ -376,7 +378,7 @@
   margin-top: 1px;
   background: var(--color-ink);
   transform: rotate(45deg);
-  box-shadow: 0 0 0 3px var(--chrono-page), 0 0 0 4.5px var(--color-marker-deep);
+  box-shadow: 0 0 0 3px var(--chrono-page), 0 0 0 4.5px var(--chrono-brass);
 }
 
 .chrono-glyph.is-key {
@@ -392,7 +394,7 @@
   margin-top: 1px;
   border-radius: var(--radius-full);
   background: var(--chrono-page);
-  border: 2px solid var(--color-stamp);
+  border: 2px solid var(--chrono-notable);
 }
 
 .chrono-glyph.is-routine {
@@ -403,9 +405,9 @@
 }
 
 /* In the legend the glyphs sit on the control bar, not the spine, so they
-   drop the paper halo. The marker ring stays — it is what "pivotal" means. */
+   drop the paper halo. The brass ring stays — it is what "pivotal" means. */
 .chrono-legend .chrono-glyph { box-shadow: none; }
-.chrono-legend .chrono-glyph.is-pivotal { box-shadow: 0 0 0 2px var(--color-marker-deep); }
+.chrono-legend .chrono-glyph.is-pivotal { box-shadow: 0 0 0 2px var(--chrono-brass); }
 
 /* ── Event card ── */
 
@@ -420,18 +422,17 @@
 .chrono-card.is-pivotal,
 .chrono-card.is-key {
   background: var(--color-ivory);
-  border: 1px solid rgba(20, 24, 29, 0.12);
+  border: 1px solid rgba(44, 62, 107, 0.12);
   border-left: 3px solid var(--color-ink);
   box-shadow: var(--shadow-md);
 }
 
-/* Marker edge on the pivotal card: the record's yellow means "someone —
-   here the AI — marked this", the same edge the merge-review card wears. */
-.chrono-card.is-pivotal { border-left-color: var(--color-marker); }
+/* Brass edge on the pivotal card — the same brass as the ring on its glyph. */
+.chrono-card.is-pivotal { border-left-color: var(--chrono-brass); }
 
 .chrono-card.is-notable {
   background: var(--color-card);
-  border: 1px solid rgba(20, 24, 29, 0.09);
+  border: 1px solid rgba(44, 62, 107, 0.09);
   box-shadow: var(--shadow-xs);
 }
 
@@ -455,8 +456,8 @@
   margin-bottom: 3px;
 }
 
-/* Carded tiers wear the app's .stamp-badge (components.css); .chrono-type is
-   the quiet inline form routine lines keep, so they never compete. */
+/* Event types stay quiet inline text on every tier — the glyph and the card
+   already carry the hierarchy, so the label never competes. */
 .chrono-type {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -491,7 +492,7 @@
   display: block;
   margin-top: 5px;
   padding-left: var(--space-2);
-  border-left: 3px solid var(--color-brass);
+  border-left: 3px solid var(--chrono-brass);
   font-size: var(--text-sm);
   font-style: italic;
   line-height: var(--leading-normal);
@@ -513,8 +514,7 @@
   margin-top: var(--space-2);
 }
 
-/* Bates cite: mono in stamp blue — data wears mono, stamp means interactive.
-   Participants use the app-wide .entity-chip (components.css). */
+/* Bates cite: mono in stamp blue — data wears mono, stamp means interactive. */
 .chrono-cite {
   border: 0;
   background: transparent;
@@ -528,6 +528,26 @@
 }
 
 .chrono-cite:hover { color: var(--color-ink); text-decoration: underline; }
+
+/* Participant pills — softer than the app-wide entity chip, so a crowded
+   event stays a single quiet line. */
+.chrono-party {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(44, 62, 107, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: var(--radius-full);
+  padding: 2px 9px 2px 6px;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-600);
+  cursor: pointer;
+}
+
+.chrono-party:hover {
+  border-color: rgba(44, 62, 107, 0.28);
+  color: var(--color-ink);
+}
 
 /* ── Per-event manager controls ── */
 
@@ -620,7 +640,7 @@
   text-align: left;
 }
 
-/* Rhymes with the chapter stamps, but grayed — these events sit off the
+/* Rhymes with the chapter labels, but grayed — these events sit off the
    record's timeline. */
 .chrono-undated-title {
   font-family: var(--font-mono);
@@ -675,6 +695,7 @@
 .chrono-opt:focus-visible,
 .chrono-act:focus-visible,
 .chrono-cite:focus-visible,
+.chrono-party:focus-visible,
 .chrono-search-clear:focus-visible,
 .chrono-undated-toggle:focus-visible {
   outline: 2px solid var(--color-stamp);
@@ -707,7 +728,7 @@
   .chrono-node { grid-column: 1; grid-row: 1 / span 2; padding-top: 2px; }
   .chrono-body { grid-column: 2; grid-row: 2; }
 
-  /* With no gutter the stamp has room to sit inline, left of the rule. */
+  /* With no gutter the label has room to sit inline, left of the rule. */
   .chrono-chapter-label {
     grid-column: 2;
     grid-row: 1;
