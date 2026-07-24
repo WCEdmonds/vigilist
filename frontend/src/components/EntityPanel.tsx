@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { deleteEntity, getEntity, getEntityConnections, getEntityMentions, renameEntity } from '../api/client';
@@ -86,6 +86,21 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
   const [savingName, setSavingName] = useState(false);
   const [deletingFor, setDeletingFor] = useState<string | null>(null);
 
+  // The panel isn't remounted (keyed) when the parent switches which entity
+  // it points at, so it's the same instance across the switch. That means
+  // saveName/handleDelete's async .then/.catch closures below capture the
+  // entityId prop as it was when the operation *started* -- comparing that
+  // captured value against itself inside the closure would always pass, so
+  // it can't detect "the user has since navigated to a different entity".
+  // entityIdRef.current always holds whichever entity the panel is showing
+  // *right now*, kept in sync via the effect below (refs may not be written
+  // during render under this repo's React Compiler lint config), so the
+  // closures can tell a stale resolution apart from a current one and skip
+  // mutating state for / closing the panel over an entity the in-flight
+  // operation was never about.
+  const entityIdRef = useRef(entityId);
+  useEffect(() => { entityIdRef.current = entityId; }, [entityId]);
+
   useEffect(() => {
     let cancelled = false;
     getEntity(entityId)
@@ -127,21 +142,28 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
       setNameError('Name cannot be empty.');
       return;
     }
+    const targetId = entityId; // the entity this particular rename applies to
     setSavingName(true);
     setNameError(null);
-    renameEntity(entityId, trimmed)
+    renameEntity(targetId, trimmed)
       .then(result => {
-        setProfile(prev => (prev && prev.id === entityId
-          ? { id: entityId, value: { ...prev.value, canonical_name: result.canonical_name, aliases: result.aliases } }
+        if (entityIdRef.current !== targetId) return; // navigated away — leave the now-shown entity's edit state alone
+        setProfile(prev => (prev && prev.id === targetId
+          ? { id: targetId, value: { ...prev.value, canonical_name: result.canonical_name, aliases: result.aliases } }
           : prev));
-        setSavingName(false);
         setEditingFor(null);
-        onRenamed?.(entityId, result.canonical_name, result.aliases);
+        onRenamed?.(targetId, result.canonical_name, result.aliases);
         showToast('Entity renamed.', 'success');
       })
       .catch(e => {
-        setSavingName(false);
+        if (entityIdRef.current !== targetId) return; // ditto — don't surface a stale error on a different, untouched entity
         setNameError(errText(e));
+      })
+      .finally(() => {
+        // Request-lifecycle flag, not entity-specific: must clear regardless of
+        // which entity the panel now shows, or a navigate-away-mid-rename
+        // leaves every future rename in this panel deadened by `if (savingName) return`.
+        setSavingName(false);
       });
   };
 
@@ -155,16 +177,26 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
     if (!window.confirm(
       'Delete this entity? This removes its mentions and connections. The underlying documents and events are not affected.',
     )) return;
-    setDeletingFor(entityId);
-    deleteEntity(entityId)
+    const targetId = entityId; // the entity this particular delete applies to
+    setDeletingFor(targetId);
+    deleteEntity(targetId)
       .then(() => {
-        onDeleted?.(entityId);
+        if (entityIdRef.current !== targetId) return; // navigated away — do not close the panel over a different, live entity
+        onDeleted?.(targetId);
         showToast('Entity deleted.', 'success');
         onClose(); // parent clears openEntityId, which unmounts this panel
       })
       .catch(e => {
-        setDeletingFor(null);
+        if (entityIdRef.current !== targetId) return; // ditto — don't surface a stale error on a different, untouched entity
         showToast(errText(e), 'error');
+      })
+      .finally(() => {
+        // Request-lifecycle flag, not entity-specific: must clear regardless of
+        // which entity the panel now shows. On success while still showing
+        // targetId this fires right before onClose()'s unmount (harmless); on
+        // success after navigating away, or on any failure, it's what stops
+        // "Deleting…" from sticking on targetId forever.
+        setDeletingFor(null);
       });
   };
 

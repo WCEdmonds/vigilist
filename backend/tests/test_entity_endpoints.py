@@ -389,16 +389,38 @@ def test_rename_rejects_whitespace_only_name(monkeypatch):
     assert exc.value.status_code == 422
 
 
-def test_rename_caps_at_column_length(monkeypatch):
+def test_rename_rejects_name_over_500_chars(monkeypatch):
+    # canonical_name is String(500); silently truncating would mangle the
+    # name in an e-discovery tool, so over-length names are rejected outright
+    # rather than accepted and cut down.
     _patch_writer(monkeypatch)
     ent = _entity()
     db = _entity_db(ent)
-    long_name = "A" * 600
+    long_name = "A" * 501
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.rename_entity(
+            entity_id=ENT_ID, body=EntityRenameRequest(canonical_name=long_name),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+    assert "500 characters" in exc.value.detail
+    assert ent.canonical_name == "Jorge Rivera"  # rejected -- not mutated
+
+
+def test_rename_into_existing_alias_does_not_self_alias(monkeypatch):
+    # Renaming "Jorge Rivera" (aliases ["J. Rivera"]) to "J. Rivera" should
+    # not leave the new canonical name redundantly listed as its own alias.
+    _patch_writer(monkeypatch)
+    ent = _entity()  # canonical "Jorge Rivera", aliases ["J. Rivera"]
+    db = _entity_db(ent)
     out = asyncio.run(er.rename_entity(
-        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name=long_name),
+        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="J. Rivera"),
         db=db, user=FakeUser()))
-    assert len(ent.canonical_name) == 500
-    assert len(out.canonical_name) == 500
+    assert ent.canonical_name == "J. Rivera"
+    assert "J. Rivera" not in ent.aliases
+    assert "Jorge Rivera" in ent.aliases
+    assert out.canonical_name == "J. Rivera"
+    assert "J. Rivera" not in out.aliases
+    assert "Jorge Rivera" in out.aliases
 
 
 def test_rename_denies_out_of_scope(monkeypatch):
