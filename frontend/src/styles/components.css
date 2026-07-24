@@ -1605,3 +1605,57 @@ mark {
   width: 100%;
   min-height: 0;
 }
+
+/* ── Record motifs (see docs/design/design-language.md) ── */
+
+/* Bates chip: mono, stamp-bordered label for sections & document IDs */
+.bates-chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.12em;
+  color: var(--color-stamp);
+  border: 1.5px solid var(--color-stamp);
+  border-radius: 2px;
+  padding: 2px 8px;
+  background: transparent;
+}
+
+/* Stamp badge: status as a rubber stamp (straight in tables/panels) */
+.stamp-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-stamp);
+  border: 2px solid var(--color-stamp);
+  border-radius: 2px;
+  padding: 1px 7px;
+}
+.stamp-badge--danger { color: var(--color-danger-600); border-color: var(--color-danger-600); }
+.stamp-badge--success { color: var(--color-success-600); border-color: var(--color-success-600); }
+
+/* Skeleton loader drawn as a redacted line */
+.skel-redact {
+  display: block;
+  height: 0.85em;
+  border-radius: 1px;
+  background: var(--color-redact);
+  opacity: 0.12;
+  animation: skel-redact-pulse 1.4s ease-in-out infinite;
+}
+@keyframes skel-redact-pulse { 50% { opacity: 0.22; } }
+@media (prefers-reduced-motion: reduce) {
+  .skel-redact { animation: none; }
+}
+
+/* Marker highlight: emphasis background — never a text color */
+.marker-hl {
+  background: var(--color-marker);
+  padding: 0 0.15em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}

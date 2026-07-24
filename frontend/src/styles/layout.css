@@ -343,17 +343,18 @@
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: var(--color-ink);
+  background: var(--color-redact);
   background-image:
-    radial-gradient(ellipse 80% 60% at 50% 0%, #3a5080, transparent),
-    radial-gradient(ellipse 60% 40% at 70% 100%, rgba(139, 115, 85, 0.08), transparent);
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(47, 61, 189, 0.28), transparent),
+    radial-gradient(ellipse 60% 40% at 70% 100%, rgba(255, 226, 74, 0.05), transparent);
 }
 
 .login-card {
   width: 380px;
   padding: var(--space-10);
-  background: var(--color-card);
-  border-radius: var(--radius-xl);
+  background: var(--color-parchment-light);
+  border-radius: var(--radius-sm);
+  border-top: 5px solid var(--color-marker);
   box-shadow: var(--shadow-xl), 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 
@@ -368,7 +369,7 @@
 
 .login-card .subtitle {
   font-size: var(--text-sm);
-  color: rgba(44, 62, 107, 0.4);
+  color: var(--color-ink-light);
   margin-bottom: var(--space-8);
   letter-spacing: 0.02em;
 }
@@ -381,7 +382,7 @@
   display: block;
   font-size: var(--text-xs);
   font-weight: var(--font-semibold);
-  color: rgba(44, 62, 107, 0.5);
+  color: var(--color-ink-light);
   margin-bottom: var(--space-1-5);
   text-transform: uppercase;
   letter-spacing: 0.06em;

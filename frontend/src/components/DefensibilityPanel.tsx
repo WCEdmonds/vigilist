@@ -86,7 +86,10 @@ export default function DefensibilityPanel({ productionId, tags }: Props) {
   return (
     <div className="card" style={{ marginBottom: 'var(--space-4)', padding: 'var(--space-4)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 className="section-title" style={{ margin: 0 }}>Defensibility</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+          <h2 className="section-title" style={{ margin: 0 }}>Defensibility</h2>
+          <span className="bates-chip">ON&nbsp;THE&nbsp;RECORD</span>
+        </div>
         <button className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}>
           {open ? 'Hide' : 'Show'}
         </button>
