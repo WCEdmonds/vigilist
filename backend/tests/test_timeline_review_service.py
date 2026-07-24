@@ -199,3 +199,12 @@ def test_unknown_and_foreign_ids_skip_not_crash():
     ])
     assert summary["skipped"] == 6
     assert summary["merged"] == summary["deleted"] == summary["edited"] == 0
+
+
+def test_merge_with_duplicate_ids_applies_once_no_crash():
+    # The schema can't enforce event_ids uniqueness; a duplicated absorbed
+    # id must not crash the batch (KeyError) — it merges once, cleanly.
+    keeper, dupe = _event(1), _event(2)
+    db = _dbase([keeper, dupe])
+    summary = _run(db, [_verdict(kind="merge", event_ids=[1, 2, 2], keep_id=1)])
+    assert summary["merged"] == 1 and db.deleted == [dupe]

@@ -226,7 +226,7 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
             if any(i not in events for i in ids):
                 skip(f"merge: unknown event in group {ids}")
                 continue
-            absorbed = [i for i in ids if i != keep_id]
+            absorbed = list(dict.fromkeys(i for i in ids if i != keep_id))
             if any(i in human_edited for i in absorbed):
                 skip(f"merge: group {ids} contains human-edited event")
                 continue
