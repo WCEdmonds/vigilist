@@ -854,8 +854,8 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
 export const autoResolveTypos = (productionId: number) =>
   request<{ merged: number }>(`/api/productions/${productionId}/merge-suggestions/auto-resolve-typos`, { method: 'POST' });
 
-export const triggerEntityExtraction = (productionId: number) =>
-  request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
+export const triggerEntityExtraction = (productionId: number, rebuild = false) =>
+  request<{ status: string }>(`/api/productions/${productionId}/extract-entities${rebuild ? '?rebuild=true' : ''}`, { method: 'POST' });
 
 export function getTimeline(productionId: number, entityId?: string, eventType?: string, page = 1, perPage = 50) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });

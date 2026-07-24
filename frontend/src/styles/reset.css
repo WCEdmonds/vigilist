@@ -34,8 +34,8 @@ body::before {
     0deg,
     transparent,
     transparent 23px,
-    rgba(139, 115, 85, 0.035) 23px,
-    rgba(139, 115, 85, 0.035) 24px
+    rgba(74, 84, 94, 0.035) 23px,
+    rgba(74, 84, 94, 0.035) 24px
   );
 }
 
@@ -69,12 +69,12 @@ table {
 }
 
 :focus-visible {
-  outline: 2px solid rgba(44, 62, 107, 0.5);
+  outline: 2px solid rgba(20, 24, 29, 0.5);
   outline-offset: 2px;
 }
 
 ::selection {
-  background: rgba(44, 62, 107, 0.12);
+  background: rgba(20, 24, 29, 0.12);
   color: var(--color-ink);
 }
 
@@ -87,11 +87,11 @@ table {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(44, 62, 107, 0.15);
+  background: rgba(20, 24, 29, 0.15);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(44, 62, 107, 0.25);
+  background: rgba(20, 24, 29, 0.25);
 }
 
 /* Progress bar accent */

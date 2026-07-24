@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getTimeline, listEntities } from '../api/client';
 import type { EntityListItem, TimelineEvent } from '../types';
 import EntityPanel from './EntityPanel';
+import { entityDisplayName } from '../utils/entityDisplay';
 
 interface Props {
   productionId: number;
@@ -75,8 +76,8 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
   const renderEvent = (e: TimelineEvent) => (
     <div key={e.event_id} className="card" style={{ padding: 'var(--space-3)', marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-        <span className="badge badge-gray">{TYPE_BADGES[e.event_type] || e.event_type}</span>
-        <span style={{ fontSize: 'var(--text-xs)', opacity: 0.7 }}>{dateLabel(e)}</span>
+        <span className="stamp-badge stamp-badge--ink">{TYPE_BADGES[e.event_type] || e.event_type}</span>
+        <span style={{ fontSize: 'var(--text-xs)', opacity: 0.7, fontFamily: 'var(--font-mono)' }}>{dateLabel(e)}</span>
         <button className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }}
                 onClick={() => onViewDocument(e.document_id)}>
           {e.bates_begin}{e.title ? ` — ${e.title}` : ''}
@@ -88,7 +89,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
           {e.participants.map(p => (
             <button key={p.entity_id} className="btn btn-ghost btn-xs" onClick={() => openEntity(p.entity_id)}>
               <span className={`entity-dot entity-${p.entity_type}`} style={{ marginRight: 4 }}>●</span>
-              {p.canonical_name}
+              {entityDisplayName(p.canonical_name, p.entity_type)}
             </button>
           ))}
         </div>
@@ -104,7 +105,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
         <select className="input" value={entityFilter} onChange={e => setEntityFilter(e.target.value)}
                 style={{ marginLeft: 'auto', maxWidth: 240 }}>
           <option value="">All people & orgs</option>
-          {filterOptions.map(o => <option key={o.id} value={o.id}>{o.canonical_name}</option>)}
+          {filterOptions.map(o => <option key={o.id} value={o.id}>{entityDisplayName(o.canonical_name, o.entity_type)}</option>)}
         </select>
         <select className="input" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ maxWidth: 150 }}>
           <option value="">All types</option>
@@ -115,7 +116,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
         {groups.map(g => (
           <div key={g.key}>
-            <div className="panel-header" style={{ padding: '8px 0' }}>{g.key}</div>
+            <div className="timeline-epoch">{g.key}</div>
             {g.items.map(renderEvent)}
           </div>
         ))}

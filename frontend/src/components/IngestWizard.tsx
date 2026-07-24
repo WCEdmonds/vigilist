@@ -333,7 +333,7 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
       style={{
         position: 'fixed', bottom: 24, right: 24, zIndex: 1100,
         width: 320, background: 'var(--color-neutral-900)', color: '#fff',
-        borderRadius: 'var(--radius-lg)', boxShadow: '0 8px 32px rgba(44,62,107,0.35)',
+        borderRadius: 'var(--radius-lg)', boxShadow: '0 8px 32px rgba(20, 24, 29,0.35)',
         overflow: 'hidden',
       }}
     >
@@ -525,7 +525,7 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
                     <div style={{
                       marginTop: 'var(--space-2)', padding: 'var(--space-2) var(--space-3)',
                       fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)',
-                      background: 'var(--color-neutral-50)', border: '1px solid rgba(44, 62, 107, 0.1)',
+                      background: 'var(--color-neutral-50)', border: '1px solid rgba(20, 24, 29, 0.1)',
                       borderRadius: 'var(--radius-md)', lineHeight: 1.5,
                     }}>
                       {emailContainerCount > 0 ? (
@@ -696,7 +696,7 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
                       .map(([label, n]) => (
                         <div key={label} style={{
                           padding: 'var(--space-1-5) var(--space-3)',
-                          background: 'var(--color-neutral-50)', border: '1px solid rgba(44, 62, 107, 0.1)',
+                          background: 'var(--color-neutral-50)', border: '1px solid rgba(20, 24, 29, 0.1)',
                           borderRadius: 'var(--radius-md)',
                         }}>
                           <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--color-ink)', fontVariantNumeric: 'tabular-nums' }}>{n}</div>

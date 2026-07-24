@@ -1,7 +1,31 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptMergeSuggestion, autoResolveTypos, listEntities, listMergeSuggestions, mergeEntities, rejectMergeSuggestion, triggerEntityExtraction } from '../api/client';
+import { acceptMergeSuggestion, autoResolveTypos, getEntityMentions, listEntities, listMergeSuggestions, mergeEntities, rejectMergeSuggestion, triggerEntityExtraction } from '../api/client';
+import { entityDisplayName } from '../utils/entityDisplay';
 import type { EntityListItem, MergeSuggestion } from '../types';
 import EntityPanel from './EntityPanel';
+
+interface CtxRow {
+  bates: string;
+  text: string;
+  surface: string;
+}
+
+/** Snippet with the entity's surface text marker-highlighted. */
+function CtxSnippet({ row }: { row: CtxRow }) {
+  const idx = row.surface ? row.text.toLowerCase().indexOf(row.surface.toLowerCase()) : -1;
+  return (
+    <div className="merge-ctx-row">
+      <span className="merge-ctx-bates">{row.bates}</span>
+      {idx === -1 ? <>…{row.text}…</> : (
+        <>
+          …{row.text.slice(0, idx)}
+          <span className="marker-hl">{row.text.slice(idx, idx + row.surface.length)}</span>
+          {row.text.slice(idx + row.surface.length)}…
+        </>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   productionId: number;
@@ -40,6 +64,58 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
   const [bulkBusy, setBulkBusy] = useState(false);
   const [typoMsg, setTypoMsg] = useState<string | null>(null);
 
+  // Hover context for merge review: "Isabella" vs "Isabel" is undecidable
+  // without seeing each name in its documents. Snippets fetch lazily on
+  // first hover and cache per entity.
+  const [ctxCache, setCtxCache] = useState<Record<string, CtxRow[] | 'loading'>>({});
+  const [hoverCtxId, setHoverCtxId] = useState<string | null>(null);
+
+  const loadContext = (id: string) => {
+    setCtxCache(prev => {
+      if (prev[id]) return prev;
+      getEntityMentions(id)
+        .then(m => {
+          const rows: CtxRow[] = [];
+          for (const d of m.documents) {
+            for (const mm of d.mentions) {
+              if (rows.length >= 3) break;
+              rows.push({ bates: d.bates_begin, text: mm.context_snippet || mm.surface_text, surface: mm.surface_text });
+            }
+            if (rows.length >= 3) break;
+          }
+          setCtxCache(p => ({ ...p, [id]: rows }));
+        })
+        .catch(() => setCtxCache(p => ({ ...p, [id]: [] })));
+      return { ...prev, [id]: 'loading' };
+    });
+  };
+
+  const mergeName = (e: EntityListItem, isKeeper?: boolean) => (
+    <span
+      className="merge-name-wrap"
+      onMouseEnter={() => { loadContext(e.id); setHoverCtxId(e.id); }}
+      onMouseLeave={() => setHoverCtxId(prev => (prev === e.id ? null : prev))}
+    >
+      <button
+        className="btn btn-ghost btn-xs"
+        style={{ fontWeight: 600, textDecoration: isKeeper ? 'underline' : undefined }}
+        onClick={() => openEntity(e.id)}
+      >
+        {entityDisplayName(e.canonical_name, e.entity_type)}
+      </button>
+      <span className="merge-count">{e.mention_count}×</span>
+      {hoverCtxId === e.id && (
+        <div className="merge-ctx-pop">
+          {(!ctxCache[e.id] || ctxCache[e.id] === 'loading') && <span className="def-meta">Pulling context…</span>}
+          {Array.isArray(ctxCache[e.id]) && (ctxCache[e.id] as CtxRow[]).length === 0 && (
+            <span className="def-meta">No mention snippets on file.</span>
+          )}
+          {Array.isArray(ctxCache[e.id]) && (ctxCache[e.id] as CtxRow[]).map((r, i) => <CtxSnippet key={i} row={r} />)}
+        </div>
+      )}
+    </span>
+  );
+
   const refresh = useCallback(() => {
     listEntities(productionId, search || undefined, typeFilter || undefined)
       .then(r => { setEntities(r.entities); setTotal(r.total); })
@@ -58,12 +134,17 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     return () => clearInterval(timer);
   }, [extracting, refresh]);
 
-  const startExtraction = async () => {
+  const startExtraction = async (rebuild = false) => {
+    if (rebuild && !window.confirm(
+      'Rebuild the entity graph? All entities, relationships, events, and merge history for this matter will be deleted and re-extracted from scratch.',
+    )) return;
     setExtractMsg(null);
     try {
-      await triggerEntityExtraction(productionId);
+      await triggerEntityExtraction(productionId, rebuild);
       setExtracting(true);
-      setExtractMsg('Extraction started — entities appear below as documents are processed.');
+      setExtractMsg(rebuild
+        ? 'Rebuild started — the old ontology is cleared; entities reappear below as documents are re-read.'
+        : 'Extraction started — entities appear below as documents are processed.');
     } catch (e) {
       setExtractMsg(errText(e));
     }
@@ -193,6 +274,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
       <div className="panel-header" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="btn btn-ghost btn-xs" onClick={onBack}>← Back</button>
         <span style={{ fontWeight: 600 }}>People &amp; Organizations ({total})</span>
+        <span className="bates-chip">CAST&nbsp;OF&nbsp;CHARACTERS</span>
         <input
           className="input"
           placeholder="Search entities…"
@@ -208,10 +290,18 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
         <button
           className="btn btn-xs"
           disabled={extracting}
-          onClick={startExtraction}
+          onClick={() => startExtraction(false)}
           title="Run AI entity extraction over this matter's documents (manager only)"
         >
           {extracting ? 'Extracting…' : 'Extract entities'}
+        </button>
+        <button
+          className="btn btn-ghost btn-xs"
+          disabled={extracting}
+          onClick={() => startExtraction(true)}
+          title="Delete this matter's entire ontology and re-extract from scratch (manager only)"
+        >
+          Rebuild
         </button>
       </div>
       {extractMsg && (
@@ -222,12 +312,13 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
 
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
         {suggestions.length > 0 && (
-          <div className="card" style={{ marginBottom: 16, padding: 'var(--space-4)' }}>
-            <div className="panel-header" style={{ padding: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} title="Select all suggestions">
+          <div className="card merge-queue" style={{ marginBottom: 16, padding: 'var(--space-4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-1)' }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} title="Select all suggestions">
                 <input type="checkbox" checked={allSelected} onChange={toggleAll} />
-                <span>Possible duplicates — same person? ({suggestions.length})</span>
+                <span className="bates-chip">MERGE&nbsp;REVIEW&nbsp;·&nbsp;{suggestions.length}</span>
               </label>
+              <span className="def-meta">The AI thinks these may be the same. Suggestions merge only when you say so.</span>
               <button
                 className="btn btn-ghost btn-xs"
                 style={{ marginLeft: 'auto' }}
@@ -239,7 +330,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
               </button>
             </div>
             {typoMsg && (
-              <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--text-xs)', opacity: 0.8 }}>
+              <div className="def-meta" style={{ marginTop: 'var(--space-2)' }}>
                 {typoMsg}
               </div>
             )}
@@ -253,8 +344,8 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
               position: 'sticky', top: 0, zIndex: 1,
               display: 'flex', alignItems: 'center', gap: 8,
               padding: '6px 0', marginTop: 'var(--space-2)',
-              background: 'var(--color-surface, #fff)',
-              borderBottom: '1px solid var(--color-border, #e5e7eb)',
+              background: 'var(--color-card)',
+              borderBottom: '1px solid var(--color-neutral-100)',
             }}>
               <button
                 className="btn btn-xs"
@@ -275,14 +366,14 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
               const keeper = keeperId(s);
               const rowBusy = busy === s.id || bulkBusy;
               return (
-                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(s.id)}
-                    onChange={() => toggleRow(s.id)}
-                    title="Select for bulk action"
-                  />
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <div key={s.id} className="merge-row">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(s.id)}
+                      onChange={() => toggleRow(s.id)}
+                      title="Select for bulk action"
+                    />
                     <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }} title="Keep this spelling as canonical">
                       <input
                         type="radio"
@@ -291,15 +382,8 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
                         onChange={() => setKeeper(s.id, s.entity_a.id)}
                       />
                     </label>
-                    <button
-                      className="btn btn-ghost btn-xs"
-                      style={{ fontWeight: 600, textDecoration: keeper === s.entity_a.id ? 'underline' : 'none' }}
-                      onClick={() => openEntity(s.entity_a.id)}
-                    >
-                      {s.entity_a.canonical_name}
-                    </button>
-                    <span style={{ opacity: 0.6 }}>({s.entity_a.mention_count})</span>
-                    <span style={{ opacity: 0.6 }}>{' ↔ '}</span>
+                    {mergeName(s.entity_a, keeper === s.entity_a.id)}
+                    <span className="merge-vs">↔</span>
                     <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }} title="Keep this spelling as canonical">
                       <input
                         type="radio"
@@ -308,20 +392,13 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
                         onChange={() => setKeeper(s.id, s.entity_b.id)}
                       />
                     </label>
-                    <button
-                      className="btn btn-ghost btn-xs"
-                      style={{ fontWeight: 600, textDecoration: keeper === s.entity_b.id ? 'underline' : 'none' }}
-                      onClick={() => openEntity(s.entity_b.id)}
-                    >
-                      {s.entity_b.canonical_name}
-                    </button>
-                    <span style={{ opacity: 0.6 }}>({s.entity_b.mention_count})</span>
-                  </span>
-                  <span style={{ opacity: 0.6, fontSize: 'var(--text-xs)' }}>{s.rationale}</span>
-                  <span style={{ marginLeft: 'auto' }}>
-                    <button className="btn btn-xs" disabled={rowBusy} onClick={() => mergeSuggestion(s)}>Same — merge</button>
-                    <button className="btn btn-ghost btn-xs" disabled={rowBusy} onClick={() => resolve(s.id, false)}>Different</button>
-                  </span>
+                    {mergeName(s.entity_b, keeper === s.entity_b.id)}
+                    <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+                      <button className="btn btn-secondary btn-xs" disabled={rowBusy} onClick={() => mergeSuggestion(s)}>Same — merge</button>
+                      <button className="btn btn-ghost btn-xs" disabled={rowBusy} onClick={() => resolve(s.id, false)}>Different</button>
+                    </span>
+                  </div>
+                  <div className="merge-rationale">"{s.rationale}"</div>
                 </div>
               );
             })}
@@ -335,18 +412,19 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           <tbody>
             {entities.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => openEntity(e.id)}>
-                <td>{e.canonical_name}</td>
-                <td>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
-                <td>{e.mention_count}</td>
-                <td>{e.document_count}</td>
+                <td style={{ fontWeight: 600 }}>{entityDisplayName(e.canonical_name, e.entity_type)}</td>
+                <td><span className={`entity-dot entity-${e.entity_type}`} style={{ marginRight: 5 }}>●</span>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
+                <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{e.mention_count.toLocaleString()}</td>
+                <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{e.document_count.toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {entities.length === 0 && (
           <div className="empty-state">
-            <div>No entities extracted yet.</div>
-            <button className="btn btn-xs" style={{ marginTop: 8 }} disabled={extracting} onClick={startExtraction}>
+            <div style={{ fontFamily: 'var(--font-serif)', fontSize: 'var(--text-lg)', fontWeight: 700 }}>No cast of characters yet.</div>
+            <div style={{ maxWidth: '46ch' }}>The AI reads the corpus and builds it: every person and organization, resolved across aliases, every relationship cited to its document.</div>
+            <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} disabled={extracting} onClick={() => startExtraction(false)}>
               {extracting ? 'Extracting…' : 'Extract entities'}
             </button>
           </div>

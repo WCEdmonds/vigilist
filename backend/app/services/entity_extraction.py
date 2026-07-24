@@ -63,6 +63,7 @@ Rules:
 - surface_forms MUST be verbatim substrings of the document text — never normalize, expand, or correct spelling. Include the name itself if it appears verbatim.
 - "participants", "source" and "target" must use the "name" of an entity in "entities".
 - Skip generic references ("the plaintiff", "opposing counsel") that are never tied to a name.
+- Do NOT extract litigation-process machinery: courts as institutions ("the Court", "Superior Court of ..."), judges acting as the court, court reporters and court-reporting/transcription/stenography companies, court clerks, notaries, or bare party labels ("Plaintiff", "Defendant"). The cast that matters is the dispute's actual actors: the parties by name, their people and companies, and counsel.
 - Only include relationships the document itself states or clearly shows; never infer from mere co-occurrence.
 - Never include character offsets or positions; return only verbatim strings.
 - Respond with ONLY the JSON object, no other text."""
@@ -70,6 +71,28 @@ Rules:
 
 def build_extraction_prompt(document_text: str) -> str:
     return f"## Document Text\n\n{document_text}\n\nExtract entities, events, and relationships. Respond with JSON only."
+
+
+# Litigation-process machinery — courts, reporters, clerks, notaries, party
+# placeholders — is prompt-excluded above; this filter is the guarantee, so
+# noise the model extracts anyway never reaches the ontology. Kept in sync
+# with frontend/src/utils/entityDisplay.ts (the display-level filter for
+# corpora extracted before this rule existed).
+_PROCESS_NOISE_PATTERNS = [
+    re.compile(r"^the court$", re.I),
+    re.compile(r"court report(ing|er)", re.I),
+    re.compile(r"\b(district|superior|circuit|supreme|county|municipal|appellate|bankruptcy) court\b", re.I),
+    re.compile(r"^court of\b", re.I),
+    re.compile(r"\b(court clerk|clerk of)\b", re.I),
+    re.compile(r"^(plaintiffs?|defendants?|petitioners?|respondents?|appellants?|appellees?)$", re.I),
+    re.compile(r"^the (state|people|government)$", re.I),
+    re.compile(r"\bnotary\b", re.I),
+    re.compile(r"\b(stenograph|certified shorthand)", re.I),
+]
+
+
+def is_process_noise(name: str) -> bool:
+    return any(p.search(name) for p in _PROCESS_NOISE_PATTERNS)
 
 
 def _clean_str(v, limit: int = 500) -> str:
@@ -108,7 +131,7 @@ def parse_extraction_response(raw: str) -> dict:
             continue
         name = _clean_str(ent.get("name"))
         etype = _clean_str(ent.get("type"), 10)
-        if not name or etype not in ENTITY_TYPES:
+        if not name or etype not in ENTITY_TYPES or is_process_noise(name):
             continue
         forms = [_clean_str(f) for f in _as_list(ent.get("surface_forms")) if _clean_str(f)]
         entities.append({
