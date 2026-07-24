@@ -851,6 +851,9 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
   request<{ merge_id: number; winner_id: string }>(`/api/entities/merge`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ winner_id: winnerId, loser_id: loserId }) });
 
+export const autoResolveTypos = (productionId: number) =>
+  request<{ merged: number }>(`/api/productions/${productionId}/merge-suggestions/auto-resolve-typos`, { method: 'POST' });
+
 export const triggerEntityExtraction = (productionId: number) =>
   request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
 
