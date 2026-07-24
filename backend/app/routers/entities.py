@@ -353,10 +353,19 @@ async def rename_entity(
     new_name = body.canonical_name.strip()
     if not new_name:
         raise HTTPException(status_code=422, detail="canonical_name cannot be empty")
-    new_name = new_name[:500]  # cap at the canonical_name column length (String(500))
+    if len(new_name) > 500:
+        # canonical_name is String(500); silently truncating a name is worse
+        # than refusing it in an e-discovery tool -- reject instead of
+        # quietly mangling it, same posture as the empty-name case above.
+        raise HTTPException(status_code=422, detail="canonical_name exceeds 500 characters")
 
     old_name = entity.canonical_name
     aliases = list(entity.aliases or [])
+    # Drop any existing alias equal to the new canonical name -- otherwise
+    # renaming into an already-known alias (e.g. "Jorge Rivera" -> "J. Rivera"
+    # when "J. Rivera" is already aliased) leaves the new canonical name
+    # redundantly listed as its own alias.
+    aliases = [a for a in aliases if a != new_name]
     if old_name != new_name and old_name not in aliases:
         aliases = aliases + [old_name]
     # Reassign (not in-place mutate) so SQLAlchemy detects the JSONB change --
