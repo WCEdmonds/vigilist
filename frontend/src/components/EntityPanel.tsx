@@ -2,7 +2,37 @@ import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getEntity, getEntityConnections, getEntityMentions } from '../api/client';
-import type { EntityConnections, EntityMentionsPage, EntityProfile } from '../types';
+import { entityDisplayName } from '../utils/entityDisplay';
+import type { EntityConnection, EntityConnections, EntityMentionsPage, EntityProfile } from '../types';
+
+/** One row per counterpart+relationship: relationships are stored
+ * per-document (that's the citation trail), but the panel reads better
+ * aggregated — count of supporting documents, evidence quotes behind an
+ * expander. */
+interface ConnGroup {
+  key: string;
+  entityId: string;
+  name: string;
+  relationship: string;
+  count: number;
+  descriptions: string[];
+}
+
+function groupStated(stated: EntityConnection[]): ConnGroup[] {
+  const groups = new Map<string, ConnGroup>();
+  for (const c of stated) {
+    const rel = c.relationship_type || 'other';
+    const key = `${c.entity_id}|${rel}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, entityId: c.entity_id, name: entityDisplayName(c.canonical_name), relationship: rel.replace(/_/g, ' '), count: 0, descriptions: [] };
+      groups.set(key, g);
+    }
+    g.count += 1;
+    if (c.description && !g.descriptions.includes(c.description)) g.descriptions.push(c.description);
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
 
 interface Props {
   entityId: string;
@@ -29,6 +59,7 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
   const [mentions, setMentions] = useState<{ id: string; value: EntityMentionsPage } | null>(null);
   const [connections, setConnections] = useState<{ id: string; value: EntityConnections } | null>(null);
   const [error, setError] = useState<{ id: string; value: string } | null>(null);
+  const [openConnKey, setOpenConnKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,19 +140,34 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
         {currentConnections && (currentConnections.stated.length > 0 || currentConnections.cooccurrence.length > 0) && (
           <div style={{ marginBottom: 16 }}>
             <div className="panel-header" style={{ padding: 0, background: 'none', border: 'none' }}>Connections</div>
-            {currentConnections.stated.map((c, i) => (
-              <div key={`s${i}`} className="entity-conn">
-                <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => onOpenEntity(c.entity_id)}>
-                  {c.canonical_name}
+            {groupStated(currentConnections.stated).map(g => (
+              <div key={g.key} className="entity-conn">
+                <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => onOpenEntity(g.entityId)}>
+                  {g.name}
                 </button>
-                <span className="entity-rel">{c.relationship_type?.replace(/_/g, ' ')}</span>
-                {c.description && <div className="entity-conn-desc">"{c.description}"</div>}
+                <span className="entity-rel">{g.relationship}</span>
+                {g.count > 1 && <span className="entity-conn-count">·&nbsp;{g.count}&nbsp;DOCS</span>}
+                {g.descriptions.length > 0 && <div className="entity-conn-desc">"{g.descriptions[0]}"</div>}
+                {g.descriptions.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      className="entity-conn-more"
+                      onClick={() => setOpenConnKey(openConnKey === g.key ? null : g.key)}
+                    >
+                      {openConnKey === g.key ? 'Hide sources' : `${g.descriptions.length - 1} more source${g.descriptions.length === 2 ? '' : 's'}`}
+                    </button>
+                    {openConnKey === g.key && g.descriptions.slice(1).map((d, i) => (
+                      <div key={i} className="entity-conn-desc">"{d}"</div>
+                    ))}
+                  </>
+                )}
               </div>
             ))}
             {currentConnections.cooccurrence.map((c, i) => (
               <div key={`c${i}`} className="entity-conn">
                 <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => onOpenEntity(c.entity_id)}>
-                  {c.canonical_name}
+                  {entityDisplayName(c.canonical_name)}
                 </button>
                 <span className="entity-rel">together in {c.shared_doc_count} docs</span>
               </div>
