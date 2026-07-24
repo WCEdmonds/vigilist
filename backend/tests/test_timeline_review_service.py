@@ -255,7 +255,7 @@ def test_run_happy_path_applies_and_audits(monkeypatch):
 def test_run_truncated_response_fails_applies_nothing(monkeypatch):
     ev = _event(4)
     async def fake_call(content):
-        return "{\"verdicts\": [", "max_tokens", {}
+        return '{"verdicts": []}', "max_tokens", {}
     monkeypatch.setattr(tr, "_call_review_model", fake_call)
     db = _run_db([ev])
     with pytest.raises(tr.ReviewError):
@@ -269,7 +269,7 @@ def test_run_refusal_fails_applies_nothing(monkeypatch):
     # must hold: fail the run, apply nothing.
     ev = _event(4)
     async def fake_call(content):
-        return "", "refusal", {}
+        return '{"verdicts": []}', "refusal", {}
     monkeypatch.setattr(tr, "_call_review_model", fake_call)
     db = _run_db([ev])
     with pytest.raises(tr.ReviewError):
