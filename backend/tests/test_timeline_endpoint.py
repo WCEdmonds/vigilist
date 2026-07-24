@@ -12,9 +12,10 @@ from app.models import Entity, OntologyEvent
 from tests.fakes import FakeResult, FakeSession, FakeUser
 
 
-def _event(eid, d=None, precision="unknown", etype="meeting"):
+def _event(eid, d=None, precision="unknown", etype="meeting", significance=None, date_source_text=None):
     ev = OntologyEvent(production_id=1, event_type=etype, description=f"Event {eid}",
-                       event_date=d, date_precision=precision, document_id=uuid.uuid4())
+                       event_date=d, date_precision=precision, document_id=uuid.uuid4(),
+                       significance=significance, date_source_text=date_source_text)
     ev.id = eid
     return ev
 
@@ -87,6 +88,63 @@ def test_timeline_null_date_serializes_none(monkeypatch):
     ])
     out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
     assert out.events[0].event_date is None
+
+
+def test_timeline_returns_significance_and_source(monkeypatch):
+    _patch(monkeypatch)
+    ev = _event(20, d=date(2021, 6, 1), precision="month", significance=5,
+                date_source_text="filed on June 2021")
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=1)),
+        ("FROM ontology_events", FakeResult(rows=[(ev, "ABC-0100", "Complaint")])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
+    out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
+    e = out.events[0]
+    assert e.significance == 5
+    assert e.date_source_text == "filed on June 2021"
+
+
+def test_timeline_null_significance_defaults_to_three(monkeypatch):
+    _patch(monkeypatch)
+    ev = _event(21, significance=None, date_source_text=None)
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=1)),
+        ("FROM ontology_events", FakeResult(rows=[(ev, "ABC-0101", None)])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
+    out = asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
+    assert out.events[0].significance == 3
+    assert out.events[0].date_source_text is None
+
+
+def test_timeline_min_significance_default_filters_via_coalesce(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=0)),
+        ("FROM ontology_events", FakeResult(rows=[])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
+    asyncio.run(er.get_production_timeline(production_id=1, db=db, user=FakeUser()))
+    joined = "\n".join(db.executed)
+    # Default min_significance=3 must emit a COALESCE(significance, 3) >= N guard
+    # so null/legacy rows are treated as 3, not hidden. Assert the COMPILED SQL.
+    assert "coalesce(ontology_events.significance" in joined
+    assert ">=" in joined
+
+
+def test_timeline_min_significance_one_includes_all(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(responders=[
+        ("count(ontology_events", FakeResult(scalar=0)),
+        ("FROM ontology_events", FakeResult(rows=[])),
+        ("FROM event_participants", FakeResult(rows=[])),
+    ])
+    asyncio.run(er.get_production_timeline(
+        production_id=1, min_significance=1, db=db, user=FakeUser()))
+    joined = "\n".join(db.executed)
+    # min_significance=1 returns everything — no significance guard in SQL.
+    assert "coalesce(ontology_events.significance" not in joined
 
 
 def test_undated_count_distinct(monkeypatch):

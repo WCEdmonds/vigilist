@@ -62,6 +62,27 @@ def test_reset_deletes_clears_and_enqueues(monkeypatch):
     assert "UPDATE documents SET entities_extracted_at" in joined
 
 
+def test_reset_enqueues_after_commit(monkeypatch):
+    """The cleared entities_extracted_at watermark must be durably committed
+    BEFORE the re-extraction worker is enqueued, or the worker can read stale
+    state and skip documents. Assert commit precedes enqueue via a shared
+    call-order list (FakeSession.commit is otherwise a no-op)."""
+    _patch(monkeypatch, configured=True)
+    order = []
+
+    class OrderedSession(FakeSession):
+        async def commit(self):
+            order.append("commit")
+
+    monkeypatch.setattr(task_service, "enqueue_pipeline",
+                        lambda pid, *a, **k: order.append("enqueue"))
+    db = OrderedSession()
+    out = asyncio.run(er.reset_production_entities(
+        production_id=1, background_tasks=BackgroundTasks(), db=db, user=FakeUser()))
+    assert out == {"reset": True}
+    assert order == ["commit", "enqueue"]
+
+
 def test_reset_falls_back_to_background_when_unconfigured(monkeypatch):
     _patch(monkeypatch, configured=False)
     import app.services.pipeline as pipeline

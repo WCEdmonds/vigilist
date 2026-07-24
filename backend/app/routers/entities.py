@@ -16,13 +16,13 @@ from app.routers.auth import get_current_user
 from app.schemas import (
     ChipEntityOut, DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
     EntityDocMentionOut, EntityDocumentMentionsOut, EntitiesSummaryOut, EntityListItemOut,
-    EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, MentionSpanOut,
+    EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, EventEditRequest, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
     TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
     GraphNodeOut, GraphEdgeOut, GraphOut,
 )
 from app.services.audit import log_action
-from app.services.entity_extraction import EVENT_TYPES
+from app.services.entity_extraction import EVENT_TYPES, parse_event_date
 from app.services.entity_merge import merge_entities, undo_merge
 from app.services.entity_profile import generate_entity_overview, is_overview_stale
 
@@ -40,6 +40,22 @@ async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> E
     if entity is None or entity.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
+
+
+async def _get_scoped_event(db: AsyncSession, user: User, event_id: int) -> OntologyEvent:
+    """Load an event and 404 if it isn't in a production the user can access.
+    Mirrors _get_scoped_entity so out-of-scope events never leak."""
+    accessible = await get_accessible_production_ids(db, user)
+    event = await db.get(OntologyEvent, event_id)
+    if event is None or event.production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event
+
+
+async def _require_manager(db: AsyncSession, user: User, production_id: int) -> None:
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
 
 
 # Route note: Starlette matches routes in REGISTRATION order (first match wins),
@@ -347,17 +363,20 @@ async def reset_production_entities(
         .values(entities_extracted_at=None))
 
     from app.services import tasks as task_service
-    if task_service.is_configured():
-        task_service.enqueue_pipeline(production_id)
-        mode = "enqueued"
-    else:
-        from app.services.pipeline import run_ambient_pipeline
-        background_tasks.add_task(run_ambient_pipeline, production_id)
-        mode = "background"
+    mode = "enqueued" if task_service.is_configured() else "background"
 
     await log_action(db, user, "entities_reset", "production", str(production_id),
                      production_id=production_id, details={"mode": mode})
     await db.commit()
+
+    # Enqueue AFTER commit so the cleared entities_extracted_at watermark is
+    # durably visible before the re-extraction worker starts; otherwise the
+    # worker can read stale state and skip documents that look already-extracted.
+    if mode == "enqueued":
+        task_service.enqueue_pipeline(production_id)
+    else:
+        from app.services.pipeline import run_ambient_pipeline
+        background_tasks.add_task(run_ambient_pipeline, production_id)
     return {"reset": True}
 
 
@@ -520,6 +539,7 @@ async def get_production_timeline(
     production_id: int,
     entity_id: UUID | None = None,
     event_type: str | None = None,
+    min_significance: int = 3,
     page: int = 1,
     per_page: int = 50,
     db: AsyncSession = Depends(get_db),
@@ -532,6 +552,13 @@ async def get_production_timeline(
 
     base = select(OntologyEvent).where(OntologyEvent.production_id == production_id)
     count_base = select(func.count(OntologyEvent.id)).where(OntologyEvent.production_id == production_id)
+    # Significance filter: treat null (legacy/unrated) as 3 via COALESCE so
+    # those rows still surface at the default. min_significance=1 lets all
+    # events through (coalesced significance is always >= 1).
+    if min_significance > 1:
+        sig_filter = func.coalesce(OntologyEvent.significance, 3) >= min_significance
+        base = base.where(sig_filter)
+        count_base = count_base.where(sig_filter)
     if event_type in EVENT_TYPES:
         base = base.where(OntologyEvent.event_type == event_type)
         count_base = count_base.where(OntologyEvent.event_type == event_type)
@@ -569,12 +596,91 @@ async def get_production_timeline(
         events=[TimelineEventOut(
             event_id=ev.id, description=ev.description, event_type=ev.event_type,
             event_date=ev.event_date.isoformat() if ev.event_date else None,
-            date_precision=ev.date_precision, document_id=ev.document_id,
+            date_precision=ev.date_precision,
+            # Null significance (legacy/unrated) presents as the default 3,
+            # matching the COALESCE used in the filter above.
+            significance=ev.significance if ev.significance is not None else 3,
+            date_source_text=ev.date_source_text,
+            document_id=ev.document_id,
             bates_begin=bates, title=title,
             participants=participants_by_event.get(ev.id, []),
         ) for ev, bates, title in rows],
         total=total, undated_count=undated_count,
     )
+
+
+_DATE_PRECISIONS = {"day", "month", "year", "unknown"}
+
+
+def _event_out(ev: OntologyEvent) -> dict:
+    return {
+        "event_id": ev.id,
+        "event_type": ev.event_type,
+        "description": ev.description,
+        "event_date": ev.event_date.isoformat() if ev.event_date else None,
+        "date_precision": ev.date_precision,
+        "significance": ev.significance if ev.significance is not None else 3,
+        "date_source_text": ev.date_source_text,
+        "document_id": str(ev.document_id),
+    }
+
+
+@router.patch("/events/{event_id}")
+async def edit_event(
+    event_id: int,
+    body: EventEditRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Correct or clear an event's date/precision. Manager+ only, scoped to an
+    accessible production (404 otherwise), audit-logged."""
+    event = await _get_scoped_event(db, user, event_id)
+    await _require_manager(db, user, event.production_id)
+
+    if body.date_precision is not None and body.date_precision not in _DATE_PRECISIONS:
+        raise HTTPException(status_code=422, detail="Invalid date_precision")
+
+    date_provided = "event_date" in body.model_fields_set
+    if date_provided:
+        if body.event_date is None:
+            # Explicit null clears both date and precision.
+            event.event_date = None
+            event.date_precision = "unknown"
+        else:
+            parsed_date, parsed_precision = parse_event_date(body.event_date)
+            if parsed_date is None:
+                raise HTTPException(status_code=422, detail="Unparseable event_date (year required)")
+            event.event_date = parsed_date
+            # Explicit precision wins over the one derived from the date shape.
+            event.date_precision = body.date_precision or parsed_precision
+    elif body.date_precision is not None:
+        event.date_precision = body.date_precision
+
+    await log_action(db, user, "event_edited", "ontology_event", str(event_id),
+                     production_id=event.production_id,
+                     details={"event_date": event.event_date.isoformat() if event.event_date else None,
+                              "date_precision": event.date_precision})
+    await db.commit()
+    return _event_out(event)
+
+
+@router.delete("/events/{event_id}")
+async def delete_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a spurious event (event_participants cascade via FK). Manager+
+    only, scoped to an accessible production (404 otherwise), audit-logged."""
+    event = await _get_scoped_event(db, user, event_id)
+    await _require_manager(db, user, event.production_id)
+    production_id = event.production_id
+
+    await db.delete(event)
+    await log_action(db, user, "event_deleted", "ontology_event", str(event_id),
+                     production_id=production_id, details={})
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/productions/{production_id}/graph", response_model=GraphOut)

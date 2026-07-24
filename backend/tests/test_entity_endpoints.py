@@ -2,16 +2,19 @@
 
 import asyncio
 import uuid
+from datetime import date
 
 import pytest
 from fastapi import HTTPException
 
 import app.routers.entities as er
-from app.models import Entity
+from app.models import Entity, OntologyEvent
+from app.schemas import EventEditRequest
 from tests.fakes import FakeResult, FakeSession, FakeUser
 
 
 ENT_ID = uuid.uuid4()
+EVENT_ID = 42
 
 
 def _entity(production_id=1):
@@ -82,3 +85,112 @@ def test_get_entity_connections_denies_out_of_scope_entity(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(er.get_entity_connections(entity_id=ENT_ID, db=db, user=FakeUser()))
     assert exc.value.status_code == 404
+
+
+# ── PATCH / DELETE /api/events/{event_id} ──────────────────────────────────
+
+def _event(production_id=1, d=None, precision="unknown"):
+    ev = OntologyEvent(production_id=production_id, event_type="meeting",
+                       description="Board meeting", event_date=d,
+                       date_precision=precision, document_id=uuid.uuid4(),
+                       significance=4, date_source_text="minutes dated 2021")
+    ev.id = EVENT_ID
+    return ev
+
+
+def _patch_event(monkeypatch, accessible=(1,), role="manager"):
+    async def fake_accessible(db, user):
+        return list(accessible)
+
+    async def fake_role(db, user, production_id):
+        return role
+
+    async def fake_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(er, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(er, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(er, "log_action", fake_log)
+
+
+def _event_db(ev):
+    return FakeSession(get_objects={("OntologyEvent", EVENT_ID): ev})
+
+
+def test_patch_updates_date_and_precision(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event(d=None, precision="unknown")
+    db = _event_db(ev)
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(event_date="2021-06-15"),
+        db=db, user=FakeUser()))
+    assert ev.event_date == date(2021, 6, 15)
+    assert ev.date_precision == "day"
+    assert out["event_date"] == "2021-06-15" and out["date_precision"] == "day"
+
+
+def test_patch_clears_date_on_null(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event(d=date(2021, 6, 15), precision="day")
+    db = _event_db(ev)
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(event_date=None),
+        db=db, user=FakeUser()))
+    assert ev.event_date is None
+    assert ev.date_precision == "unknown"
+    assert out["event_date"] is None and out["date_precision"] == "unknown"
+
+
+def test_patch_rejects_bad_precision(monkeypatch):
+    _patch_event(monkeypatch)
+    db = _event_db(_event())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.edit_event(
+            event_id=EVENT_ID, body=EventEditRequest(date_precision="decade"),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_patch_denies_out_of_scope(monkeypatch):
+    _patch_event(monkeypatch, accessible=(2,))  # event is in production 1
+    db = _event_db(_event(production_id=1))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.edit_event(
+            event_id=EVENT_ID, body=EventEditRequest(date_precision="day"),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_patch_manager_gate(monkeypatch):
+    _patch_event(monkeypatch, role="readonly")
+    db = _event_db(_event())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.edit_event(
+            event_id=EVENT_ID, body=EventEditRequest(date_precision="day"),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 403
+
+
+def test_delete_removes_event(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event()
+    db = _event_db(ev)
+    out = asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
+    assert out == {"ok": True}
+    assert ev in db.deleted
+
+
+def test_delete_denies_out_of_scope(monkeypatch):
+    _patch_event(monkeypatch, accessible=(2,))  # event is in production 1
+    db = _event_db(_event(production_id=1))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_delete_manager_gate(monkeypatch):
+    _patch_event(monkeypatch, role="readonly")
+    db = _event_db(_event())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
+    assert exc.value.status_code == 403

@@ -711,6 +711,8 @@ class TimelineEventOut(BaseModel):
     event_type: str
     event_date: str | None
     date_precision: str
+    significance: int
+    date_source_text: str | None
     document_id: UUID4
     bates_begin: str
     title: str | None
@@ -721,6 +723,14 @@ class TimelinePageOut(BaseModel):
     events: list[TimelineEventOut]
     total: int
     undated_count: int
+
+
+class EventEditRequest(BaseModel):
+    # event_date: omit to leave unchanged, explicit null to clear the date,
+    # or an ISO/YYYY[-MM[-DD]] string to set it. Distinguish omitted-vs-null
+    # via model_fields_set at the endpoint.
+    event_date: str | None = None
+    date_precision: str | None = None
 
 
 class EntityListItemOut(BaseModel):
