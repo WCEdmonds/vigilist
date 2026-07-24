@@ -294,3 +294,95 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
             skip(f"unknown verdict kind {kind!r}")
 
     return summary
+
+
+# ── Model call + orchestration ──
+
+async def _call_review_model(user_content: str) -> tuple[str, str, dict]:
+    """One structured-output review call. Returns (raw_json, stop_reason,
+    usage). Streaming because 64k max_tokens exceeds non-streaming SDK
+    limits. Raises ReviewError when attempts are exhausted."""
+    if not settings.anthropic_api_key:
+        raise ReviewError("No Anthropic API key configured")
+    import anthropic  # lazy: keep the SDK off the startup/alembic path
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    retryable = _retryable_errors()
+    last_err: Exception | None = None
+    for attempt in range(_REVIEW_MAX_ATTEMPTS):
+        try:
+            # Refusal fallback (user decision): an Opus 5 safety-classifier
+            # decline re-runs server-side on Opus 4.8 in the same call.
+            # `fallbacks` + its beta are newer than the SDK's typed surface,
+            # so they ride extra_body/extra_headers — harmless once typed.
+            async with client.messages.stream(
+                model=REVIEW_MODEL,
+                max_tokens=64000,
+                thinking={"type": "adaptive"},
+                system=REVIEW_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_content}],
+                output_config={"format": {"type": "json_schema",
+                                          "schema": REVIEW_SCHEMA}},
+                extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01"},
+                extra_body={"fallbacks": [{"model": "claude-opus-4-8"}]},
+            ) as stream:
+                response = await stream.get_final_message()
+            raw = next((b.text for b in response.content if b.type == "text"), "")
+            usage = {"input_tokens": response.usage.input_tokens,
+                     "output_tokens": response.usage.output_tokens,
+                     "served_by": response.model}
+            return raw, response.stop_reason, usage
+        except retryable as e:
+            last_err = e
+            status = getattr(e, "status_code", None)
+            if status is not None and status not in (408, 429) and status < 500:
+                raise ReviewError(f"Review call failed with status {status}") from e
+            logger.warning("Timeline review attempt %d/%d failed: %s",
+                           attempt + 1, _REVIEW_MAX_ATTEMPTS, e)
+            if attempt < _REVIEW_MAX_ATTEMPTS - 1:
+                await _asyncio.sleep(2 * (attempt + 1))
+    raise ReviewError(f"Review call failed after {_REVIEW_MAX_ATTEMPTS} attempts: {last_err}")
+
+
+async def run_timeline_review(db, production_id: int, actor) -> dict:
+    """Load the production's timeline, review it in one model call, apply
+    the verdicts, and audit the run. Caller owns the transaction; raises
+    ReviewError on model failure/truncation (nothing applied)."""
+    rows = (await db.execute(
+        select(OntologyEvent, Document.bates_begin)
+        .join(Document, OntologyEvent.document_id == Document.id)
+        .where(OntologyEvent.production_id == production_id))).all()
+    events = [r[0] for r in rows]
+    if not events:
+        return {"status": "empty", "merged": 0, "deleted": 0, "edited": 0,
+                "skipped": 0, "skip_reasons": []}
+    bates = {r[0].id: r[1] for r in rows}
+
+    name_rows = (await db.execute(
+        select(EventParticipant.event_id, Entity.canonical_name)
+        .join(Entity, EventParticipant.entity_id == Entity.id)
+        .where(EventParticipant.event_id.in_([e.id for e in events])))).all()
+    participants: dict[int, list[str]] = {}
+    for ev_id, name in name_rows:
+        participants.setdefault(ev_id, []).append(name)
+
+    serialized = serialize_timeline(events, bates, participants)
+    raw, stop_reason, usage = await _call_review_model(
+        build_review_user_content(serialized, len(events)))
+    if stop_reason == "max_tokens":
+        raise ReviewError("Review response truncated (max_tokens) — nothing applied")
+    if stop_reason == "refusal":
+        # Whole fallback chain (Opus 5 → Opus 4.8) declined — nothing applied.
+        raise ReviewError("Review declined by model safety classifiers — nothing applied")
+
+    verdicts = parse_review_response(raw)
+    summary = await apply_verdicts(db, production_id, verdicts, actor)
+    summary["status"] = "done"
+    await log_action(db, actor, "timeline_review_completed", "production",
+                     str(production_id), production_id=production_id,
+                     details={"model": REVIEW_MODEL, "usage": usage,
+                              "event_count": len(events),
+                              "verdict_count": len(verdicts),
+                              **{k: summary[k] for k in
+                                 ("merged", "deleted", "edited", "skipped")}})
+    return summary

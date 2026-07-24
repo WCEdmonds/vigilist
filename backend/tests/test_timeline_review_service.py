@@ -208,3 +208,70 @@ def test_merge_with_duplicate_ids_applies_once_no_crash():
     db = _dbase([keeper, dupe])
     summary = _run(db, [_verdict(kind="merge", event_ids=[1, 2, 2], keep_id=1)])
     assert summary["merged"] == 1 and db.deleted == [dupe]
+
+
+def _run_db(events, bates_rows=None, name_rows=(), edited_ids=()):
+    """FakeSession for run_timeline_review: event+bates load, participant
+    names load, then apply_verdicts' three loads (order matters: first
+    matching substring wins, so the joined load precedes the bare one)."""
+    bates_rows = bates_rows if bates_rows is not None else [(e, None) for e in events]
+    return FakeSession(responders=[
+        ("JOIN documents", FakeResult(rows=bates_rows)),
+        ("JOIN entities", FakeResult(rows=list(name_rows))),
+        ("FROM audit_logs", FakeResult(rows=[(str(i),) for i in edited_ids])),
+        ("FROM event_participants", FakeResult(rows=[])),
+        ("FROM ontology_events", FakeResult(items=list(events))),
+    ])
+
+
+def test_run_empty_timeline_skips_model(monkeypatch):
+    called = []
+    async def fake_call(content):
+        called.append(content)
+        return "{}", "end_turn", {}
+    monkeypatch.setattr(tr, "_call_review_model", fake_call)
+    db = _run_db([])
+    out = asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
+    assert out["status"] == "empty" and called == []
+
+
+def test_run_happy_path_applies_and_audits(monkeypatch):
+    ev = _event(4)
+    raw = json.dumps({"verdicts": [_verdict(kind="delete", event_id=4)]})
+    async def fake_call(content):
+        assert '"id":4' in content
+        return raw, "end_turn", {"input_tokens": 10, "output_tokens": 5}
+    monkeypatch.setattr(tr, "_call_review_model", fake_call)
+    db = _run_db([ev])
+    out = asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
+    assert out["status"] == "done" and out["deleted"] == 1
+    run_rows = [a for a in db.added if isinstance(a, AuditLog)
+                and a.action == "timeline_review_completed"]
+    assert len(run_rows) == 1
+    assert run_rows[0].details["model"] == tr.REVIEW_MODEL
+    assert run_rows[0].details["usage"] == {"input_tokens": 10, "output_tokens": 5}
+
+
+def test_run_truncated_response_fails_applies_nothing(monkeypatch):
+    ev = _event(4)
+    async def fake_call(content):
+        return "{\"verdicts\": [", "max_tokens", {}
+    monkeypatch.setattr(tr, "_call_review_model", fake_call)
+    db = _run_db([ev])
+    with pytest.raises(tr.ReviewError):
+        asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
+    assert db.deleted == []
+
+
+def test_run_refusal_fails_applies_nothing(monkeypatch):
+    # The call carries a server-side fallback to Opus 4.8, so a final
+    # stop_reason of "refusal" means the WHOLE chain declined; the guard
+    # must hold: fail the run, apply nothing.
+    ev = _event(4)
+    async def fake_call(content):
+        return "", "refusal", {}
+    monkeypatch.setattr(tr, "_call_review_model", fake_call)
+    db = _run_db([ev])
+    with pytest.raises(tr.ReviewError):
+        asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
+    assert db.deleted == []
