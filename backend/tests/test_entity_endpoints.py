@@ -161,7 +161,7 @@ def test_patch_denies_out_of_scope(monkeypatch):
     assert exc.value.status_code == 404
 
 
-def test_patch_manager_gate(monkeypatch):
+def test_patch_readonly_gate(monkeypatch):
     _patch_event(monkeypatch, role="readonly")
     db = _event_db(_event())
     with pytest.raises(HTTPException) as exc:
@@ -169,6 +169,20 @@ def test_patch_manager_gate(monkeypatch):
             event_id=EVENT_ID, body=EventEditRequest(date_precision="day"),
             db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+def test_patch_allows_reviewer(monkeypatch):
+    # Timeline events are AI-extracted working data, not legal record, so
+    # editing is a writer-level action (admin/manager/reviewer), not
+    # manager-only.
+    _patch_event(monkeypatch, role="reviewer")
+    ev = _event(d=None, precision="unknown")
+    db = _event_db(ev)
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(date_precision="day"),
+        db=db, user=FakeUser()))
+    assert ev.date_precision == "day"
+    assert out["date_precision"] == "day"
 
 
 def test_delete_removes_event(monkeypatch):
@@ -188,12 +202,23 @@ def test_delete_denies_out_of_scope(monkeypatch):
     assert exc.value.status_code == 404
 
 
-def test_delete_manager_gate(monkeypatch):
+def test_delete_readonly_gate(monkeypatch):
     _patch_event(monkeypatch, role="readonly")
     db = _event_db(_event())
     with pytest.raises(HTTPException) as exc:
         asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+def test_delete_allows_reviewer(monkeypatch):
+    # Same writer bar as tagging, notes, and entity merges -- reviewers may
+    # delete a spurious AI-extracted event, not just managers/admins.
+    _patch_event(monkeypatch, role="reviewer")
+    ev = _event()
+    db = _event_db(ev)
+    out = asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
+    assert out == {"ok": True}
+    assert ev in db.deleted
 
 
 # ── PATCH tolerant human date parsing (Finding 1) + derived precision (Finding 3) ──

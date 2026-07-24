@@ -711,10 +711,11 @@ async def edit_event(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Correct or clear an event's date/precision. Manager+ only, scoped to an
-    accessible production (404 otherwise), audit-logged."""
+    """Correct or clear an event's date/precision. Any writer role (not
+    readonly), scoped to an accessible production (404 otherwise),
+    audit-logged."""
     event = await _get_scoped_event(db, user, event_id)
-    await _require_manager(db, user, event.production_id)
+    await _require_writer(db, user, event.production_id)
 
     if body.date_precision is not None and body.date_precision not in _DATE_PRECISIONS:
         raise HTTPException(status_code=422, detail="Invalid date_precision")
@@ -759,12 +760,12 @@ async def delete_event(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Delete a spurious event (event_participants cascade via FK). Manager+
-    only, scoped to an accessible production (404 otherwise), audit-logged.
-    The event is hard-deleted, so the audit row's details snapshot is the
-    only surviving record of what was removed."""
+    """Delete a spurious event (event_participants cascade via FK). Any writer
+    role (not readonly), scoped to an accessible production (404 otherwise),
+    audit-logged. The event is hard-deleted, so the audit row's details
+    snapshot is the only surviving record of what was removed."""
     event = await _get_scoped_event(db, user, event_id)
-    await _require_manager(db, user, event.production_id)
+    await _require_writer(db, user, event.production_id)
     production_id = event.production_id
     snapshot = {
         "event_type": event.event_type,
