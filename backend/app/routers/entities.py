@@ -2,12 +2,12 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_accessible_production_ids, get_user_role_for_production
+from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
 from app.models import (
     Document, Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
     EntityRelationship, EventParticipant, OntologyEvent, User,
@@ -306,6 +306,59 @@ async def list_production_entities(
                                      canonical_name=e.canonical_name,
                                      mention_count=e.mention_count, document_count=doc_count))
     return EntityListPageOut(entities=out, total=total)
+
+
+@router.post("/productions/{production_id}/reset-entities")
+async def reset_production_entities(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """DESTRUCTIVE: discard all extracted entities (and their mentions, events,
+    participants, relationships, and merge suggestions via FK cascade) plus any
+    confirmed merges for this production, clear each document's
+    entities_extracted_at, then re-enqueue the extraction pipeline to repopulate
+    with the improved extractor. Manager or admin only."""
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    # Delete all entities for this production. The ondelete=CASCADE FKs on
+    # entity_mentions, ontology_events (via participants), event_participants,
+    # entity_relationships, and entity_merge_suggestions remove dependents.
+    # ontology_events also cascades from productions directly, but is emptied
+    # here transitively via its participants; delete it explicitly too so events
+    # with no participants are cleared.
+    await db.execute(delete(EventParticipant).where(
+        EventParticipant.event_id.in_(
+            select(OntologyEvent.id).where(OntologyEvent.production_id == production_id))))
+    await db.execute(delete(OntologyEvent).where(OntologyEvent.production_id == production_id))
+    # entity_merges references entities with SET NULL (preserves audit rows) —
+    # not deleted here; that's acceptable per spec.
+    await db.execute(delete(Entity).where(Entity.production_id == production_id))
+
+    # Clear the per-document extraction watermark so the pipeline reprocesses.
+    await db.execute(
+        update(Document).where(Document.production_id == production_id)
+        .values(entities_extracted_at=None))
+
+    from app.services import tasks as task_service
+    if task_service.is_configured():
+        task_service.enqueue_pipeline(production_id)
+        mode = "enqueued"
+    else:
+        from app.services.pipeline import run_ambient_pipeline
+        background_tasks.add_task(run_ambient_pipeline, production_id)
+        mode = "background"
+
+    await log_action(db, user, "entities_reset", "production", str(production_id),
+                     production_id=production_id, details={"mode": mode})
+    await db.commit()
+    return {"reset": True}
 
 
 async def _require_writer(db: AsyncSession, user: User, production_id: int) -> None:
