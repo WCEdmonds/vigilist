@@ -96,7 +96,7 @@ FILE_TYPE_EXTENSIONS = {
     "pdf": [".pdf"],
     "office": [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
     "image": [".png", ".jpg", ".jpeg", ".gif", ".bmp"],
-    "email": [".msg", ".eml"],
+    "email": [".msg", ".eml", ".mbox", ".pst", ".ost"],
 }
 
 

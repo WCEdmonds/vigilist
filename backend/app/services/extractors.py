@@ -20,7 +20,7 @@ class ExtractResult:
     extraction_error: str | None = None
 
 
-_TEXT_EXTS = {".txt", ".csv", ".md", ".log", ".json", ".xml", ".html", ".htm", ".rtf"}
+_TEXT_EXTS = {".txt", ".csv", ".md", ".log", ".json", ".xml", ".html", ".htm"}
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif", ".bmp"}
 # Extensions we deliberately do not handle here (email → SP4b; legacy binary Office).
 # Documented only — the routing catch-all handles these via fall-through.
@@ -77,6 +77,44 @@ def _extract_pptx(data: bytes) -> str:
     return "\n".join(parts)
 
 
+_ODT_XML_CAP = 50 * 1024 * 1024  # content.xml decompressed cap — bomb guard
+
+
+def _read_zip_member_bounded(zf, name: str, limit: int) -> bytes:
+    """Read a zip member with a hard output bound, enforced against actual
+    decompressed bytes (never the entry's claimed/uncompressed size, which is
+    attacker-controlled). Raises ValueError the moment the true decompressed
+    size would exceed ``limit`` — never buffers the full bomb in memory."""
+    chunks: list[bytes] = []
+    read = 0
+    with zf.open(name) as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            read += len(chunk)
+            if read > limit:
+                raise ValueError(f"{name} exceeds decompressed size limit")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _extract_odt(data: bytes) -> str:
+    import re
+    import zipfile as _zipfile
+    with _zipfile.ZipFile(io.BytesIO(data)) as zf:
+        xml = _read_zip_member_bounded(zf, "content.xml", _ODT_XML_CAP).decode("utf-8", errors="replace")
+    # <text:p>/<text:h> delimit paragraphs; strip all other tags.
+    xml = re.sub(r"</text:(p|h)>", "\n", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _extract_rtf(data: bytes) -> str:
+    from striprtf.striprtf import rtf_to_text
+    return rtf_to_text(data.decode("latin-1", errors="replace"), errors="ignore")
+
+
 def _extract_text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace").replace("\x00", "")
 
@@ -97,9 +135,15 @@ def extract(filename: str, data: bytes, ocr_fn=None) -> ExtractResult:
         if ext == ".xlsx":
             t = _extract_xlsx(data)
             return ExtractResult(t, "xlsx", _status_for(t))
-        if ext == ".pptx":
+        if ext in (".pptx", ".potx"):
             t = _extract_pptx(data)
-            return ExtractResult(t, "pptx", _status_for(t))
+            return ExtractResult(t, ext.lstrip("."), _status_for(t))
+        if ext == ".odt":
+            t = _extract_odt(data)
+            return ExtractResult(t, "odt", _status_for(t))
+        if ext == ".rtf":
+            t = _extract_rtf(data)
+            return ExtractResult(t, "rtf", _status_for(t))
         if ext in _TEXT_EXTS:
             t = _extract_text(data)
             return ExtractResult(t, ft, _status_for(t))

@@ -13,9 +13,9 @@ def get_file_type(native_path: str | None, page_count: int) -> str:
     VIDEO_EXTS = {"mp4", "mov", "avi", "wmv", "mkv", "webm"}
     AUDIO_EXTS = {"wav", "mp3", "aac", "flac", "ogg", "wma"}
     PDF_EXTS = {"pdf"}
-    EMAIL_EXTS = {"msg", "eml"}
+    EMAIL_EXTS = {"msg", "eml", "mbox", "pst", "ost"}
     SPREADSHEET_EXTS = {"xlsx", "xls", "csv"}
-    PRESENTATION_EXTS = {"pptx", "ppt"}
+    PRESENTATION_EXTS = {"pptx", "ppt", "potx"}
     IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "tiff"}
     if ext in VIDEO_EXTS: return "video"
     if ext in AUDIO_EXTS: return "audio"
