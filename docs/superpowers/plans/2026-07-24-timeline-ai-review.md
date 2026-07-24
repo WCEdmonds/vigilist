@@ -32,7 +32,7 @@
 - Modify: `backend/requirements.txt` (line 9: `anthropic>=0.52` → `anthropic>=0.116`)
 
 **Interfaces:**
-- Produces: `serialize_timeline(events, bates, participants) -> str`, `build_review_user_content(serialized: str, event_count: int) -> str`, `REVIEW_SYSTEM_PROMPT: str`, `REVIEW_SCHEMA: dict`, `parse_review_response(raw: str) -> list[dict]`, `ReviewError(Exception)`, `REVIEW_MODEL = "claude-opus-4-8"`, `REVIEW_MIN_CONFIDENCE = 0.8`. (`events`: list of `OntologyEvent`; `bates`: `dict[int, str | None]` by event id; `participants`: `dict[int, list[str]]` by event id.)
+- Produces: `serialize_timeline(events, bates, participants) -> str`, `build_review_user_content(serialized: str, event_count: int) -> str`, `REVIEW_SYSTEM_PROMPT: str`, `REVIEW_SCHEMA: dict`, `parse_review_response(raw: str) -> list[dict]`, `ReviewError(Exception)`, `REVIEW_MODEL = "claude-opus-5"`, `REVIEW_MIN_CONFIDENCE = 0.8`. (`events`: list of `OntologyEvent`; `bates`: `dict[int, str | None]` by event id; `participants`: `dict[int, list[str]]` by event id.)
 
 - [ ] **Step 1: Write the failing tests**
 
