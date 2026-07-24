@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getByBates, getPipeline, listEntities, runPipeline } from '../api/client';
+import { entityDisplayName, isEntityNoise } from '../utils/entityDisplay';
 import { showToast } from './Toast';
 import type { EntityListItem, PipelineInfo, PipelineStageState, PipelineStatus, ProductionInfo } from '../types';
 
@@ -68,6 +69,7 @@ interface CastMember {
   isKeyPlayer: boolean;
 }
 
+
 /**
  * The cast of characters: the brief's AI-designated key players first
  * (resolved to entities), then the most-mentioned entities that aren't
@@ -85,9 +87,11 @@ function buildCast(
     if (!kp.entity_id || seen.has(kp.entity_id)) continue;
     seen.add(kp.entity_id);
     const full = byId.get(kp.entity_id);
+    const name = full?.canonical_name ?? kp.name;
+    if (isEntityNoise(name)) continue;
     cast.push({
       id: kp.entity_id,
-      name: full?.canonical_name ?? kp.name,
+      name: entityDisplayName(name),
       entityType: full?.entity_type ?? 'person',
       mentionCount: full?.mention_count ?? null,
       isKeyPlayer: true,
@@ -95,9 +99,9 @@ function buildCast(
   }
   for (const e of topEntities) {
     if (cast.length >= CAST_SIZE) break;
-    if (seen.has(e.id)) continue;
+    if (seen.has(e.id) || isEntityNoise(e.canonical_name)) continue;
     seen.add(e.id);
-    cast.push({ id: e.id, name: e.canonical_name, entityType: e.entity_type, mentionCount: e.mention_count, isKeyPlayer: false });
+    cast.push({ id: e.id, name: entityDisplayName(e.canonical_name), entityType: e.entity_type, mentionCount: e.mention_count, isKeyPlayer: false });
   }
   return cast.slice(0, CAST_SIZE);
 }
@@ -130,7 +134,9 @@ export default function ProductionBrief({ production, onViewDocument, onPipeline
 
   useEffect(() => {
     let cancelled = false;
-    listEntities(production.id, undefined, undefined, 1, CAST_SIZE)
+    // Over-fetch: the noise filter (courts, reporters, clerks) thins the
+    // list, and the cast should still fill out to CAST_SIZE afterwards.
+    listEntities(production.id, undefined, undefined, 1, CAST_SIZE * 3)
       .then(p => { if (!cancelled) setTopEntities(p.entities); })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -271,16 +277,6 @@ export default function ProductionBrief({ production, onViewDocument, onPipeline
           <button type="button" className="brief-collapse-toggle" onClick={toggleCollapsed} aria-expanded={false}>
             <span className="brief-ai-mark">✦</span> Production Brief <span aria-hidden="true">▸</span>
           </button>
-          {cast.length > 0 && (
-            <div className="brief-cast-row brief-cast-row--compact">
-              {cast.slice(0, 5).map(m => (
-                <button key={m.id} type="button" className="cast-card" onClick={() => onOpenEntity?.(m.id)}>
-                  <span className={`entity-dot entity-${m.entityType}`}>●</span>
-                  <span className="cast-name">{m.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       );
     }
