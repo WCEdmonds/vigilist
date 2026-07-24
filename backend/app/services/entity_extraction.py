@@ -42,6 +42,8 @@ You MUST respond with ONLY a JSON object of this exact shape:
       "description": "Board approved the Series B financing",
       "type": "meeting",
       "date": "2019-03-15",
+      "date_source": "on March 15, 2019 the board met",
+      "significance": 4,
       "participants": ["Jorge Rivera", "Acme Corp"]
     }
   ],
@@ -59,7 +61,10 @@ Rules:
 - "type" for entities is "person" or "org".
 - "type" for events is one of: meeting, communication, payment, filing, agreement, other.
 - "type" for relationships is one of: employment, counsel, correspondent, party_to_agreement, family, other.
-- "date" is "YYYY-MM-DD", "YYYY-MM", "YYYY", or null if undated.
+- "date" is "YYYY-MM-DD", "YYYY-MM", "YYYY", or null if undated. Assign a "date" ONLY when the YEAR is determinable from the document — either explicitly stated in the text, or read from an email/message header timestamp. If only a month and day are present with no year (e.g. "March 18", "3/18"), OMIT the date (leave it null). NEVER guess or infer a year.
+- "date_source" is the exact verbatim phrase from the document that the date came from (e.g. "filed on January 8, 2020" or the header "Date: Wed, 8 Jan 2020 ..."). Use "" (empty string) when the event is undated.
+- SKIP recurring calendar references — holidays, birthdays, "end of year", "MLK Day" and the like — UNLESS the document ties them to a specific dated case action. Do not emit an event (and never fabricate a year) for a bare calendar reference.
+- "significance" is an integer 1–5 rating how pivotal the event is to the case: 5 = pivotal (verdict, ruling, filing of suit, termination, arrest, key admission); 4 = important legal/procedural step; 3 = substantive meeting, decision, or communication; 2 = routine logistics or scheduling; 1 = trivial greeting or pleasantry.
 - surface_forms MUST be verbatim substrings of the document text — never normalize, expand, or correct spelling. Include the name itself if it appears verbatim.
 - "participants", "source" and "target" must use the "name" of an entity in "entities".
 - Skip generic references ("the plaintiff", "opposing counsel") that are never tied to a name.
@@ -97,6 +102,16 @@ def is_process_noise(name: str) -> bool:
 
 def _clean_str(v, limit: int = 500) -> str:
     return str(v).strip()[:limit] if isinstance(v, (str, int, float)) else ""
+
+
+def _clamp_int(v, lo: int, hi: int, default: int) -> int:
+    """Coerce v to an int and clamp into [lo, hi]; return default when v is
+    missing, non-numeric, or otherwise uncoercible. Never raises."""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
 
 
 def _as_list(v, limit: int | None = None) -> list:
@@ -154,6 +169,8 @@ def parse_extraction_response(raw: str) -> dict:
             "description": desc,
             "type": etype if etype in EVENT_TYPES else "other",
             "date": _clean_str(ev.get("date"), 10) or None,
+            "date_source": _clean_str(ev.get("date_source"), 500),
+            "significance": _clamp_int(ev.get("significance"), 1, 5, 3),
             "participants": [_clean_str(p) for p in _as_list(ev.get("participants")) if _clean_str(p)],
         })
 
@@ -222,6 +239,9 @@ def parse_event_date(raw: str | None) -> tuple[date | None, str]:
     if not raw:
         return None, "unknown"
     raw = raw.strip()
+    # Year-required guard (Timeline v2): only accept a date anchored on a
+    # 4-digit year (YYYY[-MM[-DD]]). A month/day with no year — "March 18",
+    # "3/18", "03-18" — never matches and stays undated; we never invent a year.
     m = re.fullmatch(r"(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?", raw)
     if not m:
         return None, "unknown"
@@ -426,9 +446,16 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
 
     for ev in parsed["events"]:
         event_date, precision = parse_event_date(ev["date"])
+        # Invariant (spec): date_source_text is the provenance of an ACCEPTED
+        # date. If the event is undated (no year → event_date is None), leave
+        # date_source_text null so "date present but source null" stays a pure
+        # legacy/bad-data signal. .get() keeps this tolerant of older parses.
+        date_source = ev.get("date_source") or ""
         event = OntologyEvent(production_id=production_id, event_type=ev["type"],
                                description=ev["description"], event_date=event_date,
-                               date_precision=precision, document_id=document_id)
+                               date_precision=precision, document_id=document_id,
+                               significance=_clamp_int(ev.get("significance"), 1, 5, 3),
+                               date_source_text=(date_source or None) if event_date is not None else None)
         event.participants = [
             EventParticipant(entity_id=name_to_entity[p.lower()].id)
             for p in dict.fromkeys(ev["participants"]) if p.lower() in name_to_entity

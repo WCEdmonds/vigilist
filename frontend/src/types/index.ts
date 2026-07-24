@@ -469,16 +469,34 @@ export interface TimelineParticipant {
   entity_type: 'person' | 'org';
 }
 
+export type DatePrecision = 'day' | 'month' | 'year' | 'unknown';
+
 export interface TimelineEvent {
   event_id: number;
   description: string;
   event_type: string;
   event_date: string | null;
-  date_precision: 'day' | 'month' | 'year' | 'unknown';
+  date_precision: DatePrecision;
+  /** 1 (routine) … 5 (pivotal). Unrated legacy rows present as 3. */
+  significance: number;
+  /** Verbatim phrase the date was read from; null when undated or unsourced. */
+  date_source_text: string | null;
   document_id: string;
   bates_begin: string;
   title: string | null;
   participants: TimelineParticipant[];
+}
+
+/** Response of PATCH /api/events/{id} — server-side truth after a date correction. */
+export interface EventEditResult {
+  event_id: number;
+  event_type: string;
+  description: string;
+  event_date: string | null;
+  date_precision: DatePrecision;
+  significance: number;
+  date_source_text: string | null;
+  document_id: string;
 }
 
 export interface TimelinePage {

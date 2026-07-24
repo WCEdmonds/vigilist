@@ -1,5 +1,6 @@
 """Ontology read API: document entities, profiles, mentions, connections."""
 
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,13 +17,13 @@ from app.routers.auth import get_current_user
 from app.schemas import (
     ChipEntityOut, DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
     EntityDocMentionOut, EntityDocumentMentionsOut, EntitiesSummaryOut, EntityListItemOut,
-    EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, MentionSpanOut,
+    EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, EventEditRequest, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
     TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
     GraphNodeOut, GraphEdgeOut, GraphOut,
 )
 from app.services.audit import log_action
-from app.services.entity_extraction import EVENT_TYPES
+from app.services.entity_extraction import EVENT_TYPES, parse_event_date
 from app.services.entity_merge import merge_entities, undo_merge
 from app.services.entity_profile import generate_entity_overview, is_overview_stale
 from app.services.entity_resolution import is_typo_variant, normalize_name
@@ -41,6 +42,21 @@ async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> E
     if entity is None or entity.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
+
+
+async def _get_scoped_event(db: AsyncSession, user: User, event_id: int) -> OntologyEvent:
+    """Load an event and 404 if it isn't in a production the user can access.
+    Mirrors _get_scoped_entity so out-of-scope events never leak."""
+    accessible = await get_accessible_production_ids(db, user)
+    event = await db.get(OntologyEvent, event_id)
+    if event is None or event.production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event
+
+
+# The destructive full re-extraction path lives in ingest.py:
+# POST /productions/{id}/extract-entities?rebuild=true (the old
+# /reset-entities endpoint here was consolidated into it).
 
 
 # Route note: Starlette matches routes in REGISTRATION order (first match wins),
@@ -527,6 +543,7 @@ async def get_production_timeline(
     production_id: int,
     entity_id: UUID | None = None,
     event_type: str | None = None,
+    min_significance: int = 3,
     page: int = 1,
     per_page: int = 50,
     db: AsyncSession = Depends(get_db),
@@ -539,6 +556,13 @@ async def get_production_timeline(
 
     base = select(OntologyEvent).where(OntologyEvent.production_id == production_id)
     count_base = select(func.count(OntologyEvent.id)).where(OntologyEvent.production_id == production_id)
+    # Significance filter: treat null (legacy/unrated) as 3 via COALESCE so
+    # those rows still surface at the default. min_significance=1 lets all
+    # events through (coalesced significance is always >= 1).
+    if min_significance > 1:
+        sig_filter = func.coalesce(OntologyEvent.significance, 3) >= min_significance
+        base = base.where(sig_filter)
+        count_base = count_base.where(sig_filter)
     if event_type in EVENT_TYPES:
         base = base.where(OntologyEvent.event_type == event_type)
         count_base = count_base.where(OntologyEvent.event_type == event_type)
@@ -576,12 +600,130 @@ async def get_production_timeline(
         events=[TimelineEventOut(
             event_id=ev.id, description=ev.description, event_type=ev.event_type,
             event_date=ev.event_date.isoformat() if ev.event_date else None,
-            date_precision=ev.date_precision, document_id=ev.document_id,
+            date_precision=ev.date_precision,
+            # Null significance (legacy/unrated) presents as the default 3,
+            # matching the COALESCE used in the filter above.
+            significance=ev.significance if ev.significance is not None else 3,
+            date_source_text=ev.date_source_text,
+            document_id=ev.document_id,
             bates_begin=bates, title=title,
             participants=participants_by_event.get(ev.id, []),
         ) for ev, bates, title in rows],
         total=total, undated_count=undated_count,
     )
+
+
+_DATE_PRECISIONS = {"day", "month", "year", "unknown"}
+
+
+def _normalize_human_event_date(raw: str) -> str:
+    """Loosen a human-entered event_date before handing it to the extractor's
+    strict parse_event_date. Human date editors commonly send a full ISO
+    datetime (e.g. "2021-06-15T00:00:00Z" from Date.toISOString()) or a
+    non-padded "2021-6-5" -- both are valid corrections but neither
+    fullmatches parse_event_date's YYYY[-MM[-DD]] pattern. Strip any
+    time/zone component and zero-pad month/day so the value reaches
+    parse_event_date as a clean YYYY[-MM[-DD]] string. This does NOT touch
+    parse_event_date itself, which stays strict for LLM-extracted dates
+    (T2's guarantee) -- it's only applied to the human-facing PATCH path.
+    """
+    raw = raw.strip()
+    date_part = re.split(r"[T ]", raw, maxsplit=1)[0]
+    parts = date_part.split("-")
+    padded = [parts[0]] + [p.zfill(2) for p in parts[1:]]
+    return "-".join(padded)
+
+
+def _event_out(ev: OntologyEvent) -> dict:
+    return {
+        "event_id": ev.id,
+        "event_type": ev.event_type,
+        "description": ev.description,
+        "event_date": ev.event_date.isoformat() if ev.event_date else None,
+        "date_precision": ev.date_precision,
+        "significance": ev.significance if ev.significance is not None else 3,
+        "date_source_text": ev.date_source_text,
+        "document_id": str(ev.document_id),
+    }
+
+
+@router.patch("/events/{event_id}")
+async def edit_event(
+    event_id: int,
+    body: EventEditRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Correct or clear an event's date/precision. Any writer role (not
+    readonly), scoped to an accessible production (404 otherwise),
+    audit-logged."""
+    event = await _get_scoped_event(db, user, event_id)
+    await _require_writer(db, user, event.production_id)
+
+    if body.date_precision is not None and body.date_precision not in _DATE_PRECISIONS:
+        raise HTTPException(status_code=422, detail="Invalid date_precision")
+
+    date_provided = "event_date" in body.model_fields_set
+    if date_provided:
+        if body.event_date is None:
+            # Explicit null clears both date and precision.
+            event.event_date = None
+            event.date_precision = "unknown"
+        else:
+            normalized = _normalize_human_event_date(body.event_date)
+            parsed_date, parsed_precision = parse_event_date(normalized)
+            if parsed_date is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="event_date must be YYYY, YYYY-MM, or YYYY-MM-DD (optionally with a time component)",
+                )
+            event.event_date = parsed_date
+            # Derive precision from the parsed date shape and ignore any
+            # explicitly-passed date_precision here -- an explicit value can
+            # otherwise contradict the date itself (e.g. {"event_date":
+            # "2021-06", "date_precision": "day"} would claim a day that was
+            # never given; {"event_date": "2021-06-15", "date_precision":
+            # "unknown"} would discard real precision). Deriving is simpler
+            # and friendlier than validating consistency and 422ing.
+            event.date_precision = parsed_precision
+    elif body.date_precision is not None:
+        event.date_precision = body.date_precision
+
+    await log_action(db, user, "event_edited", "ontology_event", str(event_id),
+                     production_id=event.production_id,
+                     details={"event_date": event.event_date.isoformat() if event.event_date else None,
+                              "date_precision": event.date_precision})
+    await db.commit()
+    return _event_out(event)
+
+
+@router.delete("/events/{event_id}")
+async def delete_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a spurious event (event_participants cascade via FK). Any writer
+    role (not readonly), scoped to an accessible production (404 otherwise),
+    audit-logged. The event is hard-deleted, so the audit row's details
+    snapshot is the only surviving record of what was removed."""
+    event = await _get_scoped_event(db, user, event_id)
+    await _require_writer(db, user, event.production_id)
+    production_id = event.production_id
+    snapshot = {
+        "event_type": event.event_type,
+        "description": (event.description or "")[:200],
+        "event_date": event.event_date.isoformat() if event.event_date else None,
+        "date_precision": event.date_precision,
+        "document_id": str(event.document_id),
+        "significance": event.significance,
+    }
+
+    await db.delete(event)
+    await log_action(db, user, "event_deleted", "ontology_event", str(event_id),
+                     production_id=production_id, details=snapshot)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/productions/{production_id}/graph", response_model=GraphOut)

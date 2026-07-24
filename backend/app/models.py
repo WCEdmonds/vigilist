@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -675,6 +676,7 @@ class OntologyEvent(Base):
     __table_args__ = (
         Index("ix_ontology_events_production_id", "production_id"),
         Index("ix_ontology_events_document_id", "document_id"),
+        Index("ix_ontology_events_production_significance", "production_id", "significance"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -683,6 +685,10 @@ class OntologyEvent(Base):
     description = Column(Text, nullable=False)
     event_date = Column(Date, nullable=True)
     date_precision = Column(String(10), nullable=False, default="unknown")  # day|month|year|unknown
+    # 1 (routine) .. 5 (pivotal); null = unrated. Populated by the extractor.
+    significance = Column(SmallInteger, nullable=True)
+    # Verbatim phrase the date came from (provenance); null when undated/unsourced.
+    date_source_text = Column(Text, nullable=True)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 

@@ -5,8 +5,8 @@ from datetime import date
 import pytest
 
 from app.services.entity_extraction import (
-    build_extraction_prompt, locate_mentions, merge_parsed, parse_email_addresses,
-    parse_event_date, parse_extraction_response, slice_text,
+    EXTRACTION_SYSTEM_PROMPT, build_extraction_prompt, locate_mentions, merge_parsed,
+    parse_email_addresses, parse_event_date, parse_extraction_response, slice_text,
 )
 
 
@@ -68,6 +68,65 @@ def test_parse_event_date_precisions():
     assert parse_event_date("2019") == (date(2019, 1, 1), "year")
     assert parse_event_date(None) == (None, "unknown")
     assert parse_event_date("sometime") == (None, "unknown")
+
+
+def test_parse_event_date_year_required_guard():
+    # Timeline v2: a month/day with no year must never gain an invented year.
+    assert parse_event_date("March 18") == (None, "unknown")
+    assert parse_event_date("3/18") == (None, "unknown")
+    assert parse_event_date("03-18") == (None, "unknown")
+    assert parse_event_date("18") == (None, "unknown")
+    # a real 4-digit year still parses
+    assert parse_event_date("2021-03-18") == (date(2021, 3, 18), "day")
+
+
+def test_parse_event_significance_clamped_and_defaulted():
+    raw = json.dumps({"entities": [], "relationships": [], "events": [
+        {"description": "over", "type": "filing", "significance": 7},
+        {"description": "under", "type": "other", "significance": 0},
+        {"description": "missing", "type": "other"},
+        {"description": "non-int", "type": "other", "significance": "high"},
+        {"description": "float", "type": "other", "significance": 4.9},
+        {"description": "in-range", "type": "meeting", "significance": 5},
+    ]})
+    out = parse_extraction_response(raw)
+    sig = {e["description"]: e["significance"] for e in out["events"]}
+    assert sig["over"] == 5        # 7 clamped down
+    assert sig["under"] == 1       # 0 clamped up
+    assert sig["missing"] == 3     # default
+    assert sig["non-int"] == 3     # "high" → default
+    assert sig["float"] == 4       # 4.9 coerced to 4
+    assert sig["in-range"] == 5
+
+
+def test_parse_event_date_source_captured():
+    raw = json.dumps({"entities": [], "relationships": [], "events": [
+        {"description": "Suit filed", "type": "filing", "date": "2020-01-08",
+         "date_source": "filed on January 8, 2020"},
+        {"description": "Undated call", "type": "communication"},
+    ]})
+    out = parse_extraction_response(raw)
+    by_desc = {e["description"]: e for e in out["events"]}
+    assert by_desc["Suit filed"]["date_source"] == "filed on January 8, 2020"
+    assert by_desc["Undated call"]["date_source"] == ""  # default empty string
+
+
+def test_parse_event_date_source_non_str_defaults_empty():
+    raw = json.dumps({"entities": [], "relationships": [], "events": [
+        {"description": "x", "type": "other", "date_source": {"nested": 1}},
+    ]})
+    out = parse_extraction_response(raw)
+    assert out["events"][0]["date_source"] == ""
+
+
+def test_prompt_includes_year_and_significance_discipline():
+    p = EXTRACTION_SYSTEM_PROMPT
+    assert "NEVER guess or infer a year" in p
+    assert "date_source" in p
+    assert "significance" in p
+    assert "SKIP recurring calendar references" in p
+    # rubric anchors
+    assert "5 = pivotal" in p and "1 = trivial" in p
 
 
 def test_parse_email_addresses():

@@ -332,46 +332,81 @@ async def trigger_entity_extraction(
     user: User = Depends(get_current_user),
 ):
     """Backfill/manual trigger: run the ambient pipeline (which now includes
-    the entities stage) for this production. Manager or admin only.
+    the entities stage) for this production. Manager or admin only; 404 for
+    productions outside the caller's scope.
 
-    With rebuild=true, the production's entire ontology (entities, mentions,
-    events, relationships, merge suggestions) is deleted and every document's
-    extraction mark cleared first, so the run re-reads the whole matter —
-    the recovery path after extraction-quality changes.
+    With rebuild=true this is THE destructive re-extraction path (the old
+    /reset-entities endpoint was consolidated into it): the production's
+    entire ontology (entities, mentions, events, participants, relationships,
+    merge suggestions) is deleted, every document's extraction mark is
+    cleared, and the pipeline's entities/brief stage state is reset, so the
+    run re-reads the whole matter — the recovery path after
+    extraction-quality changes.
     """
-    from app.dependencies import ROLE_RANK, get_user_role_for_production
+    from app.dependencies import (ROLE_RANK, get_accessible_production_ids,
+                                  get_user_role_for_production)
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
     role = await get_user_role_for_production(db, user, production_id)
     if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Manager or admin role required")
 
     if rebuild:
         from sqlalchemy import delete, update
-        from app.models import (Document, Entity, EntityMention, EntityMergeSuggestion,
-                                 EntityRelationship, OntologyEvent)
-        # Events first: participants cascade on the event FK, clearing the
-        # rows that also reference entities. Then the remaining entity
-        # referents, then the entities themselves.
+        from app.models import (Entity, EntityMention, EntityMergeSuggestion,
+                                EntityRelationship, EventParticipant, OntologyEvent)
+        # Participants first (they reference both events and entities), then
+        # events — both cascade from productions, NOT entities, so deleting
+        # entities alone would leave them behind. Then the remaining entity
+        # referents, then the entities themselves; the explicit deletes make
+        # the entity FK cascades belt-and-braces rather than load-bearing.
+        # entity_merges audit rows reference entities with SET NULL and are
+        # intentionally preserved.
+        await db.execute(delete(EventParticipant).where(
+            EventParticipant.event_id.in_(
+                select(OntologyEvent.id).where(OntologyEvent.production_id == production_id))))
         await db.execute(delete(OntologyEvent).where(OntologyEvent.production_id == production_id))
         await db.execute(delete(EntityMention).where(EntityMention.production_id == production_id))
         await db.execute(delete(EntityRelationship).where(EntityRelationship.production_id == production_id))
         await db.execute(delete(EntityMergeSuggestion).where(EntityMergeSuggestion.production_id == production_id))
         await db.execute(delete(Entity).where(Entity.production_id == production_id))
+        # Clear the per-document extraction watermark so the entities stage
+        # re-reads every document.
         await db.execute(update(Document).where(Document.production_id == production_id)
                          .values(entities_extracted_at=None))
 
-    from app.services import tasks as task_service
-    if task_service.is_configured():
-        task_service.enqueue_pipeline(production_id)
-        await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
-                         production_id=production_id, details={"mode": "enqueued", "rebuild": rebuild})
-        await db.commit()
-        return {"status": "enqueued"}
+        # Also clear the pipeline's stage state, or the re-run is a no-op:
+        # stages_to_run() skips any stage marked "done", and an
+        # already-processed matter has entities: "done" — leaving that in
+        # place after wiping the ontology would strand the matter permanently
+        # empty. We drop just the entities + brief keys (the brief is derived
+        # from entities, so it must regenerate too) rather than enqueueing
+        # with force=True, which would needlessly re-run clustering and
+        # summaries whose outputs the rebuild leaves intact.
+        prod = await db.get(Production, production_id)
+        if prod is not None:
+            status = dict(prod.ai_pipeline_status or {})
+            errors = dict(status.get("errors") or {})
+            for stage in ("entities", "brief"):
+                status.pop(stage, None)
+                errors.pop(stage, None)
+            status["errors"] = errors
+            prod.ai_pipeline_status = status  # reassign: in-place JSONB mutation isn't tracked
 
+    from app.services import tasks as task_service
+    mode = "enqueued" if task_service.is_configured() else "background"
+    await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
+                     production_id=production_id, details={"mode": mode, "rebuild": rebuild})
+    # Commit BEFORE handing off to the worker: it must see the cleared
+    # entities_extracted_at watermarks and stage state durably, or it can
+    # read pre-delete rows and skip everything (stale-watermark race).
+    await db.commit()
+    if mode == "enqueued":
+        task_service.enqueue_pipeline(production_id)
+        return {"status": "enqueued"}
     from app.services.pipeline import run_ambient_pipeline
     background_tasks.add_task(run_ambient_pipeline, production_id)
-    await log_action(db, user, "entity_extraction_triggered", "production", str(production_id),
-                     production_id=production_id, details={"mode": "background", "rebuild": rebuild})
-    await db.commit()
     return {"status": "started"}
 
 

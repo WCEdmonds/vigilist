@@ -81,6 +81,46 @@ def test_events_and_relationships_link_created_entities():
     assert stats["relationships"] == 1 and edges[0].relationship_type == "employment"
 
 
+def test_event_significance_and_date_source_persisted_when_dated():
+    db = _session_with_existing([])
+    parsed = _parsed(events=[
+        {"description": "Suit filed", "type": "filing", "date": "2020-01-08",
+         "date_source": "filed on January 8, 2020", "significance": 5, "participants": []},
+    ])
+    asyncio.run(persist_extraction(db, 1, DOC_ID, TEXT, parsed))
+    ev = [o for o in db.added if isinstance(o, OntologyEvent)][0]
+    assert ev.significance == 5
+    assert ev.date_source_text == "filed on January 8, 2020"
+    assert ev.date_precision == "day"
+
+
+def test_undated_event_leaves_date_source_text_null():
+    # Invariant: no accepted date → date_source_text stays null even if the
+    # model supplied a source phrase (keeps "date present but source null" a
+    # pure legacy signal).
+    db = _session_with_existing([])
+    parsed = _parsed(events=[
+        {"description": "March meeting", "type": "meeting", "date": "March 18",
+         "date_source": "on March 18", "significance": 2, "participants": []},
+    ])
+    asyncio.run(persist_extraction(db, 1, DOC_ID, TEXT, parsed))
+    ev = [o for o in db.added if isinstance(o, OntologyEvent)][0]
+    assert ev.event_date is None and ev.date_precision == "unknown"
+    assert ev.date_source_text is None
+    assert ev.significance == 2
+
+
+def test_event_significance_defaults_when_missing():
+    db = _session_with_existing([])
+    parsed = _parsed(events=[
+        {"description": "Plain event", "type": "other", "date": "2020-01-08",
+         "date_source": "Jan 8 2020", "participants": []},
+    ])
+    asyncio.run(persist_extraction(db, 1, DOC_ID, TEXT, parsed))
+    ev = [o for o in db.added if isinstance(o, OntologyEvent)][0]
+    assert ev.significance == 3  # default when parse omitted it
+
+
 def test_dedupes_duplicate_mentions_across_candidates_resolving_to_same_entity():
     # Two candidates that both resolve (attach) to the same existing entity
     # with overlapping surface forms would otherwise rediscover the same

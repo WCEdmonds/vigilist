@@ -1,0 +1,727 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Chronology (EntityTimelineView) — in the record language
+   (docs/design/design-language.md).
+
+   The screen is modelled on the artifact a litigator actually builds by hand:
+   a case chronology. Three columns — a right-aligned date gutter set in
+   tabular mono, a continuous ink spine, and the event itself. Month/year
+   chapters are docket-style epoch stamps (mono, stamp blue) whose redact-
+   black rule notches the spine and sticks to the top of the scroll port, so
+   the reader always knows where in time they are.
+
+   The spine is the data visualisation: each event's node glyph is sized and
+   shaped by significance (1-5), so scanning the rail alone shows the shape of
+   the case — long runs of hairline ticks (routine chatter) punctuated by the
+   filled discs and marker-ringed diamonds that actually moved it. Marker
+   yellow keeps its record meaning here: the AI marked these as pivotal.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.chrono {
+  --chrono-gutter: 88px;
+  --chrono-rail: 30px;
+  --chrono-spine-ink: rgba(20, 24, 29, 0.2);
+  --chrono-page: var(--color-parchment-light);
+
+  position: relative;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Control bar ── */
+
+.chrono-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(251, 251, 248, 0.88);
+  border-bottom: 1px solid rgba(20, 24, 29, 0.1);
+  backdrop-filter: blur(6px);
+  z-index: 5;
+}
+
+.chrono-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.chrono-heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.chrono-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-3xl);
+  font-weight: var(--font-semibold);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+}
+
+.chrono-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  white-space: nowrap;
+}
+
+.chrono-spacer { margin-left: auto; }
+
+/* Segmented lens control — the master filter, so it carries real weight.
+   Cut square, like the paper it sits on. */
+.chrono-seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid rgba(20, 24, 29, 0.15);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.chrono-seg-btn {
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 5px 13px;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.chrono-seg-btn:hover:not(.is-on) { color: var(--color-ink); }
+
+.chrono-seg-btn.is-on {
+  background: var(--color-ink);
+  color: #fff;
+  box-shadow: var(--shadow-xs);
+}
+
+/* ── Searchable entity filter ── */
+
+.chrono-search {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 190px;
+  max-width: 400px;
+}
+
+.chrono-search-input {
+  width: 100%;
+  padding-left: 30px;
+}
+
+.chrono-search-mark {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--text-sm);
+  color: var(--color-neutral-400);
+  pointer-events: none;
+}
+
+.chrono-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-neutral-400);
+  font-size: var(--text-base);
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+}
+
+.chrono-search-clear:hover { color: var(--color-ink); }
+
+.chrono-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 288px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--color-card);
+  border: 1px solid var(--color-neutral-200);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.chrono-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: var(--text-sm);
+  color: var(--color-neutral-700);
+  cursor: pointer;
+}
+
+.chrono-opt:hover,
+.chrono-opt.is-active { background: var(--color-brand-50); }
+
+.chrono-opt-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrono-opt-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+.chrono-menu-note {
+  padding: 6px 8px;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+/* ── Significance legend ── */
+
+.chrono-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+.chrono-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* ── Scroll port + track ── */
+
+.chrono-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--chrono-page);
+}
+
+.chrono-track {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 var(--space-5) var(--space-10);
+}
+
+/* Wraps only the dated chapters, so the spine ends where the record does —
+   undated events hang off the end of the timeline, not on it. It starts solid
+   under the first chapter's notch and fades out at the bottom, reading as an
+   excerpt of a longer record rather than a bar that was cut off. */
+.chrono-spine { position: relative; }
+
+.chrono-spine::before {
+  content: '';
+  position: absolute;
+  top: var(--space-4);
+  bottom: 0;
+  left: calc(var(--chrono-gutter) + var(--chrono-rail) / 2 - 1px);
+  width: 2px;
+  background: linear-gradient(
+    to bottom,
+    var(--chrono-spine-ink) 0,
+    var(--chrono-spine-ink) calc(100% - 48px),
+    transparent 100%
+  );
+}
+
+.chrono-row,
+.chrono-chapter {
+  display: grid;
+  grid-template-columns: var(--chrono-gutter) var(--chrono-rail) minmax(0, 1fr);
+  align-items: start;
+}
+
+/* ── Chapter (month / year) — the docket epoch stamp, spread across the
+   three-column grid: mono stamp-blue label in the gutter, the epoch's
+   redact-black rule notching the spine and running on across the body.
+   Notches the spine, sticks to the top. ── */
+
+.chrono-chapter {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  align-items: stretch;
+  padding: var(--space-5) 0 var(--space-2);
+  background: var(--chrono-page);
+}
+
+.chrono-spine > div:first-child > .chrono-chapter { padding-top: var(--space-4); }
+
+.chrono-chapter-label {
+  align-self: end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 0 var(--space-3) 4px 0;
+  text-align: right;
+}
+
+.chrono-chapter-month {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-stamp);
+}
+
+.chrono-chapter-year {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  letter-spacing: 0.1em;
+  color: var(--color-neutral-400);
+}
+
+.chrono-chapter-notch {
+  justify-self: center;
+  align-self: stretch;
+  width: 2px;
+  min-height: 30px;
+  background: var(--color-redact);
+}
+
+.chrono-chapter-rule {
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 0 8px var(--space-3);
+}
+
+.chrono-chapter-rule::before {
+  content: '';
+  flex: 1;
+  height: 2px;
+  background: var(--color-redact);
+}
+
+.chrono-chapter-tally {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  letter-spacing: 0.02em;
+}
+
+/* ── Event row ── */
+
+.chrono-row { padding-bottom: var(--space-2); }
+
+.chrono-date {
+  padding: 3px var(--space-3) 0 0;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.chrono-row.is-routine .chrono-date { color: var(--color-neutral-400); }
+
+/* "c." marks a circa date — month- or year-only precision. */
+.chrono-circa { color: var(--color-brass); }
+
+.chrono-node {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+/* Node glyphs. Every glyph carries a parchment halo so it punches cleanly
+   through the spine behind it. */
+.chrono-glyph {
+  display: block;
+  box-shadow: 0 0 0 3px var(--chrono-page);
+}
+
+.chrono-glyph.is-pivotal {
+  width: 11px;
+  height: 11px;
+  margin-top: 1px;
+  background: var(--color-ink);
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 3px var(--chrono-page), 0 0 0 4.5px var(--color-marker-deep);
+}
+
+.chrono-glyph.is-key {
+  width: 11px;
+  height: 11px;
+  border-radius: var(--radius-full);
+  background: var(--color-ink);
+}
+
+.chrono-glyph.is-notable {
+  width: 9px;
+  height: 9px;
+  margin-top: 1px;
+  border-radius: var(--radius-full);
+  background: var(--chrono-page);
+  border: 2px solid var(--color-stamp);
+}
+
+.chrono-glyph.is-routine {
+  width: 12px;
+  height: 2px;
+  margin-top: 5px;
+  background: var(--color-neutral-300);
+}
+
+/* In the legend the glyphs sit on the control bar, not the spine, so they
+   drop the paper halo. The marker ring stays — it is what "pivotal" means. */
+.chrono-legend .chrono-glyph { box-shadow: none; }
+.chrono-legend .chrono-glyph.is-pivotal { box-shadow: 0 0 0 2px var(--color-marker-deep); }
+
+/* ── Event card ── */
+
+.chrono-body { min-width: 0; padding-left: var(--space-3); }
+
+.chrono-card {
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.chrono-card.is-pivotal,
+.chrono-card.is-key {
+  background: var(--color-ivory);
+  border: 1px solid rgba(20, 24, 29, 0.12);
+  border-left: 3px solid var(--color-ink);
+  box-shadow: var(--shadow-md);
+}
+
+/* Marker edge on the pivotal card: the record's yellow means "someone —
+   here the AI — marked this", the same edge the merge-review card wears. */
+.chrono-card.is-pivotal { border-left-color: var(--color-marker); }
+
+.chrono-card.is-notable {
+  background: var(--color-card);
+  border: 1px solid rgba(20, 24, 29, 0.09);
+  box-shadow: var(--shadow-xs);
+}
+
+/* Routine events lose their card entirely: a tick, a date and a quiet line.
+   They are present and checkable, but they never compete for the eye. */
+.chrono-card.is-routine {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 2px 0 var(--space-1) 14px;
+}
+
+.chrono-card:hover { box-shadow: var(--shadow-lg); }
+.chrono-card.is-routine:hover { box-shadow: none; }
+
+.chrono-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+
+/* Carded tiers wear the app's .stamp-badge (components.css); .chrono-type is
+   the quiet inline form routine lines keep, so they never compete. */
+.chrono-type {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-neutral-400);
+}
+
+.chrono-desc {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-neutral-700);
+}
+
+.chrono-card.is-pivotal .chrono-desc,
+.chrono-card.is-key .chrono-desc {
+  font-size: var(--text-lg);
+  font-weight: var(--font-medium);
+  line-height: var(--leading-tight);
+  color: var(--color-neutral-800);
+}
+
+.chrono-card.is-routine .chrono-desc {
+  font-size: var(--text-sm);
+  color: var(--color-neutral-500);
+}
+
+/* The verbatim phrase the date was read from — a quotation from the record.
+   Styled as the app quotes everywhere else (brass-edged italic, sans); serif
+   stays rationed to titles per the design language. */
+.chrono-source {
+  display: block;
+  margin-top: 5px;
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--color-brass);
+  font-size: var(--text-sm);
+  font-style: italic;
+  line-height: var(--leading-normal);
+  color: var(--color-neutral-600);
+}
+
+.chrono-unsourced {
+  margin-top: 5px;
+  font-size: var(--text-xs);
+  color: var(--color-warning-500);
+  cursor: help;
+}
+
+.chrono-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+/* Bates cite: mono in stamp blue — data wears mono, stamp means interactive.
+   Participants use the app-wide .entity-chip (components.css). */
+.chrono-cite {
+  border: 0;
+  background: transparent;
+  padding: 2px 6px 2px 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-stamp);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.chrono-cite:hover { color: var(--color-ink); text-decoration: underline; }
+
+/* ── Per-event manager controls ── */
+
+.chrono-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.chrono-row:hover .chrono-acts,
+.chrono-row:focus-within .chrono-acts { opacity: 1; }
+
+@media (hover: none) {
+  .chrono-acts { opacity: 1; }
+}
+
+.chrono-act {
+  border: 0;
+  background: transparent;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  cursor: pointer;
+}
+
+.chrono-act:hover { background: var(--color-brand-100); color: var(--color-ink); }
+.chrono-act.is-danger:hover { background: var(--color-danger-100); color: var(--color-danger-600); }
+
+.chrono-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--color-neutral-300);
+}
+
+.chrono-edit-label {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-neutral-400);
+}
+
+.chrono-edit-hint {
+  flex-basis: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+.chrono-edit-error {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: var(--color-danger-600);
+}
+
+.chrono-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--color-danger-600);
+}
+
+/* ── Undated section ── */
+
+.chrono-undated {
+  margin-top: var(--space-8);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-neutral-300);
+}
+
+.chrono-undated-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0 0 var(--space-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+/* Rhymes with the chapter stamps, but grayed — these events sit off the
+   record's timeline. */
+.chrono-undated-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+
+.chrono-undated-note {
+  max-width: 62ch;
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-neutral-400);
+}
+
+/* Undated events keep the three-column shape so they stay scannable, but the
+   spine does not reach them — they are not placed in time. */
+.chrono-undated .chrono-glyph { opacity: 0.5; }
+
+/* ── Load states ── */
+
+.chrono-sentinel { height: 1px; }
+
+.chrono-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) 0;
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-neutral-400);
+}
+
+.chrono-status.is-error { color: var(--color-danger-600); text-transform: none; letter-spacing: 0; }
+
+.chrono-end {
+  padding: var(--space-6) 0 0;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: var(--text-base);
+  font-style: italic;
+  color: var(--color-neutral-400);
+}
+
+/* ── Focus + motion floor ── */
+
+.chrono-seg-btn:focus-visible,
+.chrono-opt:focus-visible,
+.chrono-act:focus-visible,
+.chrono-cite:focus-visible,
+.chrono-search-clear:focus-visible,
+.chrono-undated-toggle:focus-visible {
+  outline: 2px solid var(--color-stamp);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chrono-card,
+  .chrono-acts,
+  .chrono-seg-btn { transition: none; }
+}
+
+/* ── Narrow screens: the gutter folds into the card column ── */
+
+@media (max-width: 720px) {
+  .chrono { --chrono-gutter: 0px; }
+
+  .chrono-track { padding: 0 var(--space-3) var(--space-8); }
+
+  .chrono-row,
+  .chrono-chapter { grid-template-columns: var(--chrono-rail) minmax(0, 1fr); }
+
+  .chrono-date {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0 0 2px var(--space-3);
+    text-align: left;
+  }
+
+  .chrono-node { grid-column: 1; grid-row: 1 / span 2; padding-top: 2px; }
+  .chrono-body { grid-column: 2; grid-row: 2; }
+
+  /* With no gutter the stamp has room to sit inline, left of the rule. */
+  .chrono-chapter-label {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: row;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: 0 0 2px var(--space-3);
+    text-align: left;
+  }
+
+  .chrono-chapter-notch { grid-column: 1; grid-row: 1 / span 2; }
+  .chrono-chapter-rule { grid-column: 2; grid-row: 2; padding-left: var(--space-3); }
+
+  .chrono-legend { margin-left: 0; flex-wrap: wrap; gap: var(--space-2); }
+  .chrono-search { max-width: none; }
+  .chrono-title { font-size: var(--text-2xl); }
+}

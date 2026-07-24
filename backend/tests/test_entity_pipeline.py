@@ -117,10 +117,14 @@ class FakeSession:
         pass
 
 
-def _patch_role(monkeypatch, role):
+def _patch_role(monkeypatch, role, accessible=(1, 7)):
     async def fake_role(db, user, production_id):
         return role
+
+    async def fake_accessible(db, user):
+        return list(accessible)
     monkeypatch.setattr("app.dependencies.get_user_role_for_production", fake_role)
+    monkeypatch.setattr("app.dependencies.get_accessible_production_ids", fake_accessible)
 
 
 def test_trigger_entity_extraction_blocked_for_reviewer(monkeypatch):
