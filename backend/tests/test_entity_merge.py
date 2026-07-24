@@ -422,6 +422,46 @@ def test_auto_resolve_typos_skips_missing_entity_without_raising(monkeypatch):
     assert out == {"merged": 0}
 
 
+def test_auto_resolve_typos_skips_suggestion_sharing_consumed_entity(monkeypatch):
+    """Chain-merge guard: two pending suggestions share an entity (A~B and
+    B~C, both typo pairs). Merging A~B deletes B; the second suggestion must
+    be skipped rather than triggering a second merge against the
+    already-deleted B (which would corrupt EntityMerge.loser_snapshot and
+    later break undo_merge with a primary-key collision)."""
+    _patch_scope(monkeypatch)
+    a = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="Lynell Lyles", aliases=[], attributes={}, mention_count=5)
+    b = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="Lynelle Lyles", aliases=[], attributes={}, mention_count=2)
+    c = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="Lynelle Lyle", aliases=[], attributes={}, mention_count=1)
+    sugg_ab = FakeSuggestion(1, 1, a.id, b.id)
+    sugg_bc = FakeSuggestion(2, 1, b.id, c.id)
+    db = FakeSession(
+        get_objects={("Entity", a.id): a, ("Entity", b.id): b, ("Entity", c.id): c},
+        responders=[(_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[sugg_ab, sugg_bc]))] + _merge_internals_responders(),
+    )
+
+    calls = []
+    real_merge = er.merge_entities
+
+    async def tracking_merge(db, winner, loser, user_id):
+        calls.append((winner.id, loser.id))
+        return await real_merge(db, winner, loser, user_id)
+
+    monkeypatch.setattr(er, "merge_entities", tracking_merge)
+
+    out = asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+
+    assert out == {"merged": 1}
+    # Only the A~B pair was merged; B~C was skipped once B was consumed —
+    # no second merge_entities call ever targeted the already-deleted B.
+    assert calls == [(a.id, b.id)]
+    assert b in db.deleted
+    assert c not in db.deleted
+    assert sugg_bc.status == "pending"  # never touched
+
+
 def test_auto_resolve_typos_404_out_of_scope(monkeypatch):
     _patch_scope(monkeypatch, accessible=(2,))
     db = FakeSession()

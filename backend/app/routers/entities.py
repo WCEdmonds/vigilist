@@ -379,7 +379,10 @@ async def auto_resolve_typo_suggestions(
     )).scalars().all()
 
     merged = 0
+    consumed: set = set()  # entity ids already merged away (deleted) this run
     for sugg in rows:
+        if sugg.entity_a_id in consumed or sugg.entity_b_id in consumed:
+            continue
         a = await db.get(Entity, sugg.entity_a_id)
         b = await db.get(Entity, sugg.entity_b_id)
         if a is None or b is None or a.entity_type != b.entity_type:
@@ -391,6 +394,8 @@ async def auto_resolve_typo_suggestions(
             await merge_entities(db, winner, loser, user.id)
         except ValueError:
             continue
+        consumed.add(loser.id)
+        await db.flush()  # make the delete visible so a later db.get returns None too (belt + braces)
         merged += 1
 
     if merged:
