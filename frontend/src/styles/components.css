@@ -1934,3 +1934,34 @@ mark {
   padding-left: var(--space-2);
   margin-top: 2px;
 }
+
+/* Merge review: hover context popover */
+.merge-name-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; }
+.merge-ctx-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 360px;
+  max-width: 70vw;
+  background: var(--color-card);
+  border: 1px solid var(--color-neutral-200);
+  border-top: 3px solid var(--color-marker);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-600);
+  line-height: 1.55;
+  cursor: default;
+}
+.merge-ctx-row { padding: 4px 0; }
+.merge-ctx-row + .merge-ctx-row { border-top: 1px solid var(--color-neutral-100); }
+.merge-ctx-bates {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-stamp);
+}

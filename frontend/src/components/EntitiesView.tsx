@@ -1,8 +1,31 @@
 import { useCallback, useEffect, useState } from 'react';
-import { acceptMergeSuggestion, listEntities, listMergeSuggestions, rejectMergeSuggestion, triggerEntityExtraction } from '../api/client';
+import { acceptMergeSuggestion, getEntityMentions, listEntities, listMergeSuggestions, rejectMergeSuggestion, triggerEntityExtraction } from '../api/client';
 import { entityDisplayName } from '../utils/entityDisplay';
 import type { EntityListItem, MergeSuggestion } from '../types';
 import EntityPanel from './EntityPanel';
+
+interface CtxRow {
+  bates: string;
+  text: string;
+  surface: string;
+}
+
+/** Snippet with the entity's surface text marker-highlighted. */
+function CtxSnippet({ row }: { row: CtxRow }) {
+  const idx = row.surface ? row.text.toLowerCase().indexOf(row.surface.toLowerCase()) : -1;
+  return (
+    <div className="merge-ctx-row">
+      <span className="merge-ctx-bates">{row.bates}</span>
+      {idx === -1 ? <>…{row.text}…</> : (
+        <>
+          …{row.text.slice(0, idx)}
+          <span className="marker-hl">{row.text.slice(idx, idx + row.surface.length)}</span>
+          {row.text.slice(idx + row.surface.length)}…
+        </>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   productionId: number;
@@ -25,6 +48,54 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractMsg, setExtractMsg] = useState<string | null>(null);
+
+  // Hover context for merge review: "Isabella" vs "Isabel" is undecidable
+  // without seeing each name in its documents. Snippets fetch lazily on
+  // first hover and cache per entity.
+  const [ctxCache, setCtxCache] = useState<Record<string, CtxRow[] | 'loading'>>({});
+  const [hoverCtxId, setHoverCtxId] = useState<string | null>(null);
+
+  const loadContext = (id: string) => {
+    setCtxCache(prev => {
+      if (prev[id]) return prev;
+      getEntityMentions(id)
+        .then(m => {
+          const rows: CtxRow[] = [];
+          for (const d of m.documents) {
+            for (const mm of d.mentions) {
+              if (rows.length >= 3) break;
+              rows.push({ bates: d.bates_begin, text: mm.context_snippet || mm.surface_text, surface: mm.surface_text });
+            }
+            if (rows.length >= 3) break;
+          }
+          setCtxCache(p => ({ ...p, [id]: rows }));
+        })
+        .catch(() => setCtxCache(p => ({ ...p, [id]: [] })));
+      return { ...prev, [id]: 'loading' };
+    });
+  };
+
+  const mergeName = (e: { id: string; canonical_name: string; mention_count: number }) => (
+    <span
+      className="merge-name-wrap"
+      onMouseEnter={() => { loadContext(e.id); setHoverCtxId(e.id); }}
+      onMouseLeave={() => setHoverCtxId(prev => (prev === e.id ? null : prev))}
+    >
+      <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(e.id)}>
+        {entityDisplayName(e.canonical_name)}
+      </button>
+      <span className="merge-count">{e.mention_count}×</span>
+      {hoverCtxId === e.id && (
+        <div className="merge-ctx-pop">
+          {(!ctxCache[e.id] || ctxCache[e.id] === 'loading') && <span className="def-meta">Pulling context…</span>}
+          {Array.isArray(ctxCache[e.id]) && (ctxCache[e.id] as CtxRow[]).length === 0 && (
+            <span className="def-meta">No mention snippets on file.</span>
+          )}
+          {Array.isArray(ctxCache[e.id]) && (ctxCache[e.id] as CtxRow[]).map((r, i) => <CtxSnippet key={i} row={r} />)}
+        </div>
+      )}
+    </span>
+  );
 
   const refresh = useCallback(() => {
     listEntities(productionId, search || undefined, typeFilter || undefined)
@@ -130,15 +201,9 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
             {suggestions.map(s => (
               <div key={s.id} className="merge-row">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(s.entity_a.id)}>
-                    {entityDisplayName(s.entity_a.canonical_name)}
-                  </button>
-                  <span className="merge-count">{s.entity_a.mention_count}×</span>
+                  {mergeName(s.entity_a)}
                   <span className="merge-vs">↔</span>
-                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(s.entity_b.id)}>
-                    {entityDisplayName(s.entity_b.canonical_name)}
-                  </button>
-                  <span className="merge-count">{s.entity_b.mention_count}×</span>
+                  {mergeName(s.entity_b)}
                   <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
                     <button className="btn btn-secondary btn-xs" disabled={busy === s.id} onClick={() => resolve(s.id, true)}>Same — merge</button>
                     <button className="btn btn-ghost btn-xs" disabled={busy === s.id} onClick={() => resolve(s.id, false)}>Different</button>
