@@ -485,8 +485,7 @@ async def reocr_batch_handler(
     _verified: None = Depends(verify_cloud_tasks_request),
 ):
     """Cloud Tasks worker: re-OCR a batch of documents."""
-    from app.services.ocr import ocr_image_vision_bytes
-    from app.services.storage import get_download_bytes
+    from app.services import ingest as ingest_service
 
     production_id = body.get("production_id")
     offset = body.get("offset", 0)
@@ -506,14 +505,13 @@ async def reocr_batch_handler(
         try:
             if not doc.image_paths:
                 continue
-            text_parts = []
-            for img_path in doc.image_paths:
-                if not img_path:
-                    continue
-                img_bytes = get_download_bytes(img_path)
-                page_text = ocr_image_vision_bytes(img_bytes)
-                if page_text:
-                    text_parts.append(page_text)
+            page_errors: list[str] = []
+            text_parts, ocr_paths = ingest_service.ocr_pages_with_sidecars(
+                doc.production_id, doc.image_paths, doc.bates_begin, page_errors
+            )
+            for err in page_errors:
+                logger.warning("Re-OCR: %s", err)
+            doc.ocr_paths = ocr_paths
             if text_parts:
                 doc.text_content = "\n\n".join(text_parts)
                 await db.execute(
@@ -524,7 +522,7 @@ async def reocr_batch_handler(
                     ),
                     {"txt": doc.text_content, "id": doc.id},
                 )
-                await db.commit()
+            await db.commit()
         except Exception:
             logger.exception("Re-OCR failed for doc %s", doc.bates_begin)
             await db.rollback()
@@ -535,8 +533,7 @@ async def reocr_batch_handler(
 async def run_reocr(production_id: int):
     """Background task fallback: re-OCR all documents in a production using Cloud Vision."""
     from app.database import async_session_factory
-    from app.services.ocr import ocr_image_vision_bytes
-    from app.services.storage import get_download_bytes
+    from app.services import ingest as ingest_service
 
     async with async_session_factory() as db:
         result = await db.execute(
@@ -549,14 +546,13 @@ async def run_reocr(production_id: int):
             try:
                 if not doc.image_paths:
                     continue
-                text_parts = []
-                for img_path in doc.image_paths:
-                    if not img_path:
-                        continue
-                    img_bytes = get_download_bytes(img_path)
-                    page_text = ocr_image_vision_bytes(img_bytes)
-                    if page_text:
-                        text_parts.append(page_text)
+                page_errors: list[str] = []
+                text_parts, ocr_paths = ingest_service.ocr_pages_with_sidecars(
+                    production_id, doc.image_paths, doc.bates_begin, page_errors
+                )
+                for err in page_errors:
+                    logger.warning("Re-OCR: %s", err)
+                doc.ocr_paths = ocr_paths
                 if text_parts:
                     doc.text_content = "\n\n".join(text_parts)
                     await db.execute(
@@ -567,7 +563,7 @@ async def run_reocr(production_id: int):
                         ),
                         {"txt": doc.text_content, "id": doc.id},
                     )
-                    await db.commit()
+                await db.commit()
                 if (i + 1) % 25 == 0:
                     logger.info("Re-OCR: %d/%d done", i + 1, len(docs))
             except Exception:
