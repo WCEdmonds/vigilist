@@ -55,18 +55,28 @@ def _pdf_words_pct(page: "fitz.Page") -> list[dict]:
 
     PyMuPDF reports PDF points relative to page.rect; the rendered JPEG has
     the same aspect, so percent coordinates transfer directly.
+
+    For pages with a /Rotate entry, page.get_pixmap() renders the ROTATED
+    view and page.rect reports the rotated dims, but page.get_text("words")
+    coordinates are always in the UNROTATED frame. Each word rect is
+    transformed through page.rotation_matrix (identity when unrotated) before
+    percent conversion, so boxes land on the rotated content instead of the
+    pre-rotation position.
     """
     rect = page.rect
     if not rect.width or not rect.height:
         return []
+    matrix = page.rotation_matrix
     words: list[dict] = []
     for x0, y0, x1, y1, text, *_ in page.get_text("words"):
         if not text.strip():
             continue
-        xp0 = max(0.0, min(100.0, x0 / rect.width * 100))
-        xp1 = max(0.0, min(100.0, x1 / rect.width * 100))
-        yp0 = max(0.0, min(100.0, y0 / rect.height * 100))
-        yp1 = max(0.0, min(100.0, y1 / rect.height * 100))
+        r = fitz.Rect(x0, y0, x1, y1) * matrix
+        r.normalize()
+        xp0 = max(0.0, min(100.0, r.x0 / rect.width * 100))
+        xp1 = max(0.0, min(100.0, r.x1 / rect.width * 100))
+        yp0 = max(0.0, min(100.0, r.y0 / rect.height * 100))
+        yp1 = max(0.0, min(100.0, r.y1 / rect.height * 100))
         # Endpoints-first rounding to preserve x+w <= 100 invariant
         x = round(xp0, 2)
         w = round(round(xp1, 2) - x, 2)
