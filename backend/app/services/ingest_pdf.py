@@ -170,6 +170,18 @@ def _ocr_jpeg(jpeg_bytes: bytes) -> PageOcr | None:
         return None
 
 
+def _ocr_jpeg_text(jpeg_bytes: bytes) -> str:
+    """String-contract adapter for extractors.extract(ocr_fn=...).
+
+    ``_ocr_jpeg`` returns ``PageOcr | None`` (the layout-aware contract used
+    by ``iter_pdf_pages``); ``extract()`` expects a plain ``str`` and calls
+    ``.strip()`` on the result, so the two contracts must never be mixed at
+    that boundary.
+    """
+    page = _ocr_jpeg(jpeg_bytes)
+    return page.text if page else ""
+
+
 def upload_page_assets(
     production_id: int,
     control_number: str,
