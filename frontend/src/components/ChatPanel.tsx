@@ -10,6 +10,8 @@ interface Props {
   autoFocusToken: number;
   /** Opens a document cited by the AI ([BATES](doc:…) links in replies). */
   onOpenDocument?: (id: string) => void;
+  /** Opens an entity cited by the AI ([Name](entity:<uuid>) links in replies). */
+  onOpenEntity?: (id: string) => void;
   /** Scopes Bates-citation lookups to the current production. */
   productionId?: number;
 }
@@ -22,7 +24,7 @@ const SAMPLE_QUESTIONS = [
   'Which documents most need attorney attention, and why?',
 ];
 
-export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDocument, productionId }: Props) {
+export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDocument, onOpenEntity, productionId }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,6 +59,12 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDoc
   // blocks — one delegated handler beats threading a callback through the
   // (pure) renderer.
   const handleBodyClick = async (e: React.MouseEvent) => {
+    const entityLink = (e.target as HTMLElement).closest<HTMLElement>('.chat-entity-link');
+    if (entityLink && onOpenEntity) {
+      const target = entityLink.dataset.entityTarget || '';
+      if (UUID_RE.test(target)) onOpenEntity(target);
+      return;
+    }
     const link = (e.target as HTMLElement).closest<HTMLElement>('.chat-doc-link');
     if (!link || !onOpenDocument) return;
     const target = link.dataset.docTarget || '';

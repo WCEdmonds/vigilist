@@ -17,6 +17,7 @@ interface ContextRailProps {
   onViewDocument: (id: string) => void;
   onSimilarResults: (label: string, results: SearchResult[]) => void;
   onAttached?: () => void;
+  onOpenEntity?: (id: string) => void;
 }
 
 interface DocMeta {
@@ -44,6 +45,7 @@ export default function ContextRail({
   onViewDocument,
   onSimilarResults,
   onAttached,
+  onOpenEntity,
 }: ContextRailProps) {
   const [contextLine, setContextLine] = useState<string | null>(null);
   const [docSummaries, setDocSummaries] = useState<Record<string, string | null>>({});
@@ -263,7 +265,7 @@ export default function ContextRail({
         </>
       )}
 
-      <ChatPanel chat={chat} placeholder={placeholder} autoFocusToken={autoFocusToken} onOpenDocument={onViewDocument} productionId={production.id} />
+      <ChatPanel chat={chat} placeholder={placeholder} autoFocusToken={autoFocusToken} onOpenDocument={onViewDocument} onOpenEntity={onOpenEntity} productionId={production.id} />
     </aside>
   );
 }

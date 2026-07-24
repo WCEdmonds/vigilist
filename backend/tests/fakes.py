@@ -48,6 +48,12 @@ class FakeResult:
     def scalar_one_or_none(self):
         return self._scalar
 
+    def one(self):
+        """Return a single row (typically a tuple from aggregate queries)."""
+        if self._rows:
+            return self._rows[0]
+        return None
+
     def first(self):
         return self._items[0] if self._items else None
 

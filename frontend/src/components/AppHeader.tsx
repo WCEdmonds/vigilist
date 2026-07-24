@@ -16,6 +16,8 @@ interface AppHeaderProps {
   onAsk?: (question: string) => void;
   onOpenReview?: () => void;
   onOpenEntities?: () => void;
+  onOpenTimeline?: () => void;
+  onOpenGraph?: () => void;
   onOpenDashboard?: () => void;
   onOpenShare?: () => void;
   onOpenSettings?: () => void;
@@ -41,6 +43,8 @@ export default function AppHeader({
   onAsk,
   onOpenReview,
   onOpenEntities,
+  onOpenTimeline,
+  onOpenGraph,
   onOpenDashboard,
   onOpenShare,
   onOpenSettings,
@@ -156,6 +160,16 @@ export default function AppHeader({
         {onOpenEntities && (
           <button type="button" className="cb-action" onClick={onOpenEntities}>
             Entities
+          </button>
+        )}
+        {onOpenTimeline && (
+          <button type="button" className="cb-action" onClick={onOpenTimeline}>
+            Timeline
+          </button>
+        )}
+        {onOpenGraph && (
+          <button type="button" className="cb-action" onClick={onOpenGraph}>
+            Graph
           </button>
         )}
         <div className="cb-gear" ref={gearRef}>

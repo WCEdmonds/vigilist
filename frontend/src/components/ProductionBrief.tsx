@@ -125,9 +125,10 @@ interface ProductionBriefProps {
   onSelectCluster: (id: number | null) => void;
   onViewDocument: (id: string) => void;
   onPipelineSettled?: () => void;
+  onOpenEntity?: (id: string) => void;
 }
 
-export default function ProductionBrief({ production, clusters, activeClusterId, onSelectCluster, onViewDocument, onPipelineSettled }: ProductionBriefProps) {
+export default function ProductionBrief({ production, clusters, activeClusterId, onSelectCluster, onViewDocument, onPipelineSettled, onOpenEntity }: ProductionBriefProps) {
   const [info, setInfo] = useState<PipelineInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -353,7 +354,27 @@ export default function ProductionBrief({ production, clusters, activeClusterId,
 
         {(brief.key_players.length > 0 || brief.date_range) && (
           <div className="brief-meta">
-            {brief.key_players.length > 0 && <span>{brief.key_players.join(', ')}</span>}
+            {info.key_players_resolved && info.key_players_resolved.length > 0 ? (
+              <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                {info.key_players_resolved.map((p, i) => (
+                  p.entity_id ? (
+                    <button
+                      key={i}
+                      type="button"
+                      className="badge badge-gray"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => onOpenEntity?.(p.entity_id as string)}
+                    >
+                      {p.name}
+                    </button>
+                  ) : (
+                    <span key={i} style={{ fontSize: 'var(--text-sm)' }}>{p.name}</span>
+                  )
+                ))}
+              </span>
+            ) : (
+              brief.key_players.length > 0 && <span>{brief.key_players.join(', ')}</span>
+            )}
             {brief.key_players.length > 0 && brief.date_range && <span> · </span>}
             {brief.date_range && <span>{brief.date_range}</span>}
           </div>

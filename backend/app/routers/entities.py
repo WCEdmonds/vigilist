@@ -14,16 +14,24 @@ from app.models import (
 )
 from app.routers.auth import get_current_user
 from app.schemas import (
-    DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
-    EntityDocMentionOut, EntityDocumentMentionsOut, EntityListItemOut,
+    ChipEntityOut, DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
+    EntityDocMentionOut, EntityDocumentMentionsOut, EntitiesSummaryOut, EntityListItemOut,
     EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
+    TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
+    GraphNodeOut, GraphEdgeOut, GraphOut,
 )
 from app.services.audit import log_action
+from app.services.entity_extraction import EVENT_TYPES
 from app.services.entity_merge import merge_entities, undo_merge
 from app.services.entity_profile import generate_entity_overview, is_overview_stale
 
 router = APIRouter(prefix="/api", tags=["entities"])
+
+
+def _clamp_per_page(v: int) -> int:
+    """Clamp per_page parameter to valid range [1, 100]."""
+    return max(1, min(100, v))
 
 
 async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> Entity:
@@ -32,6 +40,56 @@ async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> E
     if entity is None or entity.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
+
+
+# Route note: Starlette matches routes in REGISTRATION order (first match wins),
+# and matching happens PER ROUTER, not globally by specificity. documents.py
+# defines GET /api/documents/{doc_id}, and documents.router is included in
+# main.py before entities.router. That means ANY literal path under
+# /api/documents/* declared in a DIFFERENT router (like this one used to be:
+# /api/documents/entities-summary) is unreachable -- the {doc_id} route in
+# documents.py matches first and "entities-summary" gets captured as a doc_id,
+# producing a 422 instead of ever reaching this handler. Lesson: routers don't
+# get to carve out sub-namespaces of a path prefix another router already owns
+# with a catch-all segment; either own the whole prefix or pick a namespace
+# no other router has claimed. Hence this lives at /api/entities-summary.
+@router.get("/entities-summary", response_model=EntitiesSummaryOut)
+async def get_entities_summary(
+    ids: str = "",
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Batch: top-3 entities per document for row chips. Scoped; bad ids skipped."""
+    raw = [s.strip() for s in ids.split(",") if s.strip()]
+    if len(raw) > 100:
+        raise HTTPException(status_code=422, detail="Too many ids (max 100)")
+    doc_ids = []
+    for s in raw:
+        try:
+            doc_ids.append(UUID(s))
+        except ValueError:
+            continue
+    if not doc_ids:
+        return EntitiesSummaryOut(summaries={})
+
+    accessible = await get_accessible_production_ids(db, user)
+    rows = (await db.execute(
+        select(EntityMention.document_id, Entity,
+               func.count(EntityMention.id).label("cnt"))
+        .join(Entity, EntityMention.entity_id == Entity.id)
+        .where(EntityMention.document_id.in_(doc_ids),
+               EntityMention.production_id.in_(accessible))
+        .group_by(EntityMention.document_id, Entity.id)
+        .order_by(EntityMention.document_id, func.count(EntityMention.id).desc())
+    )).all()
+
+    summaries: dict[str, list[ChipEntityOut]] = {}
+    for doc_id, ent, _cnt in rows:
+        bucket = summaries.setdefault(str(doc_id), [])
+        if len(bucket) < 3:
+            bucket.append(ChipEntityOut(entity_id=ent.id, canonical_name=ent.canonical_name,
+                                        entity_type=ent.entity_type))
+    return EntitiesSummaryOut(summaries=summaries)
 
 
 @router.get("/documents/{doc_id}/entities", response_model=DocumentEntitiesOut)
@@ -402,3 +460,131 @@ async def undo_entity_merge(
                      production_id=merge.production_id, details={"merge_id": merge_id})
     await db.commit()
     return {"ok": True, "restored_entity_id": str(restored.id)}
+
+
+@router.get("/productions/{production_id}/timeline", response_model=TimelinePageOut)
+async def get_production_timeline(
+    production_id: int,
+    entity_id: UUID | None = None,
+    event_type: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    per_page = _clamp_per_page(per_page)
+
+    base = select(OntologyEvent).where(OntologyEvent.production_id == production_id)
+    count_base = select(func.count(OntologyEvent.id)).where(OntologyEvent.production_id == production_id)
+    if event_type in EVENT_TYPES:
+        base = base.where(OntologyEvent.event_type == event_type)
+        count_base = count_base.where(OntologyEvent.event_type == event_type)
+    if entity_id is not None:
+        base = base.join(EventParticipant, EventParticipant.event_id == OntologyEvent.id).where(
+            EventParticipant.entity_id == entity_id)
+        count_base = count_base.join(EventParticipant, EventParticipant.event_id == OntologyEvent.id).where(
+            EventParticipant.entity_id == entity_id)
+
+    total = (await db.execute(count_base)).scalar() or 0
+    undated_count = (await db.execute(
+        count_base.where(OntologyEvent.event_date.is_(None)))).scalar() or 0
+
+    rows = (await db.execute(
+        base.add_columns(Document.bates_begin, Document.title)
+        .join(Document, OntologyEvent.document_id == Document.id)
+        .order_by(OntologyEvent.event_date.asc().nullslast(), OntologyEvent.id)
+        .offset((max(1, page) - 1) * per_page)
+        .limit(per_page)
+    )).all()
+
+    event_ids = [ev.id for ev, _b, _t in rows]
+    participants_by_event: dict[int, list[TimelineParticipantOut]] = {}
+    if event_ids:
+        prows = (await db.execute(
+            select(EventParticipant.event_id, Entity)
+            .join(Entity, EventParticipant.entity_id == Entity.id)
+            .where(EventParticipant.event_id.in_(event_ids))
+        )).all()
+        for eid, ent in prows:
+            participants_by_event.setdefault(eid, []).append(TimelineParticipantOut(
+                entity_id=ent.id, canonical_name=ent.canonical_name, entity_type=ent.entity_type))
+
+    return TimelinePageOut(
+        events=[TimelineEventOut(
+            event_id=ev.id, description=ev.description, event_type=ev.event_type,
+            event_date=ev.event_date.isoformat() if ev.event_date else None,
+            date_precision=ev.date_precision, document_id=ev.document_id,
+            bates_begin=bates, title=title,
+            participants=participants_by_event.get(ev.id, []),
+        ) for ev, bates, title in rows],
+        total=total, undated_count=undated_count,
+    )
+
+
+@router.get("/productions/{production_id}/graph", response_model=GraphOut)
+async def get_production_graph(
+    production_id: int,
+    max_nodes: int = 75,
+    min_shared_docs: int = 2,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    max_nodes = max(1, min(150, max_nodes))
+    min_shared_docs = max(1, min_shared_docs)
+
+    total_entities = (await db.execute(
+        select(func.count(Entity.id)).where(Entity.production_id == production_id)
+    )).scalar() or 0
+
+    node_rows = (await db.execute(
+        select(Entity).where(Entity.production_id == production_id)
+        .order_by(Entity.mention_count.desc(), Entity.id).limit(max_nodes)
+    )).scalars().all()
+    node_ids = {e.id for e in node_rows}
+    nodes = [GraphNodeOut(id=e.id, canonical_name=e.canonical_name,
+                          entity_type=e.entity_type, mention_count=e.mention_count)
+             for e in node_rows]
+
+    edges: list[GraphEdgeOut] = []
+    stated_pairs: set[frozenset] = set()
+    if node_ids:
+        srows = (await db.execute(
+            select(EntityRelationship.source_entity_id, EntityRelationship.target_entity_id,
+                   EntityRelationship.relationship_type,
+                   func.count(EntityRelationship.id).label("weight"))
+            .where(EntityRelationship.source_entity_id.in_(node_ids),
+                   EntityRelationship.target_entity_id.in_(node_ids))
+            .group_by(EntityRelationship.source_entity_id, EntityRelationship.target_entity_id,
+                      EntityRelationship.relationship_type)
+        )).all()
+        for src, tgt, rtype, weight in srows:
+            stated_pairs.add(frozenset((src, tgt)))
+            edges.append(GraphEdgeOut(source=src, target=tgt, kind="stated",
+                                      relationship_type=rtype, weight=weight))
+
+        # Co-occurrence among included nodes; a < b ordering avoids duplicate pairs.
+        # Same production-invariant note as get_entity_connections: rows for one
+        # document always share its production_id (enforced at persist time).
+        em_a = EntityMention.__table__.alias("em_a")
+        em_b = EntityMention.__table__.alias("em_b")
+        crows = (await db.execute(
+            select(em_a.c.entity_id, em_b.c.entity_id,
+                   func.count(func.distinct(em_a.c.document_id)).label("shared"))
+            .select_from(em_a.join(em_b, em_a.c.document_id == em_b.c.document_id))
+            .where(em_a.c.entity_id.in_(node_ids), em_b.c.entity_id.in_(node_ids),
+                   em_a.c.entity_id < em_b.c.entity_id)
+            .group_by(em_a.c.entity_id, em_b.c.entity_id)
+            .having(func.count(func.distinct(em_a.c.document_id)) >= min_shared_docs)
+        )).all()
+        for a, b, shared in crows:
+            if frozenset((a, b)) in stated_pairs:
+                continue
+            edges.append(GraphEdgeOut(source=a, target=b, kind="cooccurrence", weight=shared))
+
+    return GraphOut(nodes=nodes, edges=edges, truncated=total_entities > max_nodes)

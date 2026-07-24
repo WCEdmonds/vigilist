@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
+import EntityGraphView from './components/EntityGraphView';
+import EntityTimelineView from './components/EntityTimelineView';
 import IngestWizard from './components/IngestWizard';
 import ProductionSetsPanel from './components/ProductionSetsPanel';
 import DefensibilityPanel from './components/DefensibilityPanel';
@@ -28,7 +30,7 @@ import { useOnboarding } from './hooks/useOnboarding';
 import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
-import type { ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
+import type { ChipEntity, ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -89,6 +91,26 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [myBatches, setMyBatches] = useState<ReviewBatch[]>([]);
   const [showReview, setShowReview] = useState(initialUrl.view === 'review' || initialUrl.view === 'ai');
   const [showEntities, setShowEntities] = useState(initialUrl.view === 'entities');
+  const [showTimeline, setShowTimeline] = useState(initialUrl.view === 'timeline');
+  const [showGraph, setShowGraph] = useState(initialUrl.view === 'graph');
+  const [entityPanelId, setEntityPanelId] = useState<string | null>(initialUrl.entity ?? null);
+
+  // Ambient entity chips shown on doc-list/search rows — a cache keyed by
+  // document id, populated one batch call per newly-seen page of rows.
+  const [entityChips, setEntityChips] = useState<Record<string, ChipEntity[]>>({});
+  // Ids already requested (or in flight), so a re-render with the same page
+  // doesn't refire the batch call. Not state — it never drives a render.
+  const chipsFetched = useRef<Set<string>>(new Set());
+
+  // Deep-link into an entity's profile panel from anywhere (chip clicks,
+  // timeline participants, graph nodes, etc.) — closes other full-screen
+  // views/the doc viewer and opens the Entities workspace with the panel seeded.
+  const navigateToEntity = (id: string) => {
+    setShowReview(false);
+    setViewDocId(null);
+    setEntityPanelId(id);
+    setShowEntities(true);
+  };
 
   // AI chat, docked in the context rail (session-only conversation). The
   // production id lets doc-less questions be grounded in the production
@@ -134,7 +156,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     doc: viewDocId ?? undefined,
     q: hasSearched ? searchQuery || undefined : undefined,
     batch: activeBatchId ? String(activeBatchId) : undefined,
-    view: showReview ? 'review' : showEntities ? 'entities' : undefined,
+    view: showReview ? 'review' : showEntities ? 'entities' : showTimeline ? 'timeline' : showGraph ? 'graph' : undefined,
+    entity: (showEntities || showTimeline || showGraph) && entityPanelId ? entityPanelId : undefined,
   });
 
   // If a search query was in the URL on mount, run the search once.
@@ -221,6 +244,33 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterFileType, filterSourceParty, workMode]);
+
+  // Ambient entity chips: batch-fetch summaries for whichever page of rows
+  // is currently on screen (doc list or search results), one call per newly
+  // seen id set. Mirrors ProductionBrief's expand-effect ref-guard pattern.
+  useEffect(() => {
+    const rowIds = hasSearched ? searchResults.map(r => r.id) : documents.map(d => d.id);
+    const toFetch = rowIds.filter(id => !chipsFetched.current.has(id));
+    if (toFetch.length === 0) return;
+    toFetch.forEach(id => chipsFetched.current.add(id));
+
+    // Chunk into batches of ≤100 to respect backend cap.
+    const BATCH_SIZE = 100;
+    const chunks = [];
+    for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
+      chunks.push(toFetch.slice(i, i + BATCH_SIZE));
+    }
+
+    // Fire one request per chunk; on failure, unmark ids for retry-on-next-render.
+    chunks.forEach(chunk => {
+      getEntitiesSummary(chunk)
+        .then(r => setEntityChips(prev => ({ ...prev, ...r.summaries })))
+        .catch(e => {
+          console.warn('getEntitiesSummary chunk failed:', e);
+          chunk.forEach(id => chipsFetched.current.delete(id));
+        });
+    });
+  }, [hasSearched, documents, searchResults]);
 
   const handleDesignateAll = async (sourceType: 'collection' | 'received') => {
     try {
@@ -368,6 +418,17 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     );
   };
 
+  // Ambient entity chip — clicking retargets the (possibly already-open)
+  // Entities panel via navigateToEntity rather than bubbling into the row's
+  // own click handler (which opens the document).
+  const entityChip = (c: ChipEntity) => (
+    <button key={c.entity_id} className="badge badge-gray" style={{ cursor: 'pointer' }}
+            onClick={ev => { ev.stopPropagation(); navigateToEntity(c.entity_id); }}>
+      <span className={`entity-dot entity-${c.entity_type}`} style={{ marginRight: 3 }}>●</span>
+      {c.canonical_name}
+    </button>
+  );
+
   // Re-fetch the doc list (or re-run the active search) after leaving the
   // review workspace, since markers/tags may have changed there. Called from
   // event handlers only — never from a render-time effect.
@@ -388,12 +449,49 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   }
 
   // Entities view full-screen mode (key players + merge suggestion queue)
+  // Leaving via Back has no deep-link intent, so the panel id is cleared
+  // before the view flag flips — otherwise a stale id from this visit would
+  // auto-open a panel the next time a full-screen view mounts. (This is
+  // defense-in-depth: exclusivity between full-screen views is already
+  // guaranteed structurally by the if-return branch order below.)
   if (showEntities) {
     return (
       <EntitiesView
         productionId={production.id}
         onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
-        onBack={() => { setShowEntities(false); refreshList(); }}
+        onBack={() => { setEntityPanelId(null); setShowEntities(false); refreshList(); }}
+        openEntityId={entityPanelId}
+        onOpenEntityChange={setEntityPanelId}
+      />
+    );
+  }
+
+  // Timeline view full-screen mode (chronological case events)
+  // Same rationale as the Entities onBack above — Back has no deep-link
+  // intent, so clear the stale panel id first.
+  if (showTimeline) {
+    return (
+      <EntityTimelineView
+        productionId={production.id}
+        onViewDocument={(id) => { setShowTimeline(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setEntityPanelId(null); setShowTimeline(false); refreshList(); }}
+        openEntityId={entityPanelId}
+        onOpenEntityChange={setEntityPanelId}
+      />
+    );
+  }
+
+  // Graph view full-screen mode (relationship graph)
+  // Same rationale as the Entities/Timeline onBack above — Back has no
+  // deep-link intent, so clear the stale panel id first.
+  if (showGraph) {
+    return (
+      <EntityGraphView
+        productionId={production.id}
+        onViewDocument={(id) => { setShowGraph(false); setViewDocId(id); refreshList(); }}
+        onBack={() => { setEntityPanelId(null); setShowGraph(false); refreshList(); }}
+        openEntityId={entityPanelId}
+        onOpenEntityChange={setEntityPanelId}
       />
     );
   }
@@ -452,9 +550,15 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onLogoClick={clearSearch}
         initialQuery={searchQuery}
         onAsk={handleAsk}
-        onOpenReview={() => setShowReview(true)}
-        onOpenEntities={() => setShowEntities(true)}
-        onOpenDashboard={() => setShowDashboard(true)}
+        /* entityPanelId is cleared before each target view flag flips —
+           these are plain nav clicks, not deep links, so no panel should
+           carry over from whatever view was open before. Defense-in-depth
+           only: view exclusivity is already structural (branch order above). */
+        onOpenReview={() => { setEntityPanelId(null); setShowReview(true); }}
+        onOpenEntities={() => { setEntityPanelId(null); setShowTimeline(false); setShowGraph(false); setShowEntities(true); }}
+        onOpenTimeline={() => { setEntityPanelId(null); setShowEntities(false); setShowGraph(false); setShowTimeline(true); }}
+        onOpenGraph={() => { setEntityPanelId(null); setShowEntities(false); setShowTimeline(false); setShowGraph(true); }}
+        onOpenDashboard={() => { setEntityPanelId(null); setShowDashboard(true); }}
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
         onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}
@@ -513,6 +617,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           onSelectCluster={setFilterClusterId}
           onViewDocument={setViewDocId}
           onPipelineSettled={refreshClusters}
+          onOpenEntity={navigateToEntity}
         />
 
         {/* My Review Batches */}
@@ -611,6 +716,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 onSelect={setViewDocId}
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelect}
+                entityChips={entityChips}
+                onOpenEntity={navigateToEntity}
               />
             </div>
           </>
@@ -744,6 +851,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                       <th style={{ width: 80 }}>Type</th>
                       <th>Theme</th>
                       <th>AI</th>
+                      <th>People/Orgs</th>
                       <th>Pages</th>
                       <th>Tags</th>
                       <th>Notes</th>
@@ -797,6 +905,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                         </td>
                         <td className="meta-cell">{themeChip(d)}</td>
                         <td className="meta-cell">{aiMarker(d)}</td>
+                        <td className="meta-cell">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -848,6 +957,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                         ))}
                         {themeChip(d)}
                         {aiMarker(d)}
+                        {(entityChips[d.id] || []).slice(0, 3).map(entityChip)}
                       </div>
                     </div>
                   </div>
@@ -924,6 +1034,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             setSearchTotal(results.length);
           }}
           onAttached={focusChat}
+          onOpenEntity={navigateToEntity}
         />
       </div>
 

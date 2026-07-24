@@ -268,6 +268,11 @@ class ProductionUpdate(BaseModel):
     case_context: str | None = None
 
 
+class KeyPlayerOut(BaseModel):
+    name: str
+    entity_id: UUID4 | None = None
+
+
 class PipelineStatusOut(BaseModel):
     status: dict | None = None
     brief: dict | None = None
@@ -277,6 +282,7 @@ class PipelineStatusOut(BaseModel):
     # UI can show "Summaries · 275/550" while that stage runs.
     summarized_count: int = 0
     doc_count: int = 0
+    key_players_resolved: list[KeyPlayerOut] | None = None
 
 
 class IntakeSummaryOut(BaseModel):
@@ -693,6 +699,30 @@ class EntityConnectionsOut(BaseModel):
     shared_events: list[SharedEventOut]
 
 
+class TimelineParticipantOut(BaseModel):
+    entity_id: UUID4
+    canonical_name: str
+    entity_type: str
+
+
+class TimelineEventOut(BaseModel):
+    event_id: int
+    description: str
+    event_type: str
+    event_date: str | None
+    date_precision: str
+    document_id: UUID4
+    bates_begin: str
+    title: str | None
+    participants: list[TimelineParticipantOut]
+
+
+class TimelinePageOut(BaseModel):
+    events: list[TimelineEventOut]
+    total: int
+    undated_count: int
+
+
 class EntityListItemOut(BaseModel):
     id: UUID4
     entity_type: str
@@ -723,6 +753,39 @@ class MergeRequest(BaseModel):
 class MergeResultOut(BaseModel):
     merge_id: int
     winner_id: UUID4
+
+
+class GraphNodeOut(BaseModel):
+    id: UUID4
+    canonical_name: str
+    entity_type: str
+    mention_count: int
+
+
+class GraphEdgeOut(BaseModel):
+    source: UUID4
+    target: UUID4
+    kind: str  # 'stated' | 'cooccurrence'
+    relationship_type: str | None = None
+    weight: int
+
+
+class GraphOut(BaseModel):
+    nodes: list[GraphNodeOut]
+    edges: list[GraphEdgeOut]
+    truncated: bool
+
+
+class ChipEntityOut(BaseModel):
+    entity_id: UUID4
+    canonical_name: str
+    entity_type: str
+
+
+class EntitiesSummaryOut(BaseModel):
+    summaries: dict[str, list[ChipEntityOut]]
+
+
 # --- P2-1: production sets --------------------------------------------------
 
 class ProductionSetCreate(BaseModel):

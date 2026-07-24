@@ -1,4 +1,4 @@
-import type { SearchResult, Tag } from '../types';
+import type { ChipEntity, SearchResult, Tag } from '../types';
 import { renderHighlightedSnippet } from '../utils/sanitize';
 
 interface Props {
@@ -7,6 +7,8 @@ interface Props {
   onSelect: (id: string) => void;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
+  entityChips?: Record<string, ChipEntity[]>;
+  onOpenEntity?: (id: string) => void;
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -14,7 +16,7 @@ const COLOR_MAP: Record<string, string> = {
   purple: 'badge-purple', gray: 'badge-gray', blue: 'badge-blue',
 };
 
-export default function SearchResults({ results, onSelect, selectedIds, onToggleSelect }: Props) {
+export default function SearchResults({ results, onSelect, selectedIds, onToggleSelect, entityChips, onOpenEntity }: Props) {
   if (results.length === 0) {
     return <div className="empty-state" style={{ padding: 'var(--space-8)' }}>No results found</div>;
   }
@@ -41,6 +43,13 @@ export default function SearchResults({ results, onSelect, selectedIds, onToggle
             )}
             {r.tags?.map((tag: Tag) => (
               <span key={tag.id} className={`badge ${COLOR_MAP[tag.color] || 'badge-gray'}`}>{tag.name}</span>
+            ))}
+            {(entityChips?.[r.id] || []).slice(0, 3).map(c => (
+              <button key={c.entity_id} className="badge badge-gray" style={{ cursor: 'pointer' }}
+                      onClick={ev => { ev.stopPropagation(); onOpenEntity?.(c.entity_id); }}>
+                <span className={`entity-dot entity-${c.entity_type}`} style={{ marginRight: 3 }}>●</span>
+                {c.canonical_name}
+              </button>
             ))}
             <span className="result-meta">{r.page_count} pg{r.page_count !== 1 ? 's' : ''}</span>
           </div>

@@ -7,15 +7,19 @@ interface Props {
   productionId: number;
   onViewDocument: (docId: string) => void;
   onBack: () => void;
+  openEntityId?: string | null;
+  onOpenEntityChange?: (id: string | null) => void;
 }
 
-export default function EntitiesView({ productionId, onViewDocument, onBack }: Props) {
+export default function EntitiesView({ productionId, onViewDocument, onBack, openEntityId, onOpenEntityChange }: Props) {
   const [entities, setEntities] = useState<EntityListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [suggestions, setSuggestions] = useState<MergeSuggestion[]>([]);
-  const [openEntityId, setOpenEntityId] = useState<string | null>(null);
+  const openEntity = (id: string | null) => {
+    onOpenEntityChange?.(id);
+  };
   const [busy, setBusy] = useState<number | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -65,7 +69,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
   };
 
   return (
-    <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'relative', height: '100dvh', display: 'flex', flexDirection: 'column' }}>
       <div className="panel-header" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="btn btn-ghost btn-xs" onClick={onBack}>← Back</button>
         <span style={{ fontWeight: 600 }}>People &amp; Organizations ({total})</span>
@@ -110,11 +114,11 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
             {suggestions.map(s => (
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
                 <span>
-                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => setOpenEntityId(s.entity_a.id)}>
+                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(s.entity_a.id)}>
                     {s.entity_a.canonical_name}
                   </button> ({s.entity_a.mention_count})
                   {' ↔ '}
-                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => setOpenEntityId(s.entity_b.id)}>
+                  <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(s.entity_b.id)}>
                     {s.entity_b.canonical_name}
                   </button> ({s.entity_b.mention_count})
                 </span>
@@ -134,7 +138,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
           </thead>
           <tbody>
             {entities.map(e => (
-              <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => setOpenEntityId(e.id)}>
+              <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => openEntity(e.id)}>
                 <td>{e.canonical_name}</td>
                 <td>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
                 <td>{e.mention_count}</td>
@@ -156,9 +160,9 @@ export default function EntitiesView({ productionId, onViewDocument, onBack }: P
       {openEntityId && (
         <EntityPanel
           entityId={openEntityId}
-          onClose={() => setOpenEntityId(null)}
-          onOpenEntity={setOpenEntityId}
-          onOpenDocument={docId => { setOpenEntityId(null); onViewDocument(docId); }}
+          onClose={() => openEntity(null)}
+          onOpenEntity={openEntity}
+          onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }}
         />
       )}
     </div>

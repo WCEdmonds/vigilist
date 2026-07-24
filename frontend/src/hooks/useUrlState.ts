@@ -15,13 +15,14 @@ export interface VigilistUrlState {
   batch?: string;
   view?: string; // 'review' | 'ai' (legacy) | 'entities' | etc.
   prod?: string;
+  entity?: string;
 }
 
 export function getInitialUrlState(): VigilistUrlState {
   if (typeof window === 'undefined') return {};
   const params = new URLSearchParams(window.location.search);
   const state: VigilistUrlState = {};
-  for (const key of ['doc', 'q', 'batch', 'view', 'prod'] as const) {
+  for (const key of ['doc', 'q', 'batch', 'view', 'prod', 'entity'] as const) {
     const val = params.get(key);
     if (val) state[key] = val;
   }
@@ -52,5 +53,5 @@ export function useSyncUrl(state: VigilistUrlState) {
       const url = window.location.pathname + next + window.location.hash;
       window.history.replaceState(window.history.state, '', url);
     }
-  }, [state.doc, state.q, state.batch, state.view, state.prod]);
+  }, [state.doc, state.q, state.batch, state.view, state.prod, state.entity]);
 }

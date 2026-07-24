@@ -1,10 +1,10 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile,
-  FamilyThread,
+  AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile,
+  FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
-  SearchResponse, SearchResult, Tag,
+  SearchResponse, SearchResult, Tag, TimelinePage,
 } from '../types';
 
 /**
@@ -854,6 +854,18 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
 export const triggerEntityExtraction = (productionId: number) =>
   request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
 
+export function getTimeline(productionId: number, entityId?: string, eventType?: string, page = 1, perPage = 50) {
+  const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (entityId) params.set('entity_id', entityId);
+  if (eventType) params.set('event_type', eventType);
+  return request<TimelinePage>(`/api/productions/${productionId}/timeline?${params}`);
+}
+
+export const getGraph = (productionId: number, maxNodes = 75, minSharedDocs = 2) =>
+  request<GraphData>(`/api/productions/${productionId}/graph?max_nodes=${maxNodes}&min_shared_docs=${minSharedDocs}`);
+
+export const getEntitiesSummary = (ids: string[]) =>
+  request<{ summaries: Record<string, ChipEntity[]> }>(`/api/entities-summary?ids=${ids.join(',')}`);
 // ── Defensibility (Phase 3) ──
 
 export interface SearchTermReportInfo {
