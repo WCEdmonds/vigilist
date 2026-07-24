@@ -1,5 +1,6 @@
 """Ontology read API: document entities, profiles, mentions, connections."""
 
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -612,6 +613,24 @@ async def get_production_timeline(
 _DATE_PRECISIONS = {"day", "month", "year", "unknown"}
 
 
+def _normalize_human_event_date(raw: str) -> str:
+    """Loosen a human-entered event_date before handing it to the extractor's
+    strict parse_event_date. Human date editors commonly send a full ISO
+    datetime (e.g. "2021-06-15T00:00:00Z" from Date.toISOString()) or a
+    non-padded "2021-6-5" -- both are valid corrections but neither
+    fullmatches parse_event_date's YYYY[-MM[-DD]] pattern. Strip any
+    time/zone component and zero-pad month/day so the value reaches
+    parse_event_date as a clean YYYY[-MM[-DD]] string. This does NOT touch
+    parse_event_date itself, which stays strict for LLM-extracted dates
+    (T2's guarantee) -- it's only applied to the human-facing PATCH path.
+    """
+    raw = raw.strip()
+    date_part = re.split(r"[T ]", raw, maxsplit=1)[0]
+    parts = date_part.split("-")
+    padded = [parts[0]] + [p.zfill(2) for p in parts[1:]]
+    return "-".join(padded)
+
+
 def _event_out(ev: OntologyEvent) -> dict:
     return {
         "event_id": ev.id,
@@ -647,12 +666,22 @@ async def edit_event(
             event.event_date = None
             event.date_precision = "unknown"
         else:
-            parsed_date, parsed_precision = parse_event_date(body.event_date)
+            normalized = _normalize_human_event_date(body.event_date)
+            parsed_date, parsed_precision = parse_event_date(normalized)
             if parsed_date is None:
-                raise HTTPException(status_code=422, detail="Unparseable event_date (year required)")
+                raise HTTPException(
+                    status_code=422,
+                    detail="event_date must be YYYY, YYYY-MM, or YYYY-MM-DD (optionally with a time component)",
+                )
             event.event_date = parsed_date
-            # Explicit precision wins over the one derived from the date shape.
-            event.date_precision = body.date_precision or parsed_precision
+            # Derive precision from the parsed date shape and ignore any
+            # explicitly-passed date_precision here -- an explicit value can
+            # otherwise contradict the date itself (e.g. {"event_date":
+            # "2021-06", "date_precision": "day"} would claim a day that was
+            # never given; {"event_date": "2021-06-15", "date_precision":
+            # "unknown"} would discard real precision). Deriving is simpler
+            # and friendlier than validating consistency and 422ing.
+            event.date_precision = parsed_precision
     elif body.date_precision is not None:
         event.date_precision = body.date_precision
 
@@ -671,14 +700,24 @@ async def delete_event(
     user: User = Depends(get_current_user),
 ):
     """Delete a spurious event (event_participants cascade via FK). Manager+
-    only, scoped to an accessible production (404 otherwise), audit-logged."""
+    only, scoped to an accessible production (404 otherwise), audit-logged.
+    The event is hard-deleted, so the audit row's details snapshot is the
+    only surviving record of what was removed."""
     event = await _get_scoped_event(db, user, event_id)
     await _require_manager(db, user, event.production_id)
     production_id = event.production_id
+    snapshot = {
+        "event_type": event.event_type,
+        "description": (event.description or "")[:200],
+        "event_date": event.event_date.isoformat() if event.event_date else None,
+        "date_precision": event.date_precision,
+        "document_id": str(event.document_id),
+        "significance": event.significance,
+    }
 
     await db.delete(event)
     await log_action(db, user, "event_deleted", "ontology_event", str(event_id),
-                     production_id=production_id, details={})
+                     production_id=production_id, details=snapshot)
     await db.commit()
     return {"ok": True}
 

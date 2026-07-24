@@ -194,3 +194,103 @@ def test_delete_manager_gate(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+# ── PATCH tolerant human date parsing (Finding 1) + derived precision (Finding 3) ──
+
+def test_patch_accepts_full_iso_datetime(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event(d=None, precision="unknown")
+    db = _event_db(ev)
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(event_date="2021-06-15T00:00:00Z"),
+        db=db, user=FakeUser()))
+    assert ev.event_date == date(2021, 6, 15)
+    assert ev.date_precision == "day"
+    assert out["event_date"] == "2021-06-15" and out["date_precision"] == "day"
+
+
+def test_patch_accepts_non_padded_date(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event(d=None, precision="unknown")
+    db = _event_db(ev)
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(event_date="2021-6-5"),
+        db=db, user=FakeUser()))
+    assert ev.event_date == date(2021, 6, 5)
+    assert ev.date_precision == "day"
+    assert out["event_date"] == "2021-06-05" and out["date_precision"] == "day"
+
+
+def test_patch_derives_precision_from_date_shape_over_explicit_value(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event(d=None, precision="unknown")
+    db = _event_db(ev)
+    # Body claims "day" precision but only gives a year-month -- the derived
+    # "month" precision must win, not the contradictory explicit value.
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(event_date="2021-06", date_precision="day"),
+        db=db, user=FakeUser()))
+    assert ev.event_date == date(2021, 6, 1)
+    assert ev.date_precision == "month"
+    assert out["event_date"] == "2021-06-01" and out["date_precision"] == "month"
+
+
+def test_patch_rejects_unparseable_event_date(monkeypatch):
+    _patch_event(monkeypatch)
+    db = _event_db(_event())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.edit_event(
+            event_id=EVENT_ID, body=EventEditRequest(event_date="last summer"),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+    assert exc.value.detail == (
+        "event_date must be YYYY, YYYY-MM, or YYYY-MM-DD (optionally with a time component)"
+    )
+
+
+def test_patch_precision_only_leaves_date_untouched(monkeypatch):
+    _patch_event(monkeypatch)
+    ev = _event(d=date(2021, 6, 15), precision="day")
+    db = _event_db(ev)
+    out = asyncio.run(er.edit_event(
+        event_id=EVENT_ID, body=EventEditRequest(date_precision="year"),
+        db=db, user=FakeUser()))
+    assert ev.event_date == date(2021, 6, 15)  # untouched
+    assert ev.date_precision == "year"
+    assert out["event_date"] == "2021-06-15" and out["date_precision"] == "year"
+
+
+# ── DELETE audit snapshot (Finding 2) ──────────────────────────────────────
+
+def test_delete_audit_log_includes_event_snapshot(monkeypatch):
+    audit_calls = []
+
+    async def fake_accessible(db, user):
+        return [1]
+
+    async def fake_role(db, user, production_id):
+        return "manager"
+
+    async def fake_log(db, user, action, resource_type, resource_id=None, **kwargs):
+        audit_calls.append((action, resource_type, resource_id, kwargs))
+
+    monkeypatch.setattr(er, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(er, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(er, "log_action", fake_log)
+
+    ev = _event(d=date(2021, 6, 15), precision="day")
+    db = _event_db(ev)
+    out = asyncio.run(er.delete_event(event_id=EVENT_ID, db=db, user=FakeUser()))
+    assert out == {"ok": True}
+
+    assert len(audit_calls) == 1
+    action, resource_type, resource_id, kwargs = audit_calls[0]
+    assert (action, resource_type, resource_id) == ("event_deleted", "ontology_event", str(EVENT_ID))
+    details = kwargs["details"]
+    assert details["event_type"] == "meeting"
+    assert details["description"] == "Board meeting"
+    assert details["document_id"] == str(ev.document_id)
+    assert details["event_date"] == "2021-06-15"
+    assert details["date_precision"] == "day"
+    assert details["significance"] == 4
