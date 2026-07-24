@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getClusters, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { entityDisplayName } from './utils/entityDisplay';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
@@ -30,7 +31,7 @@ import { useOnboarding } from './hooks/useOnboarding';
 import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
-import type { ChipEntity, ClusterInfo, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
+import type { ChipEntity, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -168,27 +169,19 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [clusters, setClusters] = useState<ClusterInfo[]>([]);
-  const [filterClusterId, setFilterClusterId] = useState<number | null>(null);
-
   const [perPage, setPerPage] = useState(50);
-
-  const refreshClusters = useCallback(() => {
-    getClusters(production.id).then(setClusters).catch(e => console.warn('getClusters failed:', e));
-  }, [production.id]);
 
   useEffect(() => {
     loadDocuments();
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
     getSourceParties(production.id).then(r => { setSourceParties(r.source_parties); setUndesignatedCount(r.undesignated); }).catch(e => console.warn('getSourceParties failed:', e));
-    refreshClusters();
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterClusterId, refreshClusters, filterAiDecision, filterSourceParty, workMode]);
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterAiDecision, filterSourceParty, workMode]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, filterClusterId ?? undefined, filterAiDecision || undefined, filterSourceParty || undefined, sourceTypeParam);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, filterAiDecision || undefined, filterSourceParty || undefined, sourceTypeParam);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -377,31 +370,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     }
   };
 
-  const themeIndexById = useMemo(() => {
-    const m = new Map<number, number>();
-    clusters.forEach((c, i) => m.set(c.id, (i % 8) + 1));
-    return m;
-  }, [clusters]);
-
-  const themeChip = (d: DocumentSummary) => {
-    // No label means the AI judged the cluster to have no genuine common
-    // thread — showing a placeholder badge would imply a theme that isn't
-    // there, so these rows get no badge. (The brief's chips still expose the
-    // cluster as "Cluster N" for filtering.)
-    if (d.cluster_id == null || !themeIndexById.has(d.cluster_id) || !d.cluster_label) return null;
-    const active = filterClusterId === d.cluster_id;
-    return (
-      <button
-        type="button"
-        className={`doc-theme-chip${active ? ' is-active' : ''}`}
-        style={{ background: `var(--theme-${themeIndexById.get(d.cluster_id)})` }}
-        onClick={e => { e.stopPropagation(); setFilterClusterId(active ? null : d.cluster_id!); }}
-        title={d.cluster_label}
-      >
-        {d.cluster_label}
-      </button>
-    );
-  };
 
   const aiMarker = (d: DocumentSummary) => {
     if (!d.ai_decision || d.ai_decided) return null;
@@ -422,10 +390,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Entities panel via navigateToEntity rather than bubbling into the row's
   // own click handler (which opens the document).
   const entityChip = (c: ChipEntity) => (
-    <button key={c.entity_id} className="badge badge-gray" style={{ cursor: 'pointer' }}
+    <button key={c.entity_id} className="entity-chip"
             onClick={ev => { ev.stopPropagation(); navigateToEntity(c.entity_id); }}>
-      <span className={`entity-dot entity-${c.entity_type}`} style={{ marginRight: 3 }}>●</span>
-      {c.canonical_name}
+      <span className={`entity-dot entity-${c.entity_type}`}>●</span>
+      {entityDisplayName(c.canonical_name, c.entity_type)}
     </button>
   );
 
@@ -609,15 +577,13 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             onOpenDoc={setViewDocId}
           />
         )}
-        <DefensibilityPanel productionId={production.id} tags={allTags} />
         <ProductionBrief
           production={production}
-          clusters={clusters}
-          activeClusterId={filterClusterId}
-          onSelectCluster={setFilterClusterId}
           onViewDocument={setViewDocId}
-          onPipelineSettled={refreshClusters}
           onOpenEntity={navigateToEntity}
+          onOpenEntities={() => setShowEntities(true)}
+          onOpenGraph={() => setShowGraph(true)}
+          onOpenTimeline={() => setShowTimeline(true)}
         />
 
         {/* My Review Batches */}
@@ -849,7 +815,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                       <th>Bates Range</th>
                       <th>Title</th>
                       <th style={{ width: 80 }}>Type</th>
-                      <th>Theme</th>
                       <th>AI</th>
                       <th>People/Orgs</th>
                       <th>Pages</th>
@@ -903,9 +868,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             {d.file_type === 'document' ? 'DOC' : d.file_type === 'pdf' ? 'PDF' : d.file_type}
                           </span>
                         </td>
-                        <td className="meta-cell">{themeChip(d)}</td>
                         <td className="meta-cell">{aiMarker(d)}</td>
-                        <td className="meta-cell">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</td>
+                        <td className="meta-cell"><div className="entity-chip-row">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</div></td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -955,9 +919,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             {tag.name}
                           </span>
                         ))}
-                        {themeChip(d)}
                         {aiMarker(d)}
-                        {(entityChips[d.id] || []).slice(0, 3).map(entityChip)}
+                        <span className="entity-chip-row" style={{ display: 'inline-flex' }}>{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</span>
                       </div>
                     </div>
                   </div>
@@ -1016,6 +979,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             </button>
           </div>
         )}
+
+        {/* Defensibility tools live at the foot of the matter view — reach
+            for them when you need the record, not on every visit. */}
+        <DefensibilityPanel productionId={production.id} tags={allTags} />
         </div>
         <ContextRail
           production={production}

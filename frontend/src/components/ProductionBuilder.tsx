@@ -293,7 +293,7 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
               <label><input type="checkbox" checked={excludeReceived} onChange={e => setExcludeReceived(e.target.checked)} /> Exclude received documents</label>
             </div>
 
-            <div style={{ borderTop: '1px solid rgba(44,62,107,0.1)', paddingTop: 'var(--space-3)' }}>
+            <div style={{ borderTop: '1px solid rgba(20, 24, 29,0.1)', paddingTop: 'var(--space-3)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <strong style={{ fontSize: 'var(--text-sm)' }}>Validation</strong>
                 <button className="btn btn-ghost btn-xs" disabled={busy || !currentSetId}
@@ -372,8 +372,8 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
             {set.render_status === 'rendering' && (
               <div style={{ fontSize: 'var(--text-sm)' }}>
                 Rendering… {set.rendered_count}/{set.doc_count}
-                <div style={{ height: 6, background: 'rgba(44,62,107,0.1)', borderRadius: 3, marginTop: 4 }}>
-                  <div style={{ height: 6, width: `${set.doc_count ? Math.round((set.rendered_count / set.doc_count) * 100) : 0}%`, background: 'var(--color-primary, #2c3e6b)', borderRadius: 3 }} />
+                <div style={{ height: 6, background: 'rgba(20, 24, 29,0.1)', borderRadius: 3, marginTop: 4 }}>
+                  <div style={{ height: 6, width: `${set.doc_count ? Math.round((set.rendered_count / set.doc_count) * 100) : 0}%`, background: 'var(--color-primary, #14181d)', borderRadius: 3 }} />
                 </div>
               </div>
             )}
@@ -407,7 +407,7 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
             )}
 
             {members.length > 0 && (
-              <div style={{ borderTop: '1px solid rgba(44,62,107,0.1)', paddingTop: 'var(--space-2)' }}>
+              <div style={{ borderTop: '1px solid rgba(20, 24, 29,0.1)', paddingTop: 'var(--space-2)' }}>
                 <div style={{ ...fieldLabel, marginBottom: 4 }}>Members {members.length > 100 ? '(first 100)' : ''}</div>
                 <div style={{ maxHeight: 220, overflowY: 'auto', fontSize: 'var(--text-xs)' }}>
                   {members.slice(0, 100).map(m => (

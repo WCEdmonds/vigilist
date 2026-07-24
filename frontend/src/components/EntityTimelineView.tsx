@@ -3,6 +3,7 @@ import { deleteEvent, getTimeline, listEntities, updateEvent } from '../api/clie
 import type { DatePrecision, EntityListItem, TimelineEvent } from '../types';
 import EntityPanel from './EntityPanel';
 import { showToast } from './Toast';
+import { entityDisplayName } from '../utils/entityDisplay';
 
 interface Props {
   productionId: number;
@@ -223,13 +224,15 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
 
   const options = useMemo(() => {
     const q = entityQuery.trim().toLowerCase();
-    const local = q
-      ? entityIndex.filter(e => e.canonical_name.toLowerCase().includes(q))
-      : entityIndex;
+    // Match on the raw canonical name AND the surname-first display form, so
+    // "matthew s" finds "Schlegel, Matthew S" however the user thinks of it.
+    const matches = (e: EntityListItem) =>
+      e.canonical_name.toLowerCase().includes(q) ||
+      entityDisplayName(e.canonical_name, e.entity_type).toLowerCase().includes(q);
+    const local = q ? entityIndex.filter(matches) : entityIndex;
     if (!q) return local.slice(0, MAX_OPTIONS);
     const seen = new Set(local.map(e => e.id));
-    const remote = remoteMatches.filter(
-      e => !seen.has(e.id) && e.canonical_name.toLowerCase().includes(q));
+    const remote = remoteMatches.filter(e => !seen.has(e.id) && matches(e));
     return [...local, ...remote].slice(0, MAX_OPTIONS);
   }, [entityIndex, remoteMatches, entityQuery]);
 
@@ -274,7 +277,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
 
   const chooseEntity = (entity: EntityListItem | null) => {
     setSelectedEntity(entity);
-    setEntityQuery(entity ? entity.canonical_name : '');
+    setEntityQuery(entity ? entityDisplayName(entity.canonical_name, entity.entity_type) : '');
     setMenuOpen(false);
     setActiveOption(0);
     // Re-picking the entity already in force changes no fetch input, so the
@@ -393,7 +396,11 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
         <div className="chrono-body">
           <div className={`chrono-card is-${tier}`}>
             <div className="chrono-card-head">
-              <span className="chrono-type">{TYPE_LABELS[e.event_type] || e.event_type}</span>
+              {/* Event types wear the record's stamp badge on carded tiers;
+                  routine lines stay quiet text so they never compete. */}
+              <span className={tier === 'routine' ? 'chrono-type' : 'stamp-badge stamp-badge--ink'}>
+                {TYPE_LABELS[e.event_type] || e.event_type}
+              </span>
               <div className="chrono-acts">
                 {confirming ? (
                   <span className="chrono-confirm">
@@ -452,9 +459,9 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
                 {e.bates_begin}{e.title ? ` · ${e.title}` : ''}
               </button>
               {e.participants.map(p => (
-                <button key={p.entity_id} className="chrono-party" onClick={() => openEntity(p.entity_id)}>
+                <button key={p.entity_id} className="entity-chip" onClick={() => openEntity(p.entity_id)}>
                   <span className={`entity-dot entity-${p.entity_type}`}>●</span>
-                  {p.canonical_name}
+                  {entityDisplayName(p.canonical_name, p.entity_type)}
                 </button>
               ))}
             </div>
@@ -522,7 +529,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
                           className={`chrono-opt${i === activeOption ? ' is-active' : ''}`}
                           onClick={() => chooseEntity(o)}>
                     <span className={`entity-dot entity-${o.entity_type}`}>●</span>
-                    <span className="chrono-opt-name">{o.canonical_name}</span>
+                    <span className="chrono-opt-name">{entityDisplayName(o.canonical_name, o.entity_type)}</span>
                     <span className="chrono-opt-count">{o.mention_count}</span>
                   </button>
                 ))}

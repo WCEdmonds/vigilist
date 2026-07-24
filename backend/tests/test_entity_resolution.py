@@ -94,3 +94,40 @@ def test_org_comma_form_attaches_to_noncomma_canonical():
     kind, ent = match_entity(
         {"name": "Acme Corp, Inc.", "type": "org", "surface_forms": [], "emails": []}, [e])
     assert (kind, ent) == ("attach", e)
+
+
+# ── Token-aware fuzzy suggestions (transcription/OCR variants) ──
+
+def _cand(name, etype="org"):
+    return {"name": name, "type": etype, "surface_forms": [], "emails": []}
+
+
+def test_suggests_merge_for_transcribed_org_variants():
+    school = E("Severna Park Elementary School", etype="org")
+    for variant in ("Smyrna Park Elementary", "Smarter Park Elementary",
+                    "Silverman Park School", "Elementary Park Elementary School"):
+        decision = match_entity(_cand(variant), [school])
+        assert decision[0] == "suggest", f"{variant!r} should suggest, got {decision[0]}"
+        assert decision[1] is school
+
+
+def test_suggests_merge_for_fuzzy_person_variant():
+    katie = E("Katie Swistak")
+    decision = match_entity(_cand("Catherine Swistak", "person"), [katie])
+    assert decision[0] == "suggest"
+
+
+def test_suggests_merge_for_bare_first_name_subset():
+    perry = E("Perry Priem")
+    decision = match_entity(_cand("Perry", "person"), [perry])
+    assert decision[0] == "suggest"
+
+
+def test_no_suggestion_when_only_generic_token_shared():
+    smith = E("John Smith")
+    assert match_entity(_cand("John Doe", "person"), [smith])[0] == "create"
+
+
+def test_no_suggestion_without_any_shared_token():
+    acme = E("Acme Corporation", etype="org")
+    assert match_entity(_cand("Meridian Holdings"), [acme])[0] == "create"

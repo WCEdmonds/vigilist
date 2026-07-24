@@ -12,6 +12,7 @@ from difflib import SequenceMatcher
 _HONORIFICS = {"mr", "mrs", "ms", "dr", "prof", "hon", "esq", "jr", "sr", "ii", "iii"}
 _SUFFIX_TOKENS = _HONORIFICS | {"inc", "llc", "llp", "ltd", "lp", "plc", "pc", "pa", "co", "corp"}
 _SIMILARITY_THRESHOLD = 0.85
+_TOKEN_SIMILARITY_THRESHOLD = 0.70
 
 
 def _clean_tokens(part: str) -> list:
@@ -40,6 +41,41 @@ def normalize_name(name: str) -> str:
     s = re.sub(r"[^\w\s]", " ", s)
     tokens = [t for t in s.split() if t not in _HONORIFICS]
     return " ".join(tokens)
+
+
+def _token_similarity(a: str, b: str) -> float:
+    """Order-insensitive, token-aware similarity for transcription variants.
+
+    Whole-string SequenceMatcher misses names like "Smyrna Park Elementary"
+    vs "Severna Park Elementary School" (~0.78): most tokens agree exactly
+    while one is phonetic garble and one is missing. Here each token of the
+    shorter name greedily pairs with its most similar counterpart; the mean
+    pair score is discounted by how much of the longer name went unmatched.
+    Gated on at least one exact shared token so unrelated names ("Meridian
+    Holdings" / "Acme Corporation") never score at all.
+    """
+    ta, tb = a.split(), b.split()
+    if not ta or not tb:
+        return 0.0
+    if len(ta) > len(tb):
+        ta, tb = tb, ta
+    if not (set(ta) & set(tb)):
+        return 0.0
+    used: set[int] = set()
+    total = 0.0
+    for t in ta:
+        best, best_j = 0.0, None
+        for j, u in enumerate(tb):
+            if j in used:
+                continue
+            r = SequenceMatcher(None, t, u).ratio()
+            if r > best:
+                best, best_j = r, j
+        if best_j is not None:
+            used.add(best_j)
+        total += best
+    coverage = len(used) / len(tb)
+    return (total / len(ta)) * (0.5 + 0.5 * coverage)
 
 
 def _initial_pattern(a: str, b: str) -> bool:
@@ -95,9 +131,13 @@ def match_entity(candidate: dict, existing: list) -> tuple:
             score, rationale = 0.9, f'initial pattern: "{candidate["name"]}" ~ "{e.canonical_name}"'
         else:
             ratio = SequenceMatcher(None, cand_norm, e_norm).ratio()
-            if ratio < _SIMILARITY_THRESHOLD:
+            token = _token_similarity(cand_norm, e_norm)
+            if ratio >= _SIMILARITY_THRESHOLD:
+                score, rationale = ratio, f'name similarity {ratio:.2f}: "{candidate["name"]}" ~ "{e.canonical_name}"'
+            elif token >= _TOKEN_SIMILARITY_THRESHOLD:
+                score, rationale = token, f'token similarity {token:.2f}: "{candidate["name"]}" ~ "{e.canonical_name}"'
+            else:
                 continue
-            score, rationale = ratio, f'name similarity {ratio:.2f}: "{candidate["name"]}" ~ "{e.canonical_name}"'
         if best is None or score > best[0]:
             best = (score, e, rationale)
 
