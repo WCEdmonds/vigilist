@@ -1,11 +1,47 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import PasswordReset from './PasswordReset';
+
+interface SsoConfig {
+  provider_id: string | null;
+  enforced: boolean;
+  org_name: string | null;
+}
+
+/** x.vigilist.co -> "x"; apex/localhost -> null */
+function tenantSlug(): string | null {
+  const parts = window.location.hostname.split('.');
+  if (parts.length >= 3 && parts.slice(-2).join('.') === 'vigilist.co') {
+    const slug = parts[0];
+    return slug && slug !== 'www' ? slug : null;
+  }
+  return null;
+}
+
+async function fetchSsoConfig(params: string): Promise<SsoConfig | null> {
+  try {
+    const res = await fetch(`/api/auth/sso-config?${params}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
 
 type Mode = 'signin' | 'register';
 
 export default function AuthPage() {
-  const { login, register, loginWithGoogle } = useAuth();
+  const { login, register, loginWithGoogle, loginWithSSO } = useAuth();
+  const [sso, setSso] = useState<SsoConfig | null>(null);
+
+  useEffect(() => {
+    const slug = tenantSlug();
+    if (slug) {
+      fetchSsoConfig(`slug=${encodeURIComponent(slug)}`).then(cfg => {
+        if (cfg && cfg.provider_id) setSso(cfg);
+      });
+    }
+  }, []);
   const [mode, setMode] = useState<Mode>('signin');
   const [showReset, setShowReset] = useState(false);
   const [email, setEmail] = useState('');
@@ -42,6 +78,27 @@ export default function AuthPage() {
     }
   };
 
+  const handleEmailBlur = async () => {
+    if (sso?.provider_id || !email.includes('@')) return;
+    const cfg = await fetchSsoConfig(`email=${encodeURIComponent(email)}`);
+    if (cfg && cfg.provider_id) setSso(cfg);
+  };
+
+  const handleSSO = async () => {
+    if (!sso?.provider_id) return;
+    setError('');
+    setLoading(true);
+    try {
+      await loginWithSSO(sso.provider_id);
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code !== 'auth/popup-closed-by-user') {
+        setError(err instanceof Error ? err.message : 'SSO sign-in failed');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleGoogle = async () => {
     setError('');
     setLoading(true);
@@ -68,6 +125,25 @@ export default function AuthPage() {
 
         {error && <div className="error">{error}</div>}
 
+        {sso?.provider_id && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ width: '100%', marginBottom: 'var(--space-2)' }}
+            onClick={handleSSO}
+            disabled={loading}
+          >
+            Sign in with {sso.org_name || 'company'} SSO
+          </button>
+        )}
+        {sso?.provider_id && sso.enforced && (
+          <p className="subtitle" style={{ fontSize: 'var(--text-xs)' }}>
+            {sso.org_name} requires single sign-on.
+          </p>
+        )}
+        {!(sso?.provider_id && sso.enforced) && (
+        <>
+
         {mode === 'register' && (
           <div className="form-group">
             <label htmlFor="displayName">Name</label>
@@ -90,6 +166,7 @@ export default function AuthPage() {
             className="input"
             value={email}
             onChange={e => setEmail(e.target.value)}
+              onBlur={handleEmailBlur}
             autoFocus
           />
         </div>
@@ -145,6 +222,8 @@ export default function AuthPage() {
           </svg>
           Sign in with Google
         </button>
+        </>
+        )}
 
         <div className="auth-toggle">
           {mode === 'signin' ? (

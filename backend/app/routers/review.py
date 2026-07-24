@@ -688,7 +688,7 @@ async def _run_classification_batch(
 ):
     """Background task: classify a batch of documents."""
     from app.database import async_session_factory
-    from app.services.ai_review import classify_document
+    from app.services.ai_review import classify_document_cascade
 
     async with async_session_factory() as db:
         project = await db.get(ReviewProject, project_id)
@@ -713,7 +713,7 @@ async def _run_classification_batch(
                     await db.commit()
                 continue
 
-            result_data, tokens = await classify_document(
+            result_data, tokens, model_used = await classify_document_cascade(
                 project.prompt_text,
                 doc.text_content,
                 categories=project.categories,
@@ -747,6 +747,7 @@ async def _run_classification_batch(
                 existing_result.considerations = result_data["considerations"]
                 existing_result.api_cost_tokens = tokens
                 existing_result.prompt_version = prompt_version
+                existing_result.api_model = model_used
             else:
                 review_result = AIReviewResult(
                     project_id=project_id,
@@ -758,7 +759,7 @@ async def _run_classification_batch(
                     key_excerpts=result_data["key_excerpts"],
                     considerations=result_data.get("considerations"),
                     prompt_version=prompt_version,
-                    api_model="claude-sonnet-4-6",
+                    api_model=model_used,
                     api_cost_tokens=tokens,
                 )
                 db.add(review_result)

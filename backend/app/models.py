@@ -67,6 +67,11 @@ class Organization(Base):
     # Extra individual emails (lowercase) whose new productions file under this
     # org even though their domain isn't a member domain.
     creator_emails = Column(ARRAY(String), nullable=False, server_default="{}")
+    # P4-1 — enterprise SSO: Identity Platform provider bound to this org
+    # (e.g. "saml.acme"); when enforced, member-domain users MUST sign in
+    # through it (creator_emails exempt as the lockout escape hatch).
+    sso_provider_id = Column(String(100), nullable=True)
+    sso_enforced = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     productions = relationship("Production", back_populates="organization")
@@ -515,6 +520,46 @@ class SearchTermReport(Base):
     terms = Column(JSONB, nullable=False)
     results = Column(JSONB, nullable=True)      # last run snapshot
     computed_at = Column(DateTime, nullable=True)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class Sample(Base):
+    """A frozen random draw for defensible sampling (P3-2).
+
+    purpose: 'richness' | 'acceptance' | 'control'. The id list is frozen at
+    draw time so the denominator cannot drift after coding starts.
+    """
+
+    __tablename__ = "samples"
+    __table_args__ = (
+        Index("ix_samples_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    purpose = Column(String(20), nullable=False)
+    params = Column(JSONB, nullable=False)
+    document_ids = Column(JSONB, nullable=False)
+    created_by = Column(String(128), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class TarValidationReport(Base):
+    """A persisted TAR validation run (P3-3): recall/precision vs a blind
+    control set + elusion over the null set. The artifact for declarations."""
+
+    __tablename__ = "tar_validation_reports"
+    __table_args__ = (
+        Index("ix_tar_validation_reports_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(Integer, ForeignKey("review_projects.id", ondelete="CASCADE"), nullable=False)
+    params = Column(JSONB, nullable=False)
+    results = Column(JSONB, nullable=False)
     created_by = Column(String(128), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 

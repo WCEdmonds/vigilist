@@ -870,6 +870,56 @@ class ProductionSetLockRequest(BaseModel):
     override_conflicts: bool = False
 
 
+# --- P3-2: defensible sampling ----------------------------------------------
+
+class SampleCreate(BaseModel):
+    name: str
+    purpose: str = "richness"
+    confidence: int = 95
+    margin: float = 0.05
+    expected_rate: float = 0.5
+    size: int | None = None
+    source_type: str | None = None
+    scope: str | None = None          # None (all) | 'machine_negative'
+    project_id: int | None = None     # required when scope='machine_negative'
+
+
+class SampleOut(BaseModel):
+    id: int
+    production_id: int
+    name: str
+    purpose: str
+    params: dict
+    document_ids: list[str]
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# --- P3-3: TAR validation ---------------------------------------------------
+
+class TarValidationCreate(BaseModel):
+    project_id: int
+    control_sample_id: int
+    responsive_tag_id: int
+    nonresponsive_tag_id: int | None = None
+    elusion_sample_id: int | None = None
+    confidence: int = 95
+
+
+class TarValidationOut(BaseModel):
+    id: int
+    production_id: int
+    project_id: int
+    params: dict
+    results: dict
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- P3-1: search-term hit reports ------------------------------------------
 
 class SearchTermReportCreate(BaseModel):
