@@ -452,6 +452,13 @@ export interface EntityListPage {
   total: number;
 }
 
+/** Response of PATCH /api/entities/{id} — server-side truth after a rename. */
+export interface EntityRenameResult {
+  id: string;
+  canonical_name: string;
+  aliases: string[];
+}
+
 export interface MergeSuggestion {
   id: number;
   score: number;

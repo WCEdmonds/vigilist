@@ -765,6 +765,16 @@ class MergeResultOut(BaseModel):
     winner_id: UUID4
 
 
+class EntityRenameRequest(BaseModel):
+    canonical_name: str
+
+
+class EntityRenameOut(BaseModel):
+    id: UUID4
+    canonical_name: str
+    aliases: list[str]
+
+
 class GraphNodeOut(BaseModel):
     id: UUID4
     canonical_name: str

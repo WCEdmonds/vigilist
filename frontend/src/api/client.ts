@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile,
+  AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
   DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
@@ -850,6 +850,27 @@ export const rejectMergeSuggestion = (suggestionId: number) =>
 export const mergeEntities = (winnerId: string, loserId: string) =>
   request<{ merge_id: number; winner_id: string }>(`/api/entities/merge`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ winner_id: winnerId, loser_id: loserId }) });
+
+/**
+ * Correct an entity's display name (e.g. an OCR/hand-keyed misspelling that
+ * runs through the whole source, which no merge can fix). Any writer role
+ * (403 if read-only). The previous canonical_name is preserved server-side
+ * as an alias.
+ */
+export const renameEntity = (entityId: string, canonicalName: string) =>
+  request<EntityRenameResult>(`/api/entities/${entityId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ canonical_name: canonicalName }),
+  });
+
+/**
+ * Delete a junk/spurious entity (e.g. "Local User") that merging can't
+ * remove. Any writer role (403 if read-only). Removes the entity's mentions
+ * and connections; the underlying documents and events are unaffected.
+ */
+export const deleteEntity = (entityId: string) =>
+  request<{ ok: boolean }>(`/api/entities/${entityId}`, { method: 'DELETE' });
 
 export const autoResolveTypos = (productionId: number) =>
   request<{ merged: number }>(`/api/productions/${productionId}/merge-suggestions/auto-resolve-typos`, { method: 'POST' });
