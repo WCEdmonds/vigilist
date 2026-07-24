@@ -303,6 +303,49 @@ def analyze_load_file(production_id: int, load_prefix: str | None = None) -> dic
     }
 
 
+def ocr_pages_with_sidecars(
+    production_id: int,
+    jpeg_paths: list[str],
+    label: str,
+    errors: list[str],
+) -> tuple[list[str], list[str]]:
+    """OCR converted page JPEGs and upload one word-box sidecar per page.
+
+    Returns (page_texts, ocr_paths). ocr_paths aligns index-for-index with
+    jpeg_paths; "" marks a page whose OCR or sidecar upload failed. A blank
+    page that OCR'd successfully still gets a sidecar (words=[]), so sidecar
+    presence means "OCR ran". Best-effort: never raises.
+    """
+    from app.services import ocr as ocr_service
+    from app.services import storage as storage_service
+
+    page_texts: list[str] = []
+    ocr_paths: list[str] = []
+    for jpeg_path in jpeg_paths:
+        if not jpeg_path:
+            ocr_paths.append("")
+            continue
+        try:
+            jpeg_bytes = storage_service.get_download_bytes(jpeg_path)
+            page = ocr_service.ocr_page_vision_bytes(jpeg_bytes)
+        except Exception as e:
+            errors.append(f"{label}: Vision OCR failed for {jpeg_path}: {e}")
+            ocr_paths.append("")
+            continue
+        if page.text:
+            page_texts.append(page.text)
+        try:
+            remote = ocr_service.sidecar_remote_path(production_id, Path(jpeg_path).stem)
+            storage_service.upload_bytes(
+                ocr_service.sidecar_bytes(page), remote, content_type="application/json"
+            )
+            ocr_paths.append(remote)
+        except Exception as e:
+            errors.append(f"{label}: sidecar upload failed for {jpeg_path}: {e}")
+            ocr_paths.append("")
+    return page_texts, ocr_paths
+
+
 def process_ingest_record(
     production_id: int,
     record: dict,
@@ -367,19 +410,9 @@ def process_ingest_record(
             jpeg_storage_paths.append("")
 
     # Run Cloud Vision OCR on converted images for higher-quality text
-    vision_text_parts: list[str] = []
-    for jpeg_path in jpeg_storage_paths:
-        if not jpeg_path:
-            continue
-        try:
-            jpeg_bytes = get_download_bytes(jpeg_path)
-            from app.services.ocr import ocr_image_vision_bytes
-            page_text = ocr_image_vision_bytes(jpeg_bytes)
-            if page_text:
-                vision_text_parts.append(page_text)
-        except Exception as e:
-            errors.append(f"{bates_begin}: Vision OCR failed for {jpeg_path}: {e}")
-
+    vision_text_parts, ocr_paths = ocr_pages_with_sidecars(
+        production_id, jpeg_storage_paths, bates_begin, errors
+    )
     if vision_text_parts:
         text_content = "\n\n".join(vision_text_parts)
 
@@ -398,6 +431,7 @@ def process_ingest_record(
         text_content=text_content,
         native_path=native_storage_path,
         image_paths=jpeg_storage_paths,
+        ocr_paths=ocr_paths,
         file_name=file_name,
     )
     _apply_metadata(doc, record, field_mapping)
