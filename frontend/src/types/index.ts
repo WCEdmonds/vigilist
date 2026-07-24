@@ -445,6 +445,13 @@ export interface EntityListItem {
   canonical_name: string;
   mention_count: number;
   document_count: number;
+  /** ISO date of the first/last dated event this entity participates in.
+   * Optional: only the production entities list computes them; absent or
+   * null means "no dated events" and the UI simply omits the span. */
+  first_seen?: string | null;
+  last_seen?: string | null;
+  /** attributes.role surfaced for cast cards; absent/null when unset. */
+  role?: string | null;
 }
 
 export interface EntityListPage {

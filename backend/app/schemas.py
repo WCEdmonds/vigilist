@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -739,6 +739,14 @@ class EntityListItemOut(BaseModel):
     canonical_name: str
     mention_count: int
     document_count: int
+    # Span of the entity's dated events (min/max ontology_events.event_date via
+    # event_participants) — bridges the cast page to the chronology. None when
+    # the entity has no dated events, or on payloads that don't compute it
+    # (merge suggestions), so it degrades to "no span shown", never a guess.
+    first_seen: date | None = None
+    last_seen: date | None = None
+    # attributes["role"] surfaced for list cards; None when unset.
+    role: str | None = None
 
 
 class EntityListPageOut(BaseModel):
