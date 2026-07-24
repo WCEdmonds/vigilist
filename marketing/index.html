@@ -3,168 +3,454 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vigilist — Democratizing E-Discovery</title>
-  <meta name="description" content="Vigilist is enterprise-grade e-discovery document review for small litigation teams. Ingest, search, and review productions. $20/GB per month, no per-user fees.">
+  <title>AI E-Discovery Software for Small Law Firms | Vigilist</title>
+  <meta name="description" content="AI e-discovery for small law firms: the AI reads every document overnight, builds the knowledge graph, and proves its work with court-ready statistics. $18/GB/month, all-in.">
+  <link rel="canonical" href="https://vigilist.co/">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="theme-color" content="#fbfbf8">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://vigilist.co/">
+  <meta property="og:site_name" content="Vigilist">
+  <meta property="og:title" content="The production lands Friday. You're ready Monday.">
+  <meta property="og:description" content="AI e-discovery, all-in at $18/GB/month. The AI reads everything overnight — you read what matters. No seats, no minimums.">
+  <meta property="og:image" content="https://vigilist.co/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Vigilist — The production lands Friday. You're ready Monday. $18/GB/month all-in.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="The production lands Friday. You're ready Monday.">
+  <meta name="twitter:description" content="AI e-discovery, all-in at $18/GB/month. The AI reads everything overnight — you read what matters.">
+  <meta name="twitter:image" content="https://vigilist.co/og.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Libre+Franklin:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Besley:wght@700;800;900&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%230b0d0f'/%3E%3Ctext x='32' y='45' font-family='Consolas,monospace' font-size='38' font-weight='700' text-anchor='middle' fill='%23ffe24a'%3EV%3C/text%3E%3C/svg%3E">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://vigilist.co/#org",
+        "name": "Vigilist",
+        "url": "https://vigilist.co/",
+        "logo": "https://vigilist.co/og.png",
+        "parentOrganization": { "@type": "Organization", "name": "QNDARY", "url": "https://qndary.com" }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://vigilist.co/#site",
+        "url": "https://vigilist.co/",
+        "name": "Vigilist",
+        "publisher": { "@id": "https://vigilist.co/#org" }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "name": "Vigilist",
+        "url": "https://vigilist.co/",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web",
+        "description": "End-to-end AI e-discovery for small litigation teams: ingest productions, AI first-pass review of every document, an entity knowledge graph with cited relationships, redactions, privilege logs, Bates-stamped productions, and court-ready validation statistics.",
+        "offers": {
+          "@type": "Offer",
+          "price": "18.00",
+          "priceCurrency": "USD",
+          "priceSpecification": {
+            "@type": "UnitPriceSpecification",
+            "price": "18.00",
+            "priceCurrency": "USD",
+            "unitText": "GB per month"
+          },
+          "description": "$18 per GB per month, all-inclusive. No per-user fees, no minimums, no lock-in."
+        },
+        "publisher": { "@id": "https://vigilist.co/#org" }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <header id="top" class="nav">
     <div class="container nav__inner">
-      <a href="#top" class="nav__brand">Vigilist</a>
+      <a href="#top" class="nav__brand">VIGILIST</a>
       <nav class="nav__links" aria-label="Primary">
         <a href="#features">Features</a>
+        <a href="#entities">Entities</a>
         <a href="#how">How it works</a>
+        <a href="#defensible">Defensibility</a>
         <a href="#pricing">Pricing</a>
-        <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
+        <a class="btn btn--ghost" href="https://app.vigilist.co">Log in</a>
+        <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
       </nav>
     </div>
   </header>
   <main>
+
+    <!-- ── HERO ─────────────────────────────────────────── -->
     <section class="hero">
-      <div class="container hero__inner">
+      <div class="container">
+        <div class="hero__head">
+          <p class="bates">VIGILIST&nbsp;000001</p>
+          <h1>The production lands Friday.<br><mark class="hl-sweep">You're ready Monday.</mark></h1>
+        </div>
+        <div class="hero__inner">
         <div class="hero__copy">
-          <p class="eyebrow">E-discovery for small litigation teams</p>
-          <h1>Democratizing<br>E-Discovery</h1>
-          <p class="hero__sub">Enterprise-grade document review for the teams that were priced out of it. Ingest your productions, search every word, and get through review — without the enterprise overhead.</p>
+          <p class="hero__sub">Opposing counsel sends ten thousand documents. Overnight, Vigilist reads every one — coding each document and mapping every person, organization, and event into a <strong>knowledge graph</strong>. By morning your team has a review list that starts at the documents that decide the case, every call cited to the page that proves it.</p>
           <div class="hero__actions">
-            <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
-            <a class="btn btn--ghost" href="#how">See how it works</a>
+            <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
+            <a class="btn btn--ghost" href="#how">Watch the lifecycle</a>
           </div>
         </div>
         <div class="hero__visual" aria-hidden="true">
-          <div class="mockup">
-            <div class="mockup__bar"><span></span><span></span><span></span><div class="mockup__search">Search: "wire transfer"</div></div>
-            <div class="mockup__body">
-              <div class="mockup__doc">
-                <div class="mockup__line w90"></div><div class="mockup__line w80"></div>
-                <div class="mockup__line w95 hl"></div><div class="mockup__line w70"></div>
-                <div class="mockup__line w85"></div><div class="mockup__line w60"></div>
-              </div>
-              <div class="mockup__rail">
-                <div class="tag tag--hot">Responsive</div>
-                <div class="tag">Privileged</div>
-                <div class="tag">Hot doc</div>
-                <div class="mockup__meta">ACME 000142</div>
-              </div>
+          <figure class="triage">
+            <div class="triage__meta">SMITH&nbsp;v.&nbsp;ACME&nbsp;·&nbsp;LOAD&nbsp;2&nbsp;·&nbsp;INGESTED&nbsp;FRIDAY&nbsp;18:42</div>
+            <div class="triage__wall">
+              <span class="triage__scan"></span>
+              <i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td td--hot" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.45s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td td--hot" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:0.75s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td td--hot" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.05s"></i><i class="td" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i><i class="td td--hot" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i><i class="td" style="--d:1.35s"></i>
             </div>
+            <div class="triage__panel">
+              <div class="triage__panel-head">REVIEW&nbsp;FIRST&nbsp;·&nbsp;MONDAY&nbsp;09:00</div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;003211</span><span class="trow__desc">Payment approval — Rivera → Meridian</span><span class="trow__score">0.97</span></div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;001874</span><span class="trow__desc">"delete the March thread"</span><span class="trow__score">0.96</span></div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;004096</span><span class="trow__desc">Board deck — the recall decision</span><span class="trow__score">0.94</span></div>
+              <div class="trow"><span class="trow__bates">VIG&nbsp;002440</span><span class="trow__desc">Meridian agreement, signed</span><span class="trow__score">0.93</span></div>
+            </div>
+            <figcaption class="triage__readout">
+              <span class="readout__line">9,912&nbsp;READ&nbsp;OVERNIGHT&nbsp;·&nbsp;<b>412&nbsp;SURFACED</b>&nbsp;·&nbsp;4&nbsp;FLAGGED&nbsp;KEY</span>
+              <span class="readout__note">illustrative matter · every call attorney-reviewable</span>
+            </figcaption>
+          </figure>
+        </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── PROBLEM ──────────────────────────────────────── -->
+    <section class="band">
+      <div class="container split">
+        <div>
+          <p class="bates">VIGILIST&nbsp;000002</p>
+          <h2>Big-firm tools, small-firm reality.</h2>
+          <p class="lede">Traditional e-discovery is priced for hundred-lawyer firms and still burns most of the budget on one thing: humans reading documents in order. Vigilist inverts that. The AI makes the first pass over everything, the knowledge graph shows you who and what matters, and your reviewers spend their hours on the documents that decide the case — inside one platform that also redacts, produces, and proves the work.</p>
+          <div class="redact-rule" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+        <figure class="timecut reveal" aria-hidden="true">
+          <div class="timecut__row">
+            <span class="timecut__label">LINEAR&nbsp;REVIEW&nbsp;·&nbsp;9,912&nbsp;DOCS,&nbsp;PAGE&nbsp;ONE&nbsp;FIRST</span>
+            <span class="timecut__track"><span class="timecut__bar timecut__bar--old"></span></span>
+            <span class="timecut__val">≈&nbsp;47&nbsp;REVIEW-WEEKS</span>
+          </div>
+          <div class="timecut__row">
+            <span class="timecut__label">VIGILIST&nbsp;·&nbsp;AI&nbsp;PASS&nbsp;OVERNIGHT,&nbsp;HUMANS&nbsp;REVIEW&nbsp;412</span>
+            <span class="timecut__track"><span class="timecut__bar timecut__bar--new"></span></span>
+            <span class="timecut__val">≈&nbsp;4&nbsp;DAYS</span>
+          </div>
+          <figcaption class="timecut__note">illustrative matter · every AI call remains attorney-reviewable</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ── FEATURES ─────────────────────────────────────── -->
+    <section id="features" class="band band--tight band--right">
+      <div class="container">
+        <header class="section-head">
+          <p class="bates">VIGILIST&nbsp;000003</p>
+          <h2>The whole matter lifecycle. One platform.</h2>
+        </header>
+        <div class="grid">
+          <article class="card reveal">
+            <h3>Ingest anything, keep adding</h3>
+            <p>Relativity-style DAT/OPT productions with AI-assisted field mapping, PST/EML containers with families and threads intact, folders of PDFs and natives. Matters take multiple loads — their productions and your collection, side by side and labeled.</p>
+          </article>
+          <article class="card reveal">
+            <h3>AI review that shows its work</h3>
+            <p>An LLM reads every document against your case criteria and codes it — relevant, key, or not — with confidence, reasoning, and excerpts. Attorneys stay in command with one-click overrides.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Validated like courts expect</h3>
+            <p>Blind control sets, recall and precision with confidence intervals, elusion testing over the discard pile. The statistics that turn "we used AI" into a number a judge accepts.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Search every way</h3>
+            <p>Full-text with phrases, booleans, and wildcards; semantic search when you don't know the words; hit reports with unique-hit counts for negotiating term lists with evidence.</p>
+          </article>
+          <article class="card reveal">
+            <h3>A brief that writes itself</h3>
+            <p>Clustering, theme labels, and an AI case brief with citations that jump straight to the Bates number — your first read of a new production, done before you sit down.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Redactions that can't leak</h3>
+            <p>Reason-coded redactions burned into every produced pixel. Second-pass QC approvals auto-invalidate if a redaction changes afterward — stale sign-offs structurally cannot ship.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Privilege logs, generated</h3>
+            <p>Privilege tags derive withhold and redact-in-part dispositions; the log builds itself from safe metadata only — never from privileged content. Ready to serve as CSV.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Produce like the incumbents</h3>
+            <p>Lock a set for gap-free Bates with families together; render endorsed PDF or single-page TIFF; carve out natives; split volumes by size; deliver Concordance DAT/OPT any platform can load.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Guardrails before the gavel</h3>
+            <p>Locking runs validation first: unapproved redactions, privileged documents going out clean, received documents headed back to their producer. Resolve — or override on the record.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Chain of custody, on demand</h3>
+            <p>Every document tells its story: source, hashes, extraction, tags, decisions, redactions, productions. Matter-level custody reports and an honest exceptions ledger, one click away.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Built for review speed</h3>
+            <p>Keyboard-driven coding, bulk tagging across thousands of documents, queues and batches with statistical QC, and an in-browser viewer for images, text, natives, and media.</p>
+          </article>
+          <article class="card reveal">
+            <h3>Enterprise-ready security</h3>
+            <p>SSO with your firm's identity provider (SAML/OIDC), enforceable per organization; role-based access; an append-only audit trail behind every action.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── ENTITY INTELLIGENCE (dark examination band) ──── -->
+    <section id="entities" class="band band--dark">
+      <div class="container callout__inner">
+        <div class="callout__copy">
+          <p class="bates bates--light">VIGILIST&nbsp;000004</p>
+          <h2>Know who's who before<br>the first deposition.</h2>
+          <p>Vigilist reads the corpus and builds the cast of characters: every person and organization, resolved across aliases — "J.&nbsp;Rivera," "Rivera,&nbsp;Jorge," and the email address are one person, with a review queue for close calls so a human confirms every merge.</p>
+          <p>Click any name, anywhere: an AI-written profile, every mention in context, and who they're connected to — employer, counsel, correspondent, party to an agreement — each relationship backed by the phrase in the document that proves it. Key players rank by presence, so the people who matter surface on day one.</p>
+          <p class="callout__note">Events — meetings, payments, agreements — are extracted from day one, building toward matter timelines and relationship graphs on the same foundation.</p>
+        </div>
+        <div class="callout__visual">
+          <div class="graph reveal">
+            <svg class="graph__edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <line data-key="acme" x1="42" y1="44" x2="80" y2="18" />
+              <line data-key="dana" x1="42" y1="44" x2="82" y2="70" />
+              <line data-key="meridian" x1="42" y1="44" x2="30" y2="88" />
+              <line data-key="payment" x1="42" y1="44" x2="12" y2="20" />
+            </svg>
+            <div class="graph__node graph__node--center graph__node--float1" data-key="center" style="left:42%;top:44%;">
+              <span class="graph__avatar">JR</span>
+              <span class="graph__name">Jorge&nbsp;Rivera</span>
+              <span class="graph__meta">CFO&nbsp;·&nbsp;214&nbsp;MENTIONS</span>
+            </div>
+            <div class="graph__node graph__node--float2" data-key="acme" style="left:80%;top:18%;">Acme&nbsp;Corp</div>
+            <div class="graph__node graph__node--float3" data-key="dana" style="left:82%;top:70%;">Dana&nbsp;Wu</div>
+            <div class="graph__node graph__node--float4" data-key="meridian" style="left:30%;top:88%;">Meridian&nbsp;LLC</div>
+            <div class="graph__node graph__node--event graph__node--float5" data-key="payment" style="left:12%;top:20%;">PAYMENT&nbsp;·&nbsp;MAR&nbsp;2024</div>
+            <span class="graph__edge-label" data-key="acme" style="left:60%;top:27%;">EMPLOYMENT&nbsp;·&nbsp;"CFO&nbsp;SINCE&nbsp;2019"</span>
+            <span class="graph__edge-label" data-key="dana" style="left:63%;top:60%;">CORRESPONDENT&nbsp;·&nbsp;41&nbsp;DOCS</span>
+            <span class="graph__edge-label" data-key="meridian" style="left:33%;top:68%;">PARTY&nbsp;TO&nbsp;AGREEMENT</span>
+            <span class="graph__edge-label" data-key="payment" style="left:22%;top:29%;">PARTICIPANT</span>
+            <div class="graph__caption">hover&nbsp;a&nbsp;name&nbsp;—&nbsp;every&nbsp;edge&nbsp;cites&nbsp;the&nbsp;document&nbsp;that&nbsp;proves&nbsp;it</div>
           </div>
         </div>
       </div>
     </section>
-    <section class="problem">
-      <div class="container">
-        <h2>Big-firm tools, small-firm reality.</h2>
-        <p>Traditional e-discovery platforms are built — and priced — for hundred-lawyer firms: per-user licenses, steep minimums, and a thicket of features you'll never touch. A two-to-five person litigation team needs to do one thing exceptionally well: get through the documents. Vigilist does exactly that, and nothing you don't need.</p>
-      </div>
-    </section>
-    <section id="features" class="features">
+
+    <!-- ── HOW IT WORKS ─────────────────────────────────── -->
+    <section id="how" class="band">
       <div class="container">
         <header class="section-head">
-          <p class="eyebrow">What's inside</p>
-          <h2>Everything you need to review. Nothing you don't.</h2>
-        </header>
-        <div class="features__grid">
-          <article class="card reveal">
-            <h3>Native load-file ingest</h3>
-            <p>Drop in a standard production — DAT and OPT load files, Bates-aware. Vigilist parses the metadata, links the extracted text and natives, and you're ready to review.</p>
-          </article>
-          <article class="card reveal">
-            <h3>Full-text search</h3>
-            <p>Every word of every document, indexed. Find the smoking gun in seconds, not hours.</p>
-          </article>
-          <article class="card reveal">
-            <h3>Document &amp; media viewer</h3>
-            <p>Page images, extracted text, and native video stream right in the browser — no plugins, no downloads.</p>
-          </article>
-          <article class="card reveal">
-            <h3>Keyboard-driven review</h3>
-            <p>Tag, note, and advance with single-key shortcuts. Built for reviewers who live in the keyboard.</p>
-          </article>
-          <article class="card reveal">
-            <h3>Bulk tagging</h3>
-            <p>Code an entire result set at once — by issue, privilege, or responsiveness — across thousands of documents in a single pass.</p>
-          </article>
-          <article class="card card--soon reveal">
-            <h3>On the roadmap</h3>
-            <p>Redactions, privilege logs, and AI-assisted review — landing as Vigilist grows with your team.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-    <section id="how" class="how">
-      <div class="container">
-        <header class="section-head">
-          <p class="eyebrow">How it works</p>
-          <h2>From production folder to review in three steps.</h2>
+          <p class="bates">VIGILIST&nbsp;000005</p>
+          <h2>From load file to defensible production.</h2>
         </header>
         <ol class="steps">
-          <li class="step reveal"><span class="step__num">1</span>
-            <h3>Ingest a production</h3>
-            <p>Point Vigilist at your production folder. It loads the metadata, extracted text, page images, and native files automatically.</p>
+          <li class="step reveal">
+            <span class="step__num">01</span>
+            <h3>Ingest</h3>
+            <p>Drop in their production or your client's mailboxes. Metadata, families, threads, hashes, and OCR handled automatically — keep adding loads as the case grows.</p>
           </li>
-          <li class="step reveal"><span class="step__num">2</span>
-            <h3>Search &amp; review</h3>
-            <p>Full-text search and a fast in-browser viewer get your team through documents quickly.</p>
+          <li class="step reveal">
+            <span class="step__num">02</span>
+            <h3>Review with AI</h3>
+            <p>The AI codes the corpus and briefs the team; reviewers work the queues at keyboard speed. Validate the machine with control sets whenever the numbers need to hold.</p>
           </li>
-          <li class="step reveal"><span class="step__num">3</span>
-            <h3>Tag, note &amp; export</h3>
-            <p>Code documents, capture notes, and export your work product when the review is done.</p>
+          <li class="step reveal">
+            <span class="step__num">03</span>
+            <h3>Redact &amp; log privilege</h3>
+            <p>Draw redactions, QC them, and let the privilege log build itself from your privilege calls — dispositions, descriptions, and all.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step__num">04</span>
+            <h3>Produce &amp; prove</h3>
+            <p>Lock the set, stamp Bates, render, package DAT/OPT with a hashed manifest. Hit reports, sampling statistics, and custody reports stand behind every choice.</p>
           </li>
         </ol>
       </div>
     </section>
-    <section id="pricing" class="pricing">
-      <div class="container">
-        <header class="section-head">
-          <p class="eyebrow">Pricing</p>
-          <h2>$20 per GB. Per month. That's it.</h2>
-          <p class="pricing__sub">No per-user fees. No minimums. No annual lock-in. You pay for the data you host — and nothing else.</p>
-        </header>
-        <div class="compare">
-          <div class="compare__col compare__col--them">
-            <h3>Traditional platforms</h3>
-            <ul>
-              <li>Per-GB hosting <em>plus</em> $100–200 per user / month</li>
-              <li>Annual minimums and contracts</li>
-              <li>Features built for hundred-lawyer firms</li>
-            </ul>
-          </div>
-          <div class="compare__col compare__col--us">
-            <h3>Vigilist</h3>
-            <ul>
-              <li>$20 / GB / month — that's the whole bill</li>
-              <li>No per-user fees, ever</li>
-              <li>No minimums, no lock-in</li>
-            </ul>
-            <a class="btn btn--primary" href="https://intake.qndary.com">Request a demo</a>
-          </div>
+
+    <!-- ── DEFENSIBILITY ────────────────────────────────── -->
+    <section id="defensible" class="band band--tight band--right">
+      <div class="container band__narrow">
+        <p class="bates">VIGILIST&nbsp;000006</p>
+        <h2>The AI that can take the stand.</h2>
+        <p class="lede">Every claim comes with its evidence attached. Redaction approvals that expire when the redaction changes. Production locks that record who overrode which warning. Frozen random samples with Wilson confidence intervals. Validation reports that persist exactly as run. An append-only audit log under all of it.</p>
+        <div class="testimony reveal">
+          <p class="testimony__q">"How do you know the AI didn't miss anything?"</p>
+          <p class="testimony__a">RECALL&nbsp;87.4%&nbsp;[CI&nbsp;81.2–92.1]&nbsp;·&nbsp;ELUSION&nbsp;0.4%&nbsp;·&nbsp;EST.&nbsp;MISSED&nbsp;38–61&nbsp;OF&nbsp;9,912&nbsp;·&nbsp;REPORT&nbsp;#12,&nbsp;PRESERVED&nbsp;AS&nbsp;RUN</p>
+          <p class="testimony__cite">— the answer, from a sample Vigilist validation report</p>
         </div>
       </div>
     </section>
-    <section class="cta-final">
+
+    <!-- ── TESTIMONIAL (deposition transcript) ──────────── -->
+    <section class="band band--tight band--center">
       <div class="container">
+        <p class="bates">VIGILIST&nbsp;000007</p>
+        <h2>On the record.</h2>
+        <figure class="transcript reveal" style="margin: 34px auto 0;">
+          <div class="transcript__head">
+            <span>IN&nbsp;RE:&nbsp;MODERN&nbsp;DISCOVERY&nbsp;·&nbsp;TESTIMONY&nbsp;OF&nbsp;T.&nbsp;VIGNARAJAH</span>
+            <span>PAGE&nbsp;1&nbsp;OF&nbsp;1</span>
+          </div>
+          <blockquote style="margin:0;">
+            <ol class="transcript__lines">
+              <li>"For twenty years I watched the side with the</li>
+              <li>bigger discovery budget start every case ahead —</li>
+              <li>before the merits ever got a hearing. Vigilist is</li>
+              <li>the first platform that ends that head start. My</li>
+              <li>team ingests a production on Friday and argues from</li>
+              <li>it on Monday — and when the other side questions</li>
+              <li>the process, <em>the numbers are already in the record</em>."</li>
+            </ol>
+          </blockquote>
+          <figcaption class="transcript__cite">
+            <strong>Thiru Vignarajah</strong>
+            <span>Former Deputy Attorney General of Maryland</span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ── PRICING ──────────────────────────────────────── -->
+    <section id="pricing" class="band">
+      <div class="container">
+        <header class="section-head">
+          <p class="bates">VIGILIST&nbsp;000008</p>
+          <h2>$18 per GB. Per month. That's it.</h2>
+          <p class="pricing__sub">Billed on the gigabytes you upload — not the "processed" gigabytes other platforms expand them into. AI review, entity intelligence, productions, and defensibility included. No seats, no minimums, no lock-in.</p>
+        </header>
+        <div class="calc reveal">
+          <label class="calc__label" for="calc-gb">MATTER&nbsp;SIZE&nbsp;·&nbsp;DRAG&nbsp;TO&nbsp;ESTIMATE<span><b class="calc__gbval">5</b>&nbsp;GB</span></label>
+          <input type="range" id="calc-gb" min="1" max="50" step="1" value="5">
+          <p class="calc__out"><span class="calc__price">$90</span><span class="calc__per">/month</span> · roughly <b class="calc__docs">25,000</b> documents&nbsp;—&nbsp;read,&nbsp;coded,&nbsp;and&nbsp;mapped</p>
+        </div>
+        <div class="compare-wrap reveal">
+          <table class="ctable">
+            <thead>
+              <tr>
+                <th scope="col">Platform</th>
+                <th scope="col">To get a price</th>
+                <th scope="col">A 5&nbsp;GB matter</th>
+                <th scope="col">AI review</th>
+                <th scope="col">Commitments</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="ctable__us">
+                <th scope="row">Vigilist</th>
+                <td><b>You just did — $18 / GB / mo, published</b></td>
+                <td><b>$90 / month, everything included. Start today.</b></td>
+                <td>Every document read and coded overnight, with validation statistics built for court</td>
+                <td>None — month to month, billed on the raw GB you upload</td>
+              </tr>
+              <tr>
+                <th scope="row">RelativityOne</th>
+                <td>Sales quote, through a service provider</td>
+                <td>Processing, seat &amp; hosting fees — est. $300–700 in month one, before anyone reads a page</td>
+                <td>aiR — in whatever package your provider negotiates</td>
+                <td>Annual terms typical · billed on processed data and peak review volume</td>
+              </tr>
+              <tr>
+                <th scope="row">DISCO</th>
+                <td>Sales quote — pricing not published</td>
+                <td>Accounts reported at $20k+ / yr; a small matter may not clear the door</td>
+                <td>Cecilia — in whatever bundle you negotiate</td>
+                <td>Billed on processed data — more GB than you sent</td>
+              </tr>
+              <tr>
+                <th scope="row">Everlaw</th>
+                <td>Sales quote — pricing not published</td>
+                <td>Est. $2,000–5,000 / mo platform fee before the first gigabyte</td>
+                <td>Batch AI actions sold separately, as credits</td>
+                <td>The platform fee is the minimum</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="ctable__note">Competitor figures are third-party estimates of quote-only pricing and Winter 2026 industry-survey data, as of July 2026. They don't publish prices. We do.</p>
+        <h3 class="adv-head">The price is the headline. It isn't the advantage.</h3>
+        <div class="grid grid--adv">
+          <article class="card reveal">
+            <h3>A knowledge graph, not a folder of documents</h3>
+            <p>Vigilist reads the corpus into a cast of characters — every person, organization, and event, resolved across aliases, every relationship cited to the document that proves it. Click a name; see the case.</p>
+          </article>
+          <article class="card reveal">
+            <h3>AI that shows its homework</h3>
+            <p>Every call ships with confidence, reasoning, and quoted excerpts — validated by control sets, recall, precision, and elusion statistics preserved exactly as run. When they ask how you know it didn't miss anything, you hand over a number.</p>
+          </article>
+          <article class="card reveal">
+            <h3>The whole corpus, read by default</h3>
+            <p>Not a chat assistant you consult one document at a time, and not a batch action metered in credits. The first pass over everything <em>is</em> the product — it runs the night your data lands.</p>
+          </article>
+        </div>
+        <button type="button" class="btn btn--primary" data-demo-open>Request a demo</button>
+      </div>
+    </section>
+
+    <!-- ── FINAL CTA ────────────────────────────────────── -->
+    <section class="band band--dark cta-final band--right">
+      <div class="container band__narrow">
+        <p class="bates bates--light">VIGILIST&nbsp;000009</p>
         <h2>See it on your own production.</h2>
-        <p>Bring a sample production and we'll walk you through ingest, search, and review — start to finish.</p>
-        <a class="btn btn--primary btn--lg" href="https://intake.qndary.com">Request a demo</a>
+        <p>Bring a sample production and we'll walk the whole lifecycle — ingest, AI review, redaction, and a Bates-stamped production back out. Start to finish.</p>
+        <button type="button" class="btn btn--primary btn--lg" data-demo-open>Request a demo</button>
       </div>
     </section>
   </main>
   <footer class="footer">
     <div class="container footer__inner">
       <div>
-        <span class="footer__brand">Vigilist</span>
+        <span class="footer__brand">VIGILIST</span>
         <span class="footer__tag">Democratizing E-Discovery</span>
       </div>
       <div class="footer__right">
+        <a href="https://app.vigilist.co">Client log in</a>
         <a href="https://qndary.com" target="_blank" rel="noopener">A QNDARY Project</a>
         <span>&copy; 2026 Vigilist</span>
       </div>
     </div>
   </footer>
+  <div class="demo" hidden>
+    <div class="demo__backdrop" data-demo-close></div>
+    <div class="demo__card" role="dialog" aria-modal="true" aria-labelledby="demo-title">
+      <p class="bates">VIGILIST&nbsp;·&nbsp;DEMO&nbsp;REQUEST</p>
+      <button type="button" class="demo__close" data-demo-close aria-label="Close">&times;</button>
+      <h2 id="demo-title">See it on your own production.</h2>
+      <form class="demo__form" novalidate>
+        <label>Name
+          <input class="input" name="name" type="text" autocomplete="name" required>
+        </label>
+        <label>Work email
+          <input class="input" name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>Firm
+          <input class="input" name="firm" type="text" autocomplete="organization">
+        </label>
+        <label>What are you working with? <span class="demo__hint">(optional — matter type, rough volume)</span>
+          <textarea class="input" name="details" rows="3"></textarea>
+        </label>
+        <button type="submit" class="btn btn--primary demo__submit">Send request</button>
+        <p class="demo__status" role="status" aria-live="polite"></p>
+      </form>
+      <div class="demo__done" hidden>
+        <p class="demo__done-lead">Received.</p>
+        <p>We'll reply within one business day to set up a walkthrough on your own production.</p>
+        <button type="button" class="btn btn--ghost" data-demo-close>Close</button>
+      </div>
+    </div>
+  </div>
   <script src="main.js" defer></script>
 </body>
 </html>
