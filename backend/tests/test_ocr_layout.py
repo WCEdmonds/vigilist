@@ -140,21 +140,32 @@ def test_sidecar_remote_path():
 def test_rounding_preserves_rect_bounds():
     """Regression: x + w and y + h must respect 100.0 boundary after rounding.
 
-    Fractional pixels near a clamped edge can cause independent rounding of
+    Fractional percentages near a clamped edge can cause independent rounding of
     endpoints and dimensions to violate x + w <= 100 and y + h <= 100.
-    This test reproduces the case where x0=10.005, x1=100.0 (right-edge clamp):
-    old code would round x=10.01, w=90.0, giving x+w=100.01 (invalid).
-    New code rounds endpoints first, derives w from rounded endpoints.
+
+    This reproduces the exact case found via search:
+    - Page: 20000x20000 px (large page to produce fractional percentages)
+    - Word: x0=2001px, x1=20000px (right edge), y0=2001px, y1=20000px (bottom edge)
+    - Percentages: x0_pct=10.005%, x1_pct=100.0%, y0_pct=10.005%, y1_pct=100.0%
+    - Old formula (independent rounding):
+        x = round(10.005, 2) = 10.01
+        w = round(100.0 - 10.005, 2) = round(89.995, 2) = 90.0
+        x + w = 100.01 (VIOLATION)
+    - New formula (round endpoints, derive width):
+        x = round(10.005, 2) = 10.01
+        x1_rounded = round(100.0, 2) = 100.0
+        w = round(100.0 - 10.01, 2) = round(89.99, 2) = 89.99
+        x + w = 100.0 (OK)
     """
-    # Create a word with fractional coordinates that clamp to page bounds
-    # x: 10.05 px to 1000.0 px on a 1000 px page -> 10.005% to 100.0%
-    # y: 100.25 px to 2000.0 px on a 2000 px page -> 5.0125% to 100.0%
+    # Page size: 20000x20000 px
+    # Word bbox: pixel coords (2001, 2001, 20000, 20000)
     fta = _annotation([
-        _block(_para(_word("flush", (10.05, 100.25, 1000.0, 2000.0)))),
-    ], width=1000, height=2000)
+        _block(_para(_word("flush", (2001, 2001, 20000, 20000)))),
+    ], width=20000, height=20000)
     page = page_ocr_from_annotation(fta)
     assert len(page.words) == 1
     box = page.words[0]
-    # Verify that x + w <= 100.0 and y + h <= 100.0 (no rounding overflow)
+    # Verify that x + w <= 100.0 and y + h <= 100.0
+    # (new formula passes; old formula would produce x+w=100.01, y+h=100.01)
     assert box["x"] + box["w"] <= 100.0, f"x + w = {box['x']} + {box['w']} = {box['x'] + box['w']} > 100.0"
     assert box["y"] + box["h"] <= 100.0, f"y + h = {box['y']} + {box['h']} = {box['y'] + box['h']} > 100.0"
