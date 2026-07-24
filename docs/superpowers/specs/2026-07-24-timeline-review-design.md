@@ -21,7 +21,7 @@ overarching review pass by a smarter model that cleans all three up.
    audit-logged with a snapshot; uncertain calls are left alone.
 2. **Trigger: automatic after extraction**, plus a manager-gated endpoint so it
    can be run against existing prod data now and re-run on demand.
-3. **Architecture: one whole-timeline pass.** A single Opus 4.8 call per
+3. **Architecture: one whole-timeline pass.** A single Opus call per
    production sees every event at once — that is what catches cross-document
    duplicates and chronology-inconsistent dates. Rejected alternatives:
    two-tier screen/adjudicate (extra plumbing, screen can't see cross-doc
@@ -33,9 +33,12 @@ overarching review pass by a smarter model that cleans all three up.
 
 ### 1. `backend/app/services/timeline_review.py` (new)
 
-- `REVIEW_MODEL = "claude-opus-4-8"` — $5/$25 per MTok, 1M context. Adaptive
-  thinking (`thinking={"type": "adaptive"}`), streaming (the SDK requires it
-  for large `max_tokens`; use `get_final_message()`), `max_tokens=64000`.
+- `REVIEW_MODEL = "claude-opus-5"` — Claude Opus 5 (released 2026-07-24,
+  user-confirmed choice; verified against live model docs). Same $5/$25 per
+  MTok and 1M context as Opus 4.8. Adaptive thinking
+  (`thinking={"type": "adaptive"}` — on by default on Opus 5, set explicitly
+  anyway), streaming (the SDK requires it for large `max_tokens`; use
+  `get_final_message()`), `max_tokens=64000`.
 - `serialize_timeline(events) -> str`: compact JSON lines, chronological order
   (undated last), one line per event:
   `{"id", "date", "precision", "type", "desc", "quote", "bates", "who": [...]}`.
@@ -143,11 +146,15 @@ one-off script needed.
   cleanly.
 - `stop_reason == "max_tokens"` (truncated verdict list) → treat as failure,
   do not apply a partial parse.
+- `stop_reason == "refusal"` (Opus 5 safety classifiers; unlikely on
+  chronology text) → treat as failure the same way — job shows
+  `review_failed`, nothing applied, re-run later.
 
 ## Cost
 
 ~20k–160k input tokens and ~5–20k output tokens per production →
-**$0.25–$1.50 per run** at Opus 4.8 rates. No chunking needed (1M context).
+**$0.25–$1.50 per run** at Opus 5 rates ($5/$25 per MTok, unchanged from
+Opus 4.8). No chunking needed (1M context).
 Automatic post-extraction runs add this to each rebuild, which is acceptable
 per the user's trigger choice.
 
