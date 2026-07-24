@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getGraph } from '../api/client';
 import type { GraphData, GraphEdge } from '../types';
 import { computeGraphLayout, type PositionedNode } from '../utils/graphLayout';
+import { entityDisplayName } from '../utils/entityDisplay';
 import EntityPanel from './EntityPanel';
 
 interface Props {
@@ -199,9 +200,8 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
                 const ring = NODE_RING[n.entity_type] || NODE_RING.person;
                 const highlighted = openEntityId === n.id || focus === n.id;
                 const dimNode = focus !== null && n.id !== focus && !neighborIds.has(n.id);
-                const label = n.canonical_name.length > 24
-                  ? n.canonical_name.slice(0, 23) + '…'
-                  : n.canonical_name;
+                const displayed = entityDisplayName(n.canonical_name, n.entity_type);
+                const label = displayed.length > 24 ? displayed.slice(0, 23) + '…' : displayed;
                 const fs = 9.5 + (n.r - 8) * 0.18;
                 const w = label.length * fs * 0.62 + 30;
                 const h = fs + 13;
@@ -222,7 +222,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
                       onPointerDown={onNodePointerDown(n.id)}
                       onClick={onNodeClick(n.id)}
                     >
-                      <title>{n.canonical_name} · {n.mention_count} mentions</title>
+                      <title>{displayed} · {n.mention_count} mentions</title>
                     </rect>
                     <circle cx={-w / 2 + 10} cy={0} r={3.4} fill={ring} pointerEvents="none" />
                     <text

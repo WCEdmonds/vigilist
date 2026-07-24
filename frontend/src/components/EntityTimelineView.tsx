@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getTimeline, listEntities } from '../api/client';
 import type { EntityListItem, TimelineEvent } from '../types';
 import EntityPanel from './EntityPanel';
+import { entityDisplayName } from '../utils/entityDisplay';
 
 interface Props {
   productionId: number;
@@ -88,7 +89,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
           {e.participants.map(p => (
             <button key={p.entity_id} className="btn btn-ghost btn-xs" onClick={() => openEntity(p.entity_id)}>
               <span className={`entity-dot entity-${p.entity_type}`} style={{ marginRight: 4 }}>●</span>
-              {p.canonical_name}
+              {entityDisplayName(p.canonical_name, p.entity_type)}
             </button>
           ))}
         </div>
@@ -104,7 +105,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
         <select className="input" value={entityFilter} onChange={e => setEntityFilter(e.target.value)}
                 style={{ marginLeft: 'auto', maxWidth: 240 }}>
           <option value="">All people & orgs</option>
-          {filterOptions.map(o => <option key={o.id} value={o.id}>{o.canonical_name}</option>)}
+          {filterOptions.map(o => <option key={o.id} value={o.id}>{entityDisplayName(o.canonical_name, o.entity_type)}</option>)}
         </select>
         <select className="input" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ maxWidth: 150 }}>
           <option value="">All types</option>

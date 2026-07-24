@@ -89,10 +89,11 @@ function buildCast(
     const full = byId.get(kp.entity_id);
     const name = full?.canonical_name ?? kp.name;
     if (isEntityNoise(name)) continue;
+    const entityType = full?.entity_type ?? 'person';
     cast.push({
       id: kp.entity_id,
-      name: entityDisplayName(name),
-      entityType: full?.entity_type ?? 'person',
+      name: entityDisplayName(name, entityType),
+      entityType,
       mentionCount: full?.mention_count ?? null,
       isKeyPlayer: true,
     });
@@ -101,7 +102,7 @@ function buildCast(
     if (cast.length >= CAST_SIZE) break;
     if (seen.has(e.id) || isEntityNoise(e.canonical_name)) continue;
     seen.add(e.id);
-    cast.push({ id: e.id, name: entityDisplayName(e.canonical_name), entityType: e.entity_type, mentionCount: e.mention_count, isKeyPlayer: false });
+    cast.push({ id: e.id, name: entityDisplayName(e.canonical_name, e.entity_type), entityType: e.entity_type, mentionCount: e.mention_count, isKeyPlayer: false });
   }
   return cast.slice(0, CAST_SIZE);
 }
