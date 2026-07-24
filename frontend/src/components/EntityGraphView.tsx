@@ -18,7 +18,9 @@ interface Transform {
   k: number;
 }
 
-const NODE_COLOR: Record<string, string> = { person: '#4f7cff', org: '#b4690e' };
+// Record language (§000004): white nodes on the redaction-black band,
+// typed by ring color — person = stamp blue, org = marker gold.
+const NODE_RING: Record<string, string> = { person: '#2f3dbd', org: '#f5ce00' };
 
 export default function EntityGraphView({ productionId, openEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
@@ -69,7 +71,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
     ev.currentTarget.setPointerCapture(ev.pointerId);
   };
 
-  const onNodePointerDown = (id: string) => (ev: React.PointerEvent<SVGCircleElement>) => {
+  const onNodePointerDown = (id: string) => (ev: React.PointerEvent<SVGRectElement>) => {
     ev.stopPropagation();
     dragTargetRef.current = id;
     dragDistanceRef.current = 0;
@@ -110,17 +112,15 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
       <line
         key={`${e.source}-${e.target}-${i}`}
         x1={source.x} y1={source.y} x2={target.x} y2={target.y}
-        stroke="var(--color-border, #999)"
+        stroke="#ffffff"
         strokeWidth={stated ? 1.5 : Math.min(4, e.weight / 2)}
-        strokeOpacity={stated ? 0.7 : 0.25}
+        strokeOpacity={stated ? 0.55 : 0.22}
         strokeDasharray={stated ? undefined : '4 3'}
       >
         {e.relationship_type && <title>{e.relationship_type}</title>}
       </line>
     );
   };
-
-  const showLabels = !(transform.k < 0.7 && layout.length > 40);
 
   return (
     <div style={{ position: 'relative', height: '100dvh', display: 'flex', flexDirection: 'column' }}>
@@ -143,6 +143,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
 
         {graphData && graphData.nodes.length > 0 && (
           <svg
+            className="egraph"
             style={{ width: '100%', height: '100%', touchAction: 'none' }}
             onWheel={onWheel}
             onPointerDown={onBackgroundPointerDown}
@@ -152,33 +153,51 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
           >
             <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
               {graphData.edges.map(edgeLine)}
-              {layout.map(n => (
-                <g key={n.id}>
-                  <circle
-                    cx={n.x} cy={n.y} r={n.r}
-                    fill={NODE_COLOR[n.entity_type] || NODE_COLOR.person}
-                    stroke="#fff"
-                    strokeWidth={1.5}
-                    style={{ cursor: 'pointer' }}
-                    onPointerDown={onNodePointerDown(n.id)}
-                    onClick={onNodeClick(n.id)}
-                  >
-                    <title>{n.canonical_name}</title>
-                  </circle>
-                  {showLabels && (
-                    <text
-                      x={n.x + n.r + 4} y={n.y}
-                      fontSize={11}
-                      dominantBaseline="middle"
-                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+              {layout.map(n => {
+                // Nodes are the marketing-graph name cards: white, mono
+                // label, ring color by type, mention count sets the scale.
+                // Mono metrics make the text width computable (0.6em/char).
+                const isOpen = openEntityId === n.id;
+                const label = n.canonical_name.length > 24
+                  ? n.canonical_name.slice(0, 23) + '…'
+                  : n.canonical_name;
+                const fs = 9.5 + (n.r - 8) * 0.18;
+                const w = label.length * fs * 0.62 + 18;
+                const h = fs + 13;
+                return (
+                  <g key={n.id} transform={`translate(${n.x},${n.y})`}>
+                    <rect
+                      className="egraph-node"
+                      x={-w / 2} y={-h / 2} width={w} height={h} rx={2}
+                      fill="#ffffff"
+                      stroke={isOpen ? '#ffe24a' : (NODE_RING[n.entity_type] || NODE_RING.person)}
+                      strokeWidth={isOpen ? 2.5 : 1.5}
+                      onPointerDown={onNodePointerDown(n.id)}
+                      onClick={onNodeClick(n.id)}
                     >
-                      {n.canonical_name}
+                      <title>{n.canonical_name} · {n.mention_count} mentions</title>
+                    </rect>
+                    <text
+                      y={1}
+                      fontSize={fs}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      style={{ pointerEvents: 'none', userSelect: 'none', fill: '#14181d', fontFamily: 'var(--font-mono)', fontWeight: 500 }}
+                    >
+                      {label}
                     </text>
-                  )}
-                </g>
-              ))}
+                  </g>
+                );
+              })}
             </g>
           </svg>
+        )}
+        {graphData && graphData.nodes.length > 0 && (
+          <div className="egraph-legend">
+            <span><i className="egraph-key" style={{ borderColor: '#2f3dbd' }} />PERSON</span>
+            <span><i className="egraph-key" style={{ borderColor: '#f5ce00' }} />ORGANIZATION</span>
+            <span className="egraph-legend-hint">SOLID&nbsp;=&nbsp;STATED&nbsp;·&nbsp;DASHED&nbsp;=&nbsp;CO-OCCURRENCE&nbsp;·&nbsp;DRAG&nbsp;TO&nbsp;ARRANGE</span>
+          </div>
         )}
       </div>
 

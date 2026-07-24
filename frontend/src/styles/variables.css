@@ -1,53 +1,64 @@
 :root {
-  /* ── Archive Theme: Semantic Aliases ── */
-  --color-ink: #2c3e6b;
-  --color-ink-light: #4a5f8a;
-  --color-ink-faint: rgba(44, 62, 107, 0.1);
-  --color-parchment-light: #f5f0e8;
-  --color-parchment-mid: #ebe4d8;
-  --color-parchment-warm: #f2ede5;
+  /* ── The Record: token values (see docs/design/design-language.md).
+     Token NAMES are unchanged from the archive theme so this remap stays
+     a one-file diff; parchment-* now hold cold-paper values (rename is a
+     separate, later change). ── */
+  --color-ink: #14181d;
+  --color-ink-light: #4a545e;
+  --color-ink-faint: rgba(20, 24, 29, 0.08);
+  --color-parchment-light: #fbfbf8;
+  --color-parchment-mid: #f1f0ea;
+  --color-parchment-warm: #f6f5f0;
   --color-card: #ffffff;
-  --color-card-hover: #faf7f2;
+  --color-card-hover: #f8f8f4;
   /* Ivory: an elevated warm-white surface that reads as "paper laid on the
-     parchment desk" — for flagship panels that must stand off the page bg. */
-  --color-ivory: #fffdf8;
-  --color-rule: #8b7355;
+     desk" — for flagship panels that must stand off the page bg. */
+  --color-ivory: #fdfdfa;
+  --color-rule: #4a545e;
 
-  /* ── Brand (ink-blue) ── */
-  --color-brand-50: rgba(44, 62, 107, 0.04);
-  --color-brand-100: rgba(44, 62, 107, 0.08);
-  --color-brand-200: rgba(44, 62, 107, 0.15);
-  --color-brand-400: #4a5f8a;
-  --color-brand-500: #2c3e6b;
-  --color-brand-600: #243356;
-  --color-brand-700: #1c2844;
+  /* ── Record accents ── */
+  --color-marker: #ffe24a;        /* emphasis BACKGROUND only, never text */
+  --color-marker-deep: #f5ce00;   /* marker borders/edges */
+  --color-marker-soft: rgba(255, 226, 74, 0.32);
+  --color-redact: #0b0d0f;        /* true black: redaction, dark bands */
+  --color-stamp: #2f3dbd;         /* interactive: links, focus, accents */
+  --color-stamp-soft: rgba(47, 61, 189, 0.12);
 
-  /* ── Primary (ink-blue scale) ── */
-  --color-primary-50: #f0f2f7;
-  --color-primary-100: #d9dfe9;
-  --color-primary-200: #b3bed3;
-  --color-primary-300: #8a9abc;
-  --color-primary-400: #6478a3;
-  --color-primary-500: #4a5f8a;
-  --color-primary-600: #3a4e76;
-  --color-primary-700: #2c3e6b;
-  --color-primary-800: #243356;
-  --color-primary-900: #1a2540;
+  /* ── Brand (ink) ── */
+  --color-brand-50: rgba(20, 24, 29, 0.04);
+  --color-brand-100: rgba(20, 24, 29, 0.08);
+  --color-brand-200: rgba(20, 24, 29, 0.15);
+  --color-brand-400: #4a545e;
+  --color-brand-500: #14181d;
+  --color-brand-600: #0f1216;
+  --color-brand-700: #0b0d0f;
 
-  /* ── Neutral (warm parchment grays) ── */
+  /* ── Primary (stamp-blue scale) ── */
+  --color-primary-50: #f0f1fb;
+  --color-primary-100: #dbdff7;
+  --color-primary-200: #b7c0ee;
+  --color-primary-300: #8e9ce2;
+  --color-primary-400: #5d6fd2;
+  --color-primary-500: #2f3dbd;
+  --color-primary-600: #2833a2;
+  --color-primary-700: #212a87;
+  --color-primary-800: #1a226c;
+  --color-primary-900: #141a52;
+
+  /* ── Neutral (cool paper grays) ── */
   --color-neutral-0: #ffffff;
-  --color-neutral-50: #f5f0e8;
-  --color-neutral-100: #ebe4d8;
-  --color-neutral-200: #ddd5c5;
-  --color-neutral-300: #c5bba8;
-  --color-neutral-400: #9a8e7a;
-  --color-neutral-500: #6e6354;
-  --color-neutral-600: #4a4234;
-  --color-neutral-700: #2d2720;
-  --color-neutral-800: #1a1610;
-  --color-neutral-900: #0d0b08;
+  --color-neutral-50: #fbfbf8;
+  --color-neutral-100: #f1f0ea;
+  --color-neutral-200: #e3e2da;
+  --color-neutral-300: #c9c7bc;
+  --color-neutral-400: #94928a;
+  --color-neutral-500: #6b6a63;
+  --color-neutral-600: #45443f;
+  --color-neutral-700: #2a2926;
+  --color-neutral-800: #171714;
+  --color-neutral-900: #0b0d0f;
 
-  /* ── Semantic ── */
+  /* ── Semantic (unchanged; danger doubles as privilege/destructive) ── */
   --color-success-50: rgba(46, 125, 50, 0.06);
   --color-success-100: rgba(46, 125, 50, 0.1);
   --color-success-400: #43a047;
@@ -77,9 +88,10 @@
   --color-purple-600: #381e87;
   --color-purple-700: #2c166e;
 
-  /* ── Accent (brass — avatar chip, warm highlights) ── */
-  --color-brass: #c49a4a;
-  --color-brass-soft: rgba(196, 154, 74, 0.18);
+  /* ── Accent ("brass" = text-safe dark gold; true marker yellow is
+     background-only — use --color-marker for highlight fills) ── */
+  --color-brass: #9a7b00;
+  --color-brass-soft: rgba(255, 226, 74, 0.28);
 
   /* ── Theme hues (cluster chips, brief donut) — muted archival palette ── */
   --theme-1: #5b6e9e;
@@ -92,9 +104,9 @@
   --theme-8: #85607a;
 
   /* ── Typography ── */
-  --font-sans: 'Libre Franklin', 'Segoe UI', system-ui, sans-serif;
-  --font-serif: 'Cormorant Garamond', Garamond, 'Times New Roman', serif;
-  --font-mono: 'Fira Code', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --font-sans: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-serif: 'Besley', 'Rockwell', Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
 
   --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
@@ -134,14 +146,14 @@
   --radius-xl: 14px;
   --radius-full: 9999px;
 
-  /* ── Shadows (ink-blue tinted) ── */
-  --shadow-xs: 0 1px 2px rgba(44, 62, 107, 0.04);
-  --shadow-sm: 0 1px 3px rgba(44, 62, 107, 0.06), 0 1px 2px rgba(44, 62, 107, 0.03);
-  --shadow-md: 0 4px 8px -1px rgba(44, 62, 107, 0.07), 0 2px 4px -2px rgba(44, 62, 107, 0.04);
-  --shadow-lg: 0 12px 24px -4px rgba(44, 62, 107, 0.1), 0 4px 8px -4px rgba(44, 62, 107, 0.05);
-  --shadow-xl: 0 24px 48px -8px rgba(44, 62, 107, 0.14), 0 8px 16px -6px rgba(44, 62, 107, 0.06);
-  --shadow-inner: inset 0 2px 4px rgba(44, 62, 107, 0.04);
-  --shadow-ring: 0 0 0 3px rgba(44, 62, 107, 0.12);
+  /* ── Shadows (ink-tinted) ── */
+  --shadow-xs: 0 1px 2px rgba(20, 24, 29, 0.04);
+  --shadow-sm: 0 1px 3px rgba(20, 24, 29, 0.06), 0 1px 2px rgba(20, 24, 29, 0.03);
+  --shadow-md: 0 4px 8px -1px rgba(20, 24, 29, 0.07), 0 2px 4px -2px rgba(20, 24, 29, 0.04);
+  --shadow-lg: 0 12px 24px -4px rgba(20, 24, 29, 0.1), 0 4px 8px -4px rgba(20, 24, 29, 0.05);
+  --shadow-xl: 0 24px 48px -8px rgba(20, 24, 29, 0.14), 0 8px 16px -6px rgba(20, 24, 29, 0.06);
+  --shadow-inner: inset 0 2px 4px rgba(20, 24, 29, 0.04);
+  --shadow-ring: 0 0 0 3px rgba(47, 61, 189, 0.15);
 
   /* ── Transitions ── */
   --transition-fast: 100ms ease;

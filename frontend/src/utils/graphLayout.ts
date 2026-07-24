@@ -27,9 +27,10 @@ export function computeGraphLayout(nodes: GraphNode[], edges: GraphEdge[], width
   if (simNodes.length === 1) return [{ ...simNodes[0], x: width / 2, y: height / 2 }];
   const simLinks: SimLink[] = edges.map(e => ({ source: e.source, target: e.target, weight: e.weight }));
   const sim = forceSimulation(simNodes)
-    .force('charge', forceManyBody().strength(-180))
-    .force('link', forceLink<SimNode, SimLink>(simLinks).id(d => d.id).distance(90))
-    .force('collide', forceCollide<SimNode>().radius(d => d.r + 6))
+    .force('charge', forceManyBody().strength(-220))
+    .force('link', forceLink<SimNode, SimLink>(simLinks).id(d => d.id).distance(110))
+    // Nodes render as name cards, so clearance follows label width, not r.
+    .force('collide', forceCollide<SimNode>().radius(d => Math.max(d.r, Math.min(d.canonical_name.length, 24) * 3.8) + 12))
     .force('center', forceCenter(width / 2, height / 2))
     .stop();
   for (let i = 0; i < 300; i++) sim.tick();

@@ -121,8 +121,9 @@ export default function AuthPage() {
   return (
     <div className="login-page">
       <form onSubmit={handleSubmit} className="login-card">
+        <p className="bates-chip" style={{ marginBottom: 'var(--space-3)' }}>VIGILIST&nbsp;·&nbsp;SIGN&nbsp;IN</p>
         <h1>Vigilist</h1>
-        <p className="subtitle">Document Review Platform</p>
+        <p className="subtitle">The AI reads everything. You read what matters.</p>
 
         {error && <div className="error">{error}</div>}
 
