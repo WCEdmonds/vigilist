@@ -480,26 +480,41 @@ def _build_zip_pdf_document(
     top-level PDF upload (``process_pdf_record``), just fed from in-memory
     bytes instead of a storage download. Never raises."""
     from app.services.ingest_pdf import iter_pdf_pages, looks_like_bates_stub
+    from app.services.ocr import sidecar_bytes, sidecar_remote_path
     from app.services.storage import upload_bytes
 
     image_paths: list[str] = []
+    ocr_paths: list[str] = []
     text_parts: list[str] = []
     page_count = 0
     try:
-        for page_num, jpeg, page_text in iter_pdf_pages(data, ocr_fn=ocr_fn):
+        for page_num, jpeg, page_ocr in iter_pdf_pages(data, ocr_fn=ocr_fn):
             page_count = page_num
-            if page_text:
-                text_parts.append(page_text)
-            remote = (
-                f"productions/{production_id}/converted/"
-                f"{control_number.replace(' ', '_')}_{page_num:04d}.jpg"
-            )
+            if page_ocr is not None and page_ocr.text:
+                text_parts.append(page_ocr.text)
+            page_stem = f"{control_number.replace(' ', '_')}_{page_num:04d}"
+            remote = f"productions/{production_id}/converted/{page_stem}.jpg"
             try:
                 upload_bytes(jpeg, remote, content_type="image/jpeg")
                 image_paths.append(remote)
             except Exception as e:
                 errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
                 image_paths.append("")
+            if page_ocr is None:
+                ocr_paths.append("")  # OCR failed: distinguishable from words=[]
+            else:
+                try:
+                    sidecar_remote = sidecar_remote_path(production_id, page_stem)
+                    upload_bytes(
+                        sidecar_bytes(page_ocr), sidecar_remote,
+                        content_type="application/json",
+                    )
+                    ocr_paths.append(sidecar_remote)
+                except Exception as e:
+                    errors.append(
+                        f"{control_number}: sidecar upload failed page {page_num}: {e}"
+                    )
+                    ocr_paths.append("")
     except Exception as e:
         errors.append(f"{control_number}: failed to render {name}: {e}")
         return None
@@ -516,6 +531,7 @@ def _build_zip_pdf_document(
         text_content=("\n\n".join(text_parts) or None),
         native_path=None,
         image_paths=image_paths,
+        ocr_paths=ocr_paths,
         family_id=family_id,
         file_name=name,
         file_type="pdf",

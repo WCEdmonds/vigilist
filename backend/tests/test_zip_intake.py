@@ -300,6 +300,8 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
     """Finding 2(a): a PDF found inside a zip must go through the SAME
     page-render path as a top-level PDF (child doc with page_count set) and
     join the container's family."""
+    from app.services.ocr import PageOcr
+
     uploaded: list[str] = []
     monkeypatch.setattr(
         storage_mod,
@@ -315,7 +317,7 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
         production_id=1,
         source_path="uploads/withpdf.zip",
         custodian="Alice",
-        ocr_fn=lambda jpeg_bytes: "",
+        ocr_fn=lambda jpeg_bytes: PageOcr(),
     )
 
     container = docs[0]
@@ -328,7 +330,9 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
     assert "hello from zip pdf" in (child.text_content or "")
     assert child.extraction_status == "ok"
     assert child.family_id == container.family_id == "PREFIX 000013"
-    assert len(uploaded) == 1
+    assert len(uploaded) == 2  # JPEG + sidecar
+    assert uploaded[0].endswith(".jpg")  # JPEG first
+    assert uploaded[1].endswith(".json")  # sidecar second
     assert container.extraction_status == "ok"
 
 
