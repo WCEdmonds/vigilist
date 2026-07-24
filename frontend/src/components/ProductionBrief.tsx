@@ -277,16 +277,6 @@ export default function ProductionBrief({ production, onViewDocument, onPipeline
           <button type="button" className="brief-collapse-toggle" onClick={toggleCollapsed} aria-expanded={false}>
             <span className="brief-ai-mark">✦</span> Production Brief <span aria-hidden="true">▸</span>
           </button>
-          {cast.length > 0 && (
-            <div className="brief-cast-row brief-cast-row--compact">
-              {cast.slice(0, 5).map(m => (
-                <button key={m.id} type="button" className="cast-card" onClick={() => onOpenEntity?.(m.id)}>
-                  <span className={`entity-dot entity-${m.entityType}`}>●</span>
-                  <span className="cast-name">{m.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       );
     }

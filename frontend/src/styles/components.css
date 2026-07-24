@@ -1868,7 +1868,6 @@ mark {
 }
 .brief-cast-links button:hover { box-shadow: inset 0 -0.45em 0 var(--color-marker); }
 .brief-cast-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.brief-cast-row--compact { margin-top: var(--space-2); }
 .cast-card {
   display: inline-flex;
   align-items: center;
