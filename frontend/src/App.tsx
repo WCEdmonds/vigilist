@@ -68,7 +68,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [filterTagId, setFilterTagId] = useState<number | null>(null);
   const [filterFileType, setFilterFileType] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('bates');
-  const [filterAiDecision, setFilterAiDecision] = useState<string>('');
   const [filterSourceParty, setFilterSourceParty] = useState<string>('');
   const [sourceParties, setSourceParties] = useState<string[]>([]);
   const [undesignatedCount, setUndesignatedCount] = useState(0);
@@ -176,12 +175,12 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
     getSourceParties(production.id).then(r => { setSourceParties(r.source_parties); setUndesignatedCount(r.undesignated); }).catch(e => console.warn('getSourceParties failed:', e));
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterAiDecision, filterSourceParty, workMode]);
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, filterAiDecision || undefined, filterSourceParty || undefined, sourceTypeParam);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -370,21 +369,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     }
   };
 
-
-  const aiMarker = (d: DocumentSummary) => {
-    if (!d.ai_decision || d.ai_decided) return null;
-    const label = d.ai_decision.replace(/_/g, ' ');
-    const color =
-      d.ai_decision === 'key_document' ? 'var(--color-primary-400)' :
-      d.ai_decision === 'relevant' ? 'var(--color-success)' :
-      d.ai_decision === 'needs_review' ? 'var(--color-warning)' :
-      'var(--color-neutral-400)';
-    return (
-      <span className="ai-marker" style={{ color }}>
-        <span className="ai-marker-star">✦</span> {label} {d.ai_confidence ?? 0}%
-      </span>
-    );
-  };
 
   // Ambient entity chip — clicking retargets the (possibly already-open)
   // Entities panel via navigateToEntity rather than bubbling into the row's
@@ -690,7 +674,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterAiDecision || filterSourceParty || workMode !== 'all') && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterSourceParty || workMode !== 'all') && (
           <div>
             <div className="section-header">
               <h2 className="section-title">
@@ -741,20 +725,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     <option key={sp} value={sp}>{sp}</option>
                   ))}
                 </select>
-                <label htmlFor="filter-ai" className="visually-hidden">Filter by AI decision</label>
-                <select
-                  id="filter-ai"
-                  className="input input-sm"
-                  style={{ width: 'auto', minWidth: 120 }}
-                  value={filterAiDecision}
-                  onChange={e => { setFilterAiDecision(e.target.value); setDocPage(1); }}
-                >
-                  <option value="">AI: All</option>
-                  <option value="relevant">AI: Relevant</option>
-                  <option value="key_document">AI: Key document</option>
-                  <option value="not_relevant">AI: Not relevant</option>
-                  <option value="needs_review">AI: Needs review</option>
-                </select>
                 <label htmlFor="sort-by" className="visually-hidden">Sort order</label>
                 <select
                   id="sort-by"
@@ -767,8 +737,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   <option value="recent">Sort: Recent</option>
                   <option value="size">Sort: Size</option>
                 </select>
-                {(filterTagId || filterFileType || filterAiDecision) && (
-                  <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setFilterAiDecision(''); setDocPage(1); }}>
+                {(filterTagId || filterFileType) && (
+                  <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setDocPage(1); }}>
                     Clear filters
                   </button>
                 )}
@@ -815,7 +785,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                       <th>Bates Range</th>
                       <th>Title</th>
                       <th style={{ width: 80 }}>Type</th>
-                      <th>AI</th>
                       <th>People/Orgs</th>
                       <th>Pages</th>
                       <th>Tags</th>
@@ -868,7 +837,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             {d.file_type === 'document' ? 'DOC' : d.file_type === 'pdf' ? 'PDF' : d.file_type}
                           </span>
                         </td>
-                        <td className="meta-cell">{aiMarker(d)}</td>
                         <td className="meta-cell"><div className="entity-chip-row">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</div></td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
@@ -919,7 +887,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                             {tag.name}
                           </span>
                         ))}
-                        {aiMarker(d)}
                         <span className="entity-chip-row" style={{ display: 'inline-flex' }}>{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</span>
                       </div>
                     </div>
