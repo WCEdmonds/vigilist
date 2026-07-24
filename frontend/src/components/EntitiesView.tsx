@@ -75,14 +75,14 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     });
   };
 
-  const mergeName = (e: { id: string; canonical_name: string; mention_count: number }) => (
+  const mergeName = (e: EntityListItem) => (
     <span
       className="merge-name-wrap"
       onMouseEnter={() => { loadContext(e.id); setHoverCtxId(e.id); }}
       onMouseLeave={() => setHoverCtxId(prev => (prev === e.id ? null : prev))}
     >
       <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => openEntity(e.id)}>
-        {entityDisplayName(e.canonical_name)}
+        {entityDisplayName(e.canonical_name, e.entity_type)}
       </button>
       <span className="merge-count">{e.mention_count}×</span>
       {hoverCtxId === e.id && (
@@ -222,7 +222,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           <tbody>
             {entities.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => openEntity(e.id)}>
-                <td style={{ fontWeight: 600 }}>{entityDisplayName(e.canonical_name)}</td>
+                <td style={{ fontWeight: 600 }}>{entityDisplayName(e.canonical_name, e.entity_type)}</td>
                 <td><span className={`entity-dot entity-${e.entity_type}`} style={{ marginRight: 5 }}>●</span>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
                 <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{e.mention_count.toLocaleString()}</td>
                 <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{e.document_count.toLocaleString()}</td>

@@ -393,7 +393,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     <button key={c.entity_id} className="entity-chip"
             onClick={ev => { ev.stopPropagation(); navigateToEntity(c.entity_id); }}>
       <span className={`entity-dot entity-${c.entity_type}`}>●</span>
-      {entityDisplayName(c.canonical_name)}
+      {entityDisplayName(c.canonical_name, c.entity_type)}
     </button>
   );
 
