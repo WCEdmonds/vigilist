@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { entityDisplayName } from './utils/entityDisplay';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
 import AuthPage from './components/AuthPage';
@@ -389,10 +390,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Entities panel via navigateToEntity rather than bubbling into the row's
   // own click handler (which opens the document).
   const entityChip = (c: ChipEntity) => (
-    <button key={c.entity_id} className="badge badge-gray" style={{ cursor: 'pointer' }}
+    <button key={c.entity_id} className="entity-chip"
             onClick={ev => { ev.stopPropagation(); navigateToEntity(c.entity_id); }}>
-      <span className={`entity-dot entity-${c.entity_type}`} style={{ marginRight: 3 }}>●</span>
-      {c.canonical_name}
+      <span className={`entity-dot entity-${c.entity_type}`}>●</span>
+      {entityDisplayName(c.canonical_name)}
     </button>
   );
 
@@ -868,7 +869,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                           </span>
                         </td>
                         <td className="meta-cell">{aiMarker(d)}</td>
-                        <td className="meta-cell">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</td>
+                        <td className="meta-cell"><div className="entity-chip-row">{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</div></td>
                         <td className="meta-cell">{d.page_count}</td>
                         <td>
                           <div className="tags-cell">
@@ -919,7 +920,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                           </span>
                         ))}
                         {aiMarker(d)}
-                        {(entityChips[d.id] || []).slice(0, 3).map(entityChip)}
+                        <span className="entity-chip-row" style={{ display: 'inline-flex' }}>{(entityChips[d.id] || []).slice(0, 3).map(entityChip)}</span>
                       </div>
                     </div>
                   </div>
