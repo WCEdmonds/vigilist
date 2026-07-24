@@ -146,14 +146,18 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
         setProfile(prev => (prev && prev.id === targetId
           ? { id: targetId, value: { ...prev.value, canonical_name: result.canonical_name, aliases: result.aliases } }
           : prev));
-        setSavingName(false);
         setEditingFor(null);
         showToast('Entity renamed.', 'success');
       })
       .catch(e => {
         if (entityIdRef.current !== targetId) return; // ditto — don't surface a stale error on a different, untouched entity
-        setSavingName(false);
         setNameError(errText(e));
+      })
+      .finally(() => {
+        // Request-lifecycle flag, not entity-specific: must clear regardless of
+        // which entity the panel now shows, or a navigate-away-mid-rename
+        // leaves every future rename in this panel deadened by `if (savingName) return`.
+        setSavingName(false);
       });
   };
 
@@ -177,8 +181,15 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
       })
       .catch(e => {
         if (entityIdRef.current !== targetId) return; // ditto — don't surface a stale error on a different, untouched entity
-        setDeletingFor(null);
         showToast(errText(e), 'error');
+      })
+      .finally(() => {
+        // Request-lifecycle flag, not entity-specific: must clear regardless of
+        // which entity the panel now shows. On success while still showing
+        // targetId this fires right before onClose()'s unmount (harmless); on
+        // success after navigating away, or on any failure, it's what stops
+        // "Deleting…" from sticking on targetId forever.
+        setDeletingFor(null);
       });
   };
 
