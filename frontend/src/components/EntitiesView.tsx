@@ -43,12 +43,17 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     return () => clearInterval(timer);
   }, [extracting, refresh]);
 
-  const startExtraction = async () => {
+  const startExtraction = async (rebuild = false) => {
+    if (rebuild && !window.confirm(
+      'Rebuild the entity graph? All entities, relationships, events, and merge history for this matter will be deleted and re-extracted from scratch.',
+    )) return;
     setExtractMsg(null);
     try {
-      await triggerEntityExtraction(productionId);
+      await triggerEntityExtraction(productionId, rebuild);
       setExtracting(true);
-      setExtractMsg('Extraction started — entities appear below as documents are processed.');
+      setExtractMsg(rebuild
+        ? 'Rebuild started — the old ontology is cleared; entities reappear below as documents are re-read.'
+        : 'Extraction started — entities appear below as documents are processed.');
     } catch (e) {
       setExtractMsg(e instanceof Error ? e.message : String(e));
     }
@@ -88,10 +93,18 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
         <button
           className="btn btn-xs"
           disabled={extracting}
-          onClick={startExtraction}
+          onClick={() => startExtraction(false)}
           title="Run AI entity extraction over this matter's documents (manager only)"
         >
           {extracting ? 'Extracting…' : 'Extract entities'}
+        </button>
+        <button
+          className="btn btn-ghost btn-xs"
+          disabled={extracting}
+          onClick={() => startExtraction(true)}
+          title="Delete this matter's entire ontology and re-extract from scratch (manager only)"
+        >
+          Rebuild
         </button>
       </div>
       {extractMsg && (
@@ -150,7 +163,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
         {entities.length === 0 && (
           <div className="empty-state">
             <div>No entities extracted yet.</div>
-            <button className="btn btn-xs" style={{ marginTop: 8 }} disabled={extracting} onClick={startExtraction}>
+            <button className="btn btn-xs" style={{ marginTop: 8 }} disabled={extracting} onClick={() => startExtraction(false)}>
               {extracting ? 'Extracting…' : 'Extract entities'}
             </button>
           </div>

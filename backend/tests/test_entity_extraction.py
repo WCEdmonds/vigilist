@@ -162,3 +162,31 @@ def test_slice_text_guards_degenerate_overlap():
     assert 0 < len(slices2) <= 1000
     assert all(len(s) <= 100 for s in slices2)
     assert text.endswith(slices2[-1])
+
+
+def _entity_json(*names):
+    return json.dumps({
+        "entities": [
+            {"name": n, "type": "org" if "Court" in n or "Reporting" in n else "person",
+             "surface_forms": [n], "role": None, "emails": []}
+            for n in names
+        ],
+        "events": [], "relationships": [],
+    })
+
+
+def test_parse_drops_litigation_process_noise():
+    raw = _entity_json(
+        "THE COURT", "Veritext Court Reporting", "Superior Court of Fulton County",
+        "Court of Appeals", "Clerk of Court", "Plaintiff", "Defendants", "Notary Public",
+        "Jorge Rivera",
+    )
+    out = parse_extraction_response(raw)
+    assert [e["name"] for e in out["entities"]] == ["Jorge Rivera"]
+
+
+def test_parse_keeps_real_actors_with_courtlike_substrings():
+    # Named people and firms must never be caught by the noise patterns.
+    raw = _entity_json("Courtney Smith", "Harcourt Industries", "Dana Wu")
+    out = parse_extraction_response(raw)
+    assert [e["name"] for e in out["entities"]] == ["Courtney Smith", "Harcourt Industries", "Dana Wu"]

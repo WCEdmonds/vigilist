@@ -851,8 +851,8 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
   request<{ merge_id: number; winner_id: string }>(`/api/entities/merge`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ winner_id: winnerId, loser_id: loserId }) });
 
-export const triggerEntityExtraction = (productionId: number) =>
-  request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
+export const triggerEntityExtraction = (productionId: number, rebuild = false) =>
+  request<{ status: string }>(`/api/productions/${productionId}/extract-entities${rebuild ? '?rebuild=true' : ''}`, { method: 'POST' });
 
 export function getTimeline(productionId: number, entityId?: string, eventType?: string, page = 1, perPage = 50) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
