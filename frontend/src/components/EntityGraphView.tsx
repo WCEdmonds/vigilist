@@ -30,6 +30,12 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
   // pointer move events; read/written only inside pointer handlers, never
   // during render.
   const dragTargetRef = useRef<string | null>(null);
+  // Cumulative pointer movement (px) since the last pointerdown. A pointerup
+  // on a node always fires a trailing click event; without this a drag-release
+  // would reopen the entity panel on every reposition. Standard "click
+  // distance" pattern: only treat it as a real click if movement stayed small.
+  const dragDistanceRef = useRef(0);
+  const CLICK_DISTANCE_THRESHOLD = 4;
 
   const openEntity = (id: string | null) => { onOpenEntityChange?.(id); };
 
@@ -37,8 +43,12 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
     getGraph(productionId)
       .then(data => {
         const rect = containerRef.current?.getBoundingClientRect();
-        const width = rect?.width || 800;
-        const height = rect?.height || 600;
+        // If the container hasn't laid out yet (rect reads 0-height), fall
+        // back to the real viewport rather than an arbitrary guess so nodes
+        // don't land off-screen on a full-height view.
+        const HEADER_OFFSET = 48;
+        const width = rect?.width || window.innerWidth;
+        const height = rect?.height || (window.innerHeight - HEADER_OFFSET);
         setLayout(computeGraphLayout(data.nodes, data.edges, width, height));
         setGraphData(data);
       })
@@ -55,18 +65,21 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
 
   const onBackgroundPointerDown = (ev: React.PointerEvent<SVGSVGElement>) => {
     dragTargetRef.current = 'background';
+    dragDistanceRef.current = 0;
     ev.currentTarget.setPointerCapture(ev.pointerId);
   };
 
   const onNodePointerDown = (id: string) => (ev: React.PointerEvent<SVGCircleElement>) => {
     ev.stopPropagation();
     dragTargetRef.current = id;
+    dragDistanceRef.current = 0;
     ev.currentTarget.setPointerCapture(ev.pointerId);
   };
 
   const onPointerMove = (ev: React.PointerEvent<SVGSVGElement>) => {
     const target = dragTargetRef.current;
     if (!target) return;
+    dragDistanceRef.current += Math.hypot(ev.movementX, ev.movementY);
     if (target === 'background') {
       setTransform(t => ({ ...t, x: t.x + ev.movementX, y: t.y + ev.movementY }));
     } else {
@@ -78,6 +91,15 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
   };
 
   const onPointerUp = () => { dragTargetRef.current = null; };
+
+  const onNodeClick = (id: string) => () => {
+    // A pointerup always fires a trailing click; only open the panel if this
+    // pointer session didn't actually drag the node.
+    const dragged = dragDistanceRef.current > CLICK_DISTANCE_THRESHOLD;
+    dragDistanceRef.current = 0;
+    if (dragged) return;
+    openEntity(id);
+  };
 
   const edgeLine = (e: GraphEdge, i: number) => {
     const source = nodeById.get(e.source);
@@ -101,7 +123,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
   const showLabels = !(transform.k < 0.7 && layout.length > 40);
 
   return (
-    <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'relative', height: '100dvh', display: 'flex', flexDirection: 'column' }}>
       <div className="panel-header" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="btn btn-ghost btn-xs" onClick={onBack}>← Back</button>
         <span style={{ fontWeight: 600 }}>Relationship Graph ({layout.length} entities)</span>
@@ -139,7 +161,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
                     strokeWidth={1.5}
                     style={{ cursor: 'pointer' }}
                     onPointerDown={onNodePointerDown(n.id)}
-                    onClick={() => openEntity(n.id)}
+                    onClick={onNodeClick(n.id)}
                   >
                     <title>{n.canonical_name}</title>
                   </circle>

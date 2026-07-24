@@ -97,7 +97,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
   );
 
   return (
-    <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'relative', height: '100dvh', display: 'flex', flexDirection: 'column' }}>
       <div className="panel-header" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="btn btn-ghost btn-xs" onClick={onBack}>← Back</button>
         <span style={{ fontWeight: 600 }}>Timeline ({total} events)</span>

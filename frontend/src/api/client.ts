@@ -865,4 +865,4 @@ export const getGraph = (productionId: number, maxNodes = 75, minSharedDocs = 2)
   request<GraphData>(`/api/productions/${productionId}/graph?max_nodes=${maxNodes}&min_shared_docs=${minSharedDocs}`);
 
 export const getEntitiesSummary = (ids: string[]) =>
-  request<{ summaries: Record<string, ChipEntity[]> }>(`/api/documents/entities-summary?ids=${ids.join(',')}`);
+  request<{ summaries: Record<string, ChipEntity[]> }>(`/api/entities-summary?ids=${ids.join(',')}`);

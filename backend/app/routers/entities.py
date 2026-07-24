@@ -42,11 +42,18 @@ async def _get_scoped_entity(db: AsyncSession, user: User, entity_id: UUID) -> E
     return entity
 
 
-# Route note: Starlette matches routes in REGISTRATION order (first match wins).
-# This 2-segment literal path can't collide with the 3-segment
-# /documents/{doc_id}/entities sibling today, but keep it registered before any
-# future parameterized 2-segment /documents/{...} route.
-@router.get("/documents/entities-summary", response_model=EntitiesSummaryOut)
+# Route note: Starlette matches routes in REGISTRATION order (first match wins),
+# and matching happens PER ROUTER, not globally by specificity. documents.py
+# defines GET /api/documents/{doc_id}, and documents.router is included in
+# main.py before entities.router. That means ANY literal path under
+# /api/documents/* declared in a DIFFERENT router (like this one used to be:
+# /api/documents/entities-summary) is unreachable -- the {doc_id} route in
+# documents.py matches first and "entities-summary" gets captured as a doc_id,
+# producing a 422 instead of ever reaching this handler. Lesson: routers don't
+# get to carve out sub-namespaces of a path prefix another router already owns
+# with a catch-all segment; either own the whole prefix or pick a namespace
+# no other router has claimed. Hence this lives at /api/entities-summary.
+@router.get("/entities-summary", response_model=EntitiesSummaryOut)
 async def get_entities_summary(
     ids: str = "",
     db: AsyncSession = Depends(get_db),
