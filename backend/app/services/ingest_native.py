@@ -804,8 +804,9 @@ async def ingest_native_batch(
 
     for global_index, item in slice_pairs:
         control_number = f"{prefix} {offset + global_index + 1:06d}"
+        skip_key = f"native:{item['storage_path']}"
         if item["storage_path"] in existing:
-            await _incr_skipped(db, job_id)
+            await _incr_skipped(db, job_id, skip_key)
             continue
         ext = os.path.splitext(item["filename"])[1].lower()
         try:
@@ -815,7 +816,7 @@ async def ingest_native_batch(
                     custodian, production_id, item, offset + global_index, prefix, errors,
                 )
                 if not docs:
-                    await _incr_skipped(db, job_id)
+                    await _incr_skipped(db, job_id, skip_key)
                     continue
                 # Commit the whole family in one transaction: if it fails
                 # partway, nothing persists, so a retry re-expands the container
@@ -829,7 +830,7 @@ async def ingest_native_batch(
                     custodian, production_id, item, offset + global_index, prefix, errors,
                 )
                 if not docs:
-                    await _incr_skipped(db, job_id)
+                    await _incr_skipped(db, job_id, skip_key)
                     continue
                 # Same all-or-nothing family commit as the email path: a
                 # retry re-explodes the container cleanly instead of finding
@@ -843,7 +844,7 @@ async def ingest_native_batch(
                     custodian, production_id, item, offset + global_index, prefix, errors,
                 )
                 if doc is None:
-                    await _incr_skipped(db, job_id)
+                    await _incr_skipped(db, job_id, skip_key)
                     continue
                 _stamp_source(doc, job)
                 await _persist_document(db, job_id, doc)
@@ -851,7 +852,7 @@ async def ingest_native_batch(
             logger.exception("Failed to process native file %s", item.get("relative_path"))
             errors.append(f"{control_number}: {e}")
             await db.rollback()
-            await _incr_skipped(db, job_id)
+            await _incr_skipped(db, job_id, skip_key)
 
     await _persist_job_errors(db, job_id, errors)
     await _finalize_job_if_done(db, job, production_id, errors)

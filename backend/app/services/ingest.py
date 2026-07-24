@@ -413,11 +413,24 @@ def process_ingest_record(
     return doc
 
 
-async def _incr_skipped(db: AsyncSession, job_id: str) -> None:
-    """Count one record as skipped."""
+# Guarded, atomic per-record skip count. Cloud Tasks retries re-walk their
+# whole slice, so a bare ``+ 1`` inflates skipped_files on every retry — enough
+# inflation and ``(processed + skipped) >= total`` completes a job whose
+# records were never actually attempted. The key set makes the increment
+# idempotent; the row lock taken by UPDATE serializes concurrent batches.
+_INCR_SKIPPED_SQL = (
+    "UPDATE ingest_jobs SET "
+    "skipped_files = skipped_files + 1, "
+    "skipped_keys = skipped_keys || to_jsonb(cast(:key as text)) "
+    "WHERE id = :jid AND NOT (skipped_keys @> to_jsonb(cast(:key as text)))"
+)
+
+
+async def _incr_skipped(db: AsyncSession, job_id: str, key: str) -> None:
+    """Count one record as skipped, at most once per stable record key."""
     await db.execute(
-        text("UPDATE ingest_jobs SET skipped_files = skipped_files + 1 WHERE id = :jid"),
-        {"jid": job_id},
+        text(_INCR_SKIPPED_SQL),
+        {"key": key, "jid": job_id},
     )
     await db.commit()
 
@@ -604,14 +617,14 @@ async def ingest_batch(
     errors: list[str] = list(job.errors or [])
 
     try:
-        for record in slice_records:
+        for i, record in enumerate(slice_records):
             bates_begin = record.get("Begin Bates", "").strip()
             if not bates_begin:
                 errors.append("Row: missing Begin Bates")
-                await _incr_skipped(db, job_id)
+                await _incr_skipped(db, job_id, f"row:{start_idx + i}")
                 continue
             if bates_begin in existing:
-                await _incr_skipped(db, job_id)
+                await _incr_skipped(db, job_id, f"bates:{bates_begin}")
                 continue
             try:
                 # Run the CPU/IO-bound conversion in a thread so it can't block
@@ -623,7 +636,7 @@ async def ingest_batch(
                     field_mapping,
                 )
                 if doc is None:
-                    await _incr_skipped(db, job_id)
+                    await _incr_skipped(db, job_id, f"bates:{bates_begin}")
                     continue
                 _stamp_source(doc, job)
                 await _persist_document(db, job_id, doc)
@@ -631,7 +644,7 @@ async def ingest_batch(
                 logger.exception("Failed to process record %s", bates_begin)
                 errors.append(f"{bates_begin}: {e}")
                 await db.rollback()
-                await _incr_skipped(db, job_id)
+                await _incr_skipped(db, job_id, f"bates:{bates_begin}")
 
         # Persist any error messages collected in this batch
         await _persist_job_errors(db, job_id, errors)
@@ -696,7 +709,7 @@ async def ingest_pdf_batch(
     for global_index, item in slice_pairs:
         control_number = f"{prefix} {offset + global_index + 1:06d}"
         if item["storage_path"] in existing:
-            await _incr_skipped(db, job_id)
+            await _incr_skipped(db, job_id, f"pdf:{item['storage_path']}")
             continue
         try:
             # Offload rendering/OCR/upload to a thread; a large PDF rendered
@@ -706,7 +719,7 @@ async def ingest_pdf_batch(
                 production_id, item, offset + global_index, prefix, errors,
             )
             if doc is None:
-                await _incr_skipped(db, job_id)
+                await _incr_skipped(db, job_id, f"pdf:{item['storage_path']}")
                 continue
             _stamp_source(doc, job)
             await _persist_document(db, job_id, doc)
@@ -714,7 +727,7 @@ async def ingest_pdf_batch(
             logger.exception("Failed to process PDF %s", item.get("relative_path"))
             errors.append(f"{control_number}: {e}")
             await db.rollback()
-            await _incr_skipped(db, job_id)
+            await _incr_skipped(db, job_id, f"pdf:{item['storage_path']}")
 
     await _persist_job_errors(db, job_id, errors)
 

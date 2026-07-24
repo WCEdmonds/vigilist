@@ -283,6 +283,10 @@ class IngestJob(Base):
     total_files = Column(Integer, nullable=False, default=0)
     processed_files = Column(Integer, nullable=False, default=0)
     skipped_files = Column(Integer, nullable=False, default=0)
+    # Stable per-record keys already counted in skipped_files. Cloud Tasks
+    # retries re-walk their slice; the guard on this set keeps each record
+    # from inflating the counter on every retry.
+    skipped_keys = Column(JSONB, nullable=False, default=list)
     errors = Column(JSONB, nullable=False, default=list)
     field_mapping = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
