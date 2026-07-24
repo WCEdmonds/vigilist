@@ -119,6 +119,8 @@ class Document(Base):
     native_path = Column(String(500), nullable=True)
     image_paths = Column(JSONB, nullable=False, default=list)
     raw_image_paths = Column(JSONB, nullable=False, default=list)
+    # P1-6 — per-page word-box sidecar paths, index-aligned with image_paths
+    ocr_paths = Column(JSONB, nullable=False, default=list)
     processing_status = Column(String(20), nullable=False, default="pending")
     family_id = Column(String(255), nullable=True)
     thread_id = Column(String(255), nullable=True)
