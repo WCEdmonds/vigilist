@@ -1,0 +1,770 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Cast (EntitiesView) — the dramatis personae, in the record language
+   (docs/design/design-language.md).
+
+   The page is modelled on the front matter of a trial notebook: the cast of
+   characters. Billing is the information architecture — prominence in the
+   record (mentions × documents) sets an entity's tier the way significance
+   sets a timeline event's, so eight principals get substantial ivory cards,
+   the supporting cast gets compact rows, and the long tail of one-off names
+   collapses to a dense index. People and organizations are distinct kinds of
+   actor: a person's monogram tile is serif on ivory with an ink edge; an
+   org's is mono on dim paper with a brass edge (brass is already the org
+   color app-wide).
+
+   The signature is the presence rail: each principal's first-seen → last-seen
+   span drawn on a time scale shared across every card, so scanning the cards
+   shows who was on stage when — the cast page's bridge to the chronology.
+
+   Marker yellow keeps its record meaning: the review docket (AI-suggested
+   duplicates) wears the marker edge, and entities under suggestion carry a
+   marker tick in the cast.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.cast {
+  --cast-page: var(--color-parchment-light);
+
+  position: relative;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Control bar (mirrors .chrono-bar so the two record surfaces read as one
+   product) ── */
+
+.cast-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(251, 251, 248, 0.88);
+  border-bottom: 1px solid rgba(20, 24, 29, 0.1);
+  backdrop-filter: blur(6px);
+  z-index: 5;
+}
+
+.cast-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.cast-heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cast-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-3xl);
+  font-weight: var(--font-semibold);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+}
+
+.cast-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  white-space: nowrap;
+}
+
+.cast-spacer { margin-left: auto; }
+
+.cast-search {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 190px;
+  max-width: 400px;
+}
+
+.cast-search-input {
+  width: 100%;
+  padding-left: 30px;
+}
+
+.cast-search-mark {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--text-sm);
+  color: var(--color-neutral-400);
+  pointer-events: none;
+}
+
+.cast-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-neutral-400);
+  font-size: var(--text-base);
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+}
+
+.cast-search-clear:hover { color: var(--color-ink); }
+
+/* Kind-of-actor filter as the segmented lens — person vs organization is a
+   master distinction on this page, not a column value. */
+.cast-seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid rgba(20, 24, 29, 0.15);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.cast-seg-btn {
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 5px 13px;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.cast-seg-btn:hover:not(.is-on) { color: var(--color-ink); }
+
+.cast-seg-btn.is-on {
+  background: var(--color-ink);
+  color: #fff;
+  box-shadow: var(--shadow-xs);
+}
+
+.cast-extract-note {
+  flex: none;
+  padding: 4px var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  background: var(--cast-page);
+}
+
+/* ── Scroll port + track ── */
+
+.cast-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--cast-page);
+}
+
+.cast-track {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-5) var(--space-10);
+}
+
+/* ── Section stamps — the chronology's chapter idiom applied to billing:
+   mono stamp-blue label, redact-black rule, mono tally. Sticky, so the
+   reader always knows which tier of the cast they are in. ── */
+
+.cast-stamp {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0 var(--space-2);
+  background: var(--cast-page);
+}
+
+.cast-stamp-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-stamp);
+  white-space: nowrap;
+}
+
+.cast-stamp-rule {
+  flex: 1;
+  height: 2px;
+  background: var(--color-redact);
+}
+
+.cast-stamp-tally {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ── Principal cards ── */
+
+.cast-principals {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+.cast-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3);
+  background: var(--color-ivory);
+  border: 1px solid rgba(20, 24, 29, 0.12);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast);
+}
+
+/* The kind of actor is the card's edge: ink for a person, brass for an
+   organization — the same code the entity dots carry app-wide. */
+.cast-card.is-person { border-left: 3px solid var(--color-ink); }
+.cast-card.is-org { border-left: 3px solid var(--color-brass); }
+
+.cast-card:hover { box-shadow: var(--shadow-lg); }
+
+.cast-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+/* Monogram tile: cut square, like a letterpress initial block. Person =
+   serif initials, ink on ivory. Org = mono initials, brass on dim paper. */
+.cast-tile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 2px;
+  user-select: none;
+}
+
+.cast-card.is-person .cast-tile {
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.02em;
+  color: var(--color-ink);
+  background: var(--color-card);
+  border: 1.5px solid rgba(20, 24, 29, 0.55);
+}
+
+.cast-card.is-org .cast-tile {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-brass);
+  background: var(--color-parchment-mid);
+  border: 1.5px solid var(--color-brass);
+}
+
+.cast-card-id { flex: 1; min-width: 0; }
+
+.cast-name {
+  display: block;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
+  line-height: var(--leading-tight);
+  color: var(--color-ink);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.cast-name:hover { color: var(--color-stamp); }
+
+.cast-kind {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cast-stats {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.08em;
+  color: var(--color-neutral-500);
+}
+
+/* ── Presence rail — the entity's span drawn on the matter's shared time
+   scale. The track is the full record; the ink segment is this entity's
+   first-seen → last-seen. Org cards draw their segment in brass. ── */
+
+.cast-rail-wrap { cursor: help; }
+
+.cast-rail {
+  position: relative;
+  height: 3px;
+  background: rgba(20, 24, 29, 0.1);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.cast-rail-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--color-ink);
+  border-radius: 1px;
+}
+
+.cast-card.is-org .cast-rail-seg { background: var(--color-brass); }
+
+.cast-rail-dates {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-400);
+}
+
+/* ── Top connections on principal cards ── */
+
+.cast-conns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.cast-conn-rel {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+  color: var(--color-neutral-400);
+  text-transform: uppercase;
+}
+
+.cast-conn-skel { width: 55%; margin-top: 2px; }
+
+/* ── Supporting cast rows ── */
+
+.cast-supporting {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  gap: 2px var(--space-4);
+}
+
+.cast-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 5px var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cast-row:hover { background: var(--color-card); box-shadow: var(--shadow-xs); }
+
+.cast-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.cast-row-name {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cast-row-role {
+  flex: none;
+  max-width: 18ch;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cast-row-stats {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.cast-row-span {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-400);
+  white-space: nowrap;
+}
+
+/* ── The index — one-off names, dense but pleasant ── */
+
+.cast-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1px var(--space-4);
+}
+
+.cast-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cast-line:hover { background: var(--color-card); }
+
+.cast-line-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--color-neutral-700);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cast-line-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-400);
+}
+
+/* ── Possible-duplicate marks: marker yellow = "the AI marked this".
+   Chip form on cards, square tick on rows. Both jump to the docket. ── */
+
+.cast-dup {
+  align-self: flex-start;
+  border: 0;
+  background: var(--color-marker);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.cast-dup:hover { background: var(--color-marker-deep); }
+
+.cast-dup-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 0;
+  padding: 0;
+  border-radius: 1px;
+  background: var(--color-marker-deep);
+  cursor: pointer;
+}
+
+/* ── Curation verbs — quiet until hover, exactly the chronology's idiom ── */
+
+.cast-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.cast-card:hover .cast-acts,
+.cast-card:focus-within .cast-acts,
+.cast-row:hover .cast-acts,
+.cast-row:focus-within .cast-acts,
+.cast-line:hover .cast-acts,
+.cast-line:focus-within .cast-acts { opacity: 1; }
+
+@media (hover: none) {
+  .cast-acts { opacity: 1; }
+}
+
+.cast-act {
+  border: 0;
+  background: transparent;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cast-act:hover { background: var(--color-brand-100); color: var(--color-ink); }
+.cast-act.is-danger:hover { background: var(--color-danger-100); color: var(--color-danger-600); }
+
+.cast-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--color-danger-600);
+  white-space: nowrap;
+}
+
+.cast-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.cast-edit .input { flex: 1; min-width: 120px; }
+
+.cast-edit-error {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: var(--color-danger-600);
+}
+
+/* ── Review docket — the merge queue folded into the page: a marker-edged
+   ribbon (AI-marked work awaiting counsel) that expands into the full
+   review surface. ── */
+
+.docket {
+  margin-bottom: var(--space-2);
+  background: var(--color-ivory);
+  border: 1px solid rgba(20, 24, 29, 0.12);
+  border-left: 4px solid var(--color-marker);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.docket-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+}
+
+.docket-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.docket-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink);
+}
+
+.docket-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+
+.docket-chevron {
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+}
+
+.docket-note {
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+}
+
+.docket-bar > .btn { margin-left: auto; }
+
+.docket-msg {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+}
+
+.docket-msg.is-error { color: var(--color-danger-600); }
+
+.docket-body {
+  padding: 0 var(--space-3) var(--space-2);
+  border-top: 1px solid var(--color-neutral-100);
+}
+
+/* Bulk bar sticks to the top of the scroll port while the docket is in
+   view — sticky is bounded by the docket, so it can never shadow the cast. */
+.docket-bulk {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0;
+  background: var(--color-ivory);
+  border-bottom: 1px solid var(--color-neutral-100);
+}
+
+.docket-bulk-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  cursor: pointer;
+  user-select: none;
+}
+
+.docket-row {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-neutral-100);
+}
+
+.docket-row:first-of-type { border-top: 0; }
+
+.docket-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.docket-vs { color: var(--color-stamp); font-weight: var(--font-semibold); }
+
+.docket-row-acts {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.docket-rationale {
+  margin-top: 2px;
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--color-brass);
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--color-neutral-500);
+}
+
+/* ── Load states ── */
+
+.cast-sentinel { height: 1px; }
+
+.cast-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) 0;
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-neutral-400);
+}
+
+.cast-status.is-error { color: var(--color-danger-600); text-transform: none; letter-spacing: 0; }
+
+.cast-end {
+  padding: var(--space-6) 0 0;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: var(--text-base);
+  font-style: italic;
+  color: var(--color-neutral-400);
+}
+
+/* Skeleton cast while the first page loads: redacted lines, tiered like the
+   page they stand in for. */
+.cast-skel { display: grid; gap: var(--space-2); max-width: 560px; }
+
+/* ── Focus + motion floor ── */
+
+.cast-seg-btn:focus-visible,
+.cast-search-clear:focus-visible,
+.cast-name:focus-visible,
+.cast-act:focus-visible,
+.cast-dup:focus-visible,
+.cast-dup-dot:focus-visible,
+.docket-toggle:focus-visible {
+  outline: 2px solid var(--color-stamp);
+  outline-offset: 2px;
+}
+
+.cast-card:focus-visible,
+.cast-row:focus-visible,
+.cast-line:focus-visible {
+  outline: 2px solid var(--color-stamp);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cast-card,
+  .cast-acts,
+  .cast-seg-btn { transition: none; }
+}
+
+/* ── Narrow screens ── */
+
+@media (max-width: 900px) {
+  .cast-principals { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .cast-supporting { grid-template-columns: minmax(0, 1fr); }
+  .cast-row-span { display: none; }
+}
+
+@media (max-width: 720px) {
+  .cast-track { padding: var(--space-3) var(--space-3) var(--space-8); }
+  .cast-title { font-size: var(--text-2xl); }
+  .cast-search { max-width: none; }
+  .cast-row-role { display: none; }
+}

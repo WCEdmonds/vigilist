@@ -44,6 +44,11 @@ interface Props {
   onClose: () => void;
   onOpenEntity: (entityId: string) => void;
   onOpenDocument: (docId: string, entityId: string) => void;
+  /** Success hooks so a hosting list can update its rows in place —
+   * without them a rename/delete here leaves the list stale (ghost rows
+   * that 404 on click, old names until a filter changes). */
+  onRenamed?: (entityId: string, canonicalName: string, aliases: string[]) => void;
+  onDeleted?: (entityId: string) => void;
 }
 
 /** Mention snippet with the entity's surface text marker-highlighted. */
@@ -59,7 +64,7 @@ function Snippet({ text, name }: { text: string; name: string }) {
   );
 }
 
-export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDocument }: Props) {
+export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDocument, onRenamed, onDeleted }: Props) {
   const [profile, setProfile] = useState<{ id: string; value: EntityProfile } | null>(null);
   const [mentions, setMentions] = useState<{ id: string; value: EntityMentionsPage } | null>(null);
   const [connections, setConnections] = useState<{ id: string; value: EntityConnections } | null>(null);
@@ -147,6 +152,7 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
           ? { id: targetId, value: { ...prev.value, canonical_name: result.canonical_name, aliases: result.aliases } }
           : prev));
         setEditingFor(null);
+        onRenamed?.(targetId, result.canonical_name, result.aliases);
         showToast('Entity renamed.', 'success');
       })
       .catch(e => {
@@ -176,6 +182,7 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
     deleteEntity(targetId)
       .then(() => {
         if (entityIdRef.current !== targetId) return; // navigated away — do not close the panel over a different, live entity
+        onDeleted?.(targetId);
         showToast('Entity deleted.', 'success');
         onClose(); // parent clears openEntityId, which unmounts this panel
       })

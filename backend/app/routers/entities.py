@@ -314,15 +314,40 @@ async def list_production_entities(
         .offset((max(1, page) - 1) * per_page).limit(per_page)
     )).scalars().all()
 
+    ids = [e.id for e in rows]
+    doc_counts: dict = {}
+    spans: dict = {}
+    if ids:
+        # One grouped query per aggregate for the whole page (the old shape ran
+        # a doc-count query per row — 100 queries per page at the cap).
+        doc_counts = dict((await db.execute(
+            select(EntityMention.entity_id,
+                   func.count(func.distinct(EntityMention.document_id)))
+            .where(EntityMention.entity_id.in_(ids))
+            .group_by(EntityMention.entity_id)
+        )).all())
+        # first/last dated event the entity participates in — the cast page
+        # draws this as the entity's span on the chronology's time scale.
+        spans = {row[0]: (row[1], row[2]) for row in (await db.execute(
+            select(EventParticipant.entity_id,
+                   func.min(OntologyEvent.event_date),
+                   func.max(OntologyEvent.event_date))
+            .join(OntologyEvent, EventParticipant.event_id == OntologyEvent.id)
+            .where(EventParticipant.entity_id.in_(ids),
+                   OntologyEvent.event_date.is_not(None))
+            .group_by(EventParticipant.entity_id)
+        )).all()}
+
     out = []
     for e in rows:
-        doc_count = (await db.execute(
-            select(func.count(func.distinct(EntityMention.document_id)))
-            .where(EntityMention.entity_id == e.id)
-        )).scalar() or 0
+        first_seen, last_seen = spans.get(e.id, (None, None))
+        role = (e.attributes or {}).get("role") if isinstance(e.attributes, dict) else None
         out.append(EntityListItemOut(id=e.id, entity_type=e.entity_type,
                                      canonical_name=e.canonical_name,
-                                     mention_count=e.mention_count, document_count=doc_count))
+                                     mention_count=e.mention_count,
+                                     document_count=doc_counts.get(e.id, 0),
+                                     first_seen=first_seen, last_seen=last_seen,
+                                     role=role if isinstance(role, str) and role.strip() else None))
     return EntityListPageOut(entities=out, total=total)
 
 
