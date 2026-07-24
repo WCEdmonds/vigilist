@@ -71,6 +71,14 @@ def is_typo_variant(a_norm: str, b_norm: str, min_token_len: int = 4) -> bool:
     if not a_norm or not b_norm or a_norm == b_norm:
         return False
     ta, tb = a_norm.split(), b_norm.split()
+    if len(ta) < 2:
+        # A single-token name has no anchoring token — the entire name IS
+        # the "differing token" below, so a single-character indel there
+        # (Rogers/Roger, Lyles/Lyle, Michele/Michelle, Grant/Grants) is just
+        # as likely to be a different identity as a typo. Require at least
+        # one other token to agree before trusting an indel as safe;
+        # single-token pairs fall through to tier-2 suggest instead.
+        return False
     if len(ta) != len(tb):
         return False
     diffs = [(x, y) for x, y in zip(ta, tb) if x != y]

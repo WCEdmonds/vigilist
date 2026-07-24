@@ -7,7 +7,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
+from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.models import (
     Document, Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
     EntityRelationship, EventParticipant, OntologyEvent, User,
@@ -362,15 +362,17 @@ async def auto_resolve_typo_suggestions(
     user: User = Depends(get_current_user),
 ):
     """Retroactive cleanup: auto-merge pending suggestions whose pair is a
-    safe typo variant (see is_typo_variant). Manager+ only. Bad pairs
-    (missing entity, cross-type, merge_entities ValueError) are skipped, not
-    raised — one broken suggestion must not block the rest of the batch."""
+    safe typo variant (see is_typo_variant). Same write-access gate as
+    accept/reject/manual-merge (_require_writer) — this is not a more
+    dangerous action than a manual merge, so it should not require a higher
+    role; a reviewer who can merge by hand should not 403 on this button.
+    Bad pairs (missing entity, cross-type, merge_entities ValueError) are
+    skipped, not raised — one broken suggestion must not block the rest of
+    the batch."""
     accessible = await get_accessible_production_ids(db, user)
     if production_id not in accessible:
         raise HTTPException(status_code=404, detail="Production not found")
-    role = await get_user_role_for_production(db, user, production_id)
-    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
-        raise HTTPException(status_code=403, detail="Manager or admin role required")
+    await _require_writer(db, user, production_id)
 
     rows = (await db.execute(
         select(EntityMergeSuggestion)
@@ -381,6 +383,12 @@ async def auto_resolve_typo_suggestions(
     merged = 0
     consumed: set = set()  # entity ids already merged away (deleted) this run
     for sugg in rows:
+        # `consumed` guards this loop against re-targeting an entity this run
+        # already deleted. It is belt-and-braces: merge_entities' own cleanup
+        # pass (below) also marks any other pending suggestion touching the
+        # loser as "rejected" as soon as that merge lands, so an overlapping
+        # suggestion (e.g. B~C when A~B just consumed B) disappears from the
+        # queue either way — just skipped here vs. rejected there.
         if sugg.entity_a_id in consumed or sugg.entity_b_id in consumed:
             continue
         a = await db.get(Entity, sugg.entity_a_id)

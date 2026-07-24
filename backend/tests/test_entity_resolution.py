@@ -154,3 +154,25 @@ def test_match_entity_typo_variant_never_crosses_type():
     kind, *_ = match_entity(
         {"name": "Lynell Lyles", "type": "person", "surface_forms": [], "emails": []}, [e])
     assert kind == "create"
+
+
+# --- C1: single-token names have no anchoring token — never a safe typo -----
+
+def test_typo_variant_rejects_single_token_names():
+    # A one-token name has no second, identical token anchoring the identity;
+    # the whole name is the "differing token", so a single-character indel
+    # is just as likely to be a different person as a spelling variant.
+    assert is_typo_variant("rogers", "roger") is False
+    assert is_typo_variant("lyles", "lyle") is False
+    assert is_typo_variant("michele", "michelle") is False
+    assert is_typo_variant("grant", "grants") is False
+
+
+def test_match_entity_does_not_attach_single_token_honorific_stripped_name():
+    # "Mr. Rogers" normalizes to "rogers" (honorific stripped) and must NOT
+    # silently auto-attach to an existing, different person "Roger" just
+    # because they're a single-character indel apart.
+    e = E("Roger")
+    kind, *_ = match_entity(
+        {"name": "Mr. Rogers", "type": "person", "surface_forms": [], "emails": []}, [e])
+    assert kind != "attach"

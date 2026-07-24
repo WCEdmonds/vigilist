@@ -84,6 +84,27 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
   };
 
   const keeperId = (s: MergeSuggestion): string => winners[s.id] ?? defaultKeeperId(s);
+  const otherId = (s: MergeSuggestion): string => {
+    const keeper = keeperId(s);
+    return s.entity_a.id === keeper ? s.entity_b.id : s.entity_a.id;
+  };
+
+  // Single-row "Same — merge": routes through the same mergeEntities(winner,
+  // loser) path bulk merge uses, so the keeper radio choice is honored —
+  // acceptMergeSuggestion instead picks the winner by mention count and
+  // silently discards it.
+  const mergeSuggestion = async (s: MergeSuggestion) => {
+    setBusy(s.id);
+    setResolveError(null);
+    try {
+      await mergeEntities(keeperId(s), otherId(s));
+      refresh();
+    } catch (e) {
+      setResolveError(errText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const setKeeper = (id: number, entityId: string) => {
     setWinners(prev => ({ ...prev, [id]: entityId }));
@@ -111,14 +132,21 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     setBulkBusy(true);
     setResolveError(null);
     try {
-      const results = await Promise.allSettled(selectedRows.map(s => {
-        const winnerId = keeperId(s);
-        const loserId = s.entity_a.id === winnerId ? s.entity_b.id : s.entity_a.id;
-        return mergeEntities(winnerId, loserId);
-      }));
-      const failures = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+      // Sequential, not parallel: overlapping pairs (A~B and B~C sharing B)
+      // can both be selected via select-all. Running them concurrently lets
+      // separate transactions interleave and produce two EntityMerge rows
+      // that snapshot the same loser, corrupting undo. One at a time keeps
+      // each merge's re-point + snapshot atomic relative to the next.
+      const failures: string[] = [];
+      for (const s of selectedRows) {
+        try {
+          await mergeEntities(keeperId(s), otherId(s));
+        } catch (e) {
+          failures.push(errText(e));
+        }
+      }
       if (failures.length > 0) {
-        setResolveError(`${failures.length} of ${selectedRows.length} merges failed: ${failures.map(f => errText(f.reason)).join('; ')}`);
+        setResolveError(`${failures.length} of ${selectedRows.length} merges failed: ${failures.join('; ')}`);
       }
       setSelected(new Set());
       refresh();
@@ -291,7 +319,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
                   </span>
                   <span style={{ opacity: 0.6, fontSize: 'var(--text-xs)' }}>{s.rationale}</span>
                   <span style={{ marginLeft: 'auto' }}>
-                    <button className="btn btn-xs" disabled={rowBusy} onClick={() => resolve(s.id, true)}>Same — merge</button>
+                    <button className="btn btn-xs" disabled={rowBusy} onClick={() => mergeSuggestion(s)}>Same — merge</button>
                     <button className="btn btn-ghost btn-xs" disabled={rowBusy} onClick={() => resolve(s.id, false)}>Different</button>
                   </span>
                 </div>

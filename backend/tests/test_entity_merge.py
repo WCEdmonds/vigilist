@@ -439,7 +439,22 @@ def test_auto_resolve_typos_skips_suggestion_sharing_consumed_entity(monkeypatch
     sugg_bc = FakeSuggestion(2, 1, b.id, c.id)
     db = FakeSession(
         get_objects={("Entity", a.id): a, ("Entity", b.id): b, ("Entity", c.id): c},
-        responders=[(_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[sugg_ab, sugg_bc]))] + _merge_internals_responders(),
+        responders=[
+            (_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[sugg_ab, sugg_bc])),
+            (_WINNER_MENTION_KEYS_SQL, FakeResult(rows=[])),
+            ("entity_mentions", FakeResult(items=[])),
+            (_WINNER_EDGE_KEYS_SQL, FakeResult(rows=[])),
+            ("entity_relationships", FakeResult(items=[])),
+            (_WINNER_EVENT_IDS_SQL, FakeResult(rows=[])),
+            ("event_participants", FakeResult(items=[])),
+            # merge_entities' own suggestions-touching-loser query, run
+            # during the A~B merge (loser=b): a real DB would return sugg_bc
+            # here since it's still pending and touches b. Simulate that
+            # (instead of _merge_internals_responders()' unconditional
+            # empty result) so this test's B~C outcome reflects what
+            # production actually does, not a fake-harness artifact.
+            ("entity_merge_suggestions", FakeResult(items=[sugg_bc])),
+        ],
     )
 
     calls = []
@@ -454,12 +469,20 @@ def test_auto_resolve_typos_skips_suggestion_sharing_consumed_entity(monkeypatch
     out = asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
 
     assert out == {"merged": 1}
-    # Only the A~B pair was merged; B~C was skipped once B was consumed —
-    # no second merge_entities call ever targeted the already-deleted B.
+    # Only the A~B pair was ever passed to merge_entities — the endpoint's
+    # own `consumed` guard skips B~C before a second merge_entities call
+    # could target the already-deleted B.
     assert calls == [(a.id, b.id)]
     assert b in db.deleted
     assert c not in db.deleted
-    assert sugg_bc.status == "pending"  # never touched
+    # merge_entities' own cleanup pass (which resolves any other pending
+    # suggestion touching the loser) fires during the A~B merge and marks
+    # B~C "rejected" — it does NOT stay pending in the queue. (Asserting
+    # "pending" here previously was an artifact of a fake responder that
+    # unconditionally returned no rows for this query; real production
+    # behavior resolves it as rejected, per merge_entities' internal
+    # suggestions-touching-loser pass.)
+    assert sugg_bc.status == "rejected"
 
 
 def test_auto_resolve_typos_404_out_of_scope(monkeypatch):
@@ -470,9 +493,20 @@ def test_auto_resolve_typos_404_out_of_scope(monkeypatch):
     assert exc.value.status_code == 404
 
 
-def test_auto_resolve_typos_403_below_manager(monkeypatch):
-    _patch_scope(monkeypatch, role="reviewer")
+def test_auto_resolve_typos_403_for_readonly(monkeypatch):
+    # I2: this endpoint now uses the same _require_writer gate as
+    # accept/reject/manual-merge (only readonly is blocked), not a
+    # manager-only rank check — a reviewer who can merge by hand must not
+    # 403 on the "Auto-merge obvious typos" button.
+    _patch_scope(monkeypatch, role="readonly")
     db = FakeSession()
     with pytest.raises(HTTPException) as exc:
         asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+def test_auto_resolve_typos_allows_reviewer_role(monkeypatch):
+    _patch_scope(monkeypatch, role="reviewer")
+    db = FakeSession(responders=[(_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[]))])
+    out = asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+    assert out == {"merged": 0}
