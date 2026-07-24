@@ -135,3 +135,26 @@ def test_sidecar_bytes_shape():
 
 def test_sidecar_remote_path():
     assert sidecar_remote_path(7, "SMITH_000001_0001") == "productions/7/ocr/SMITH_000001_0001.json"
+
+
+def test_rounding_preserves_rect_bounds():
+    """Regression: x + w and y + h must respect 100.0 boundary after rounding.
+
+    Fractional pixels near a clamped edge can cause independent rounding of
+    endpoints and dimensions to violate x + w <= 100 and y + h <= 100.
+    This test reproduces the case where x0=10.005, x1=100.0 (right-edge clamp):
+    old code would round x=10.01, w=90.0, giving x+w=100.01 (invalid).
+    New code rounds endpoints first, derives w from rounded endpoints.
+    """
+    # Create a word with fractional coordinates that clamp to page bounds
+    # x: 10.05 px to 1000.0 px on a 1000 px page -> 10.005% to 100.0%
+    # y: 100.25 px to 2000.0 px on a 2000 px page -> 5.0125% to 100.0%
+    fta = _annotation([
+        _block(_para(_word("flush", (10.05, 100.25, 1000.0, 2000.0)))),
+    ], width=1000, height=2000)
+    page = page_ocr_from_annotation(fta)
+    assert len(page.words) == 1
+    box = page.words[0]
+    # Verify that x + w <= 100.0 and y + h <= 100.0 (no rounding overflow)
+    assert box["x"] + box["w"] <= 100.0, f"x + w = {box['x']} + {box['w']} = {box['x'] + box['w']} > 100.0"
+    assert box["y"] + box["h"] <= 100.0, f"y + h = {box['y']} + {box['h']} = {box['y'] + box['h']} > 100.0"

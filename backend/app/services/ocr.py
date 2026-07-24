@@ -65,14 +65,27 @@ def _word_box_pct(word, width: int, height: int) -> dict | None:
     x1 = max(0.0, min(100.0, max(xs) / width * 100))
     y0 = max(0.0, min(100.0, min(ys) / height * 100))
     y1 = max(0.0, min(100.0, max(ys) / height * 100))
-    if x1 <= x0 or y1 <= y0:
+
+    # Round endpoints first, then compute width/height from rounded endpoints
+    # to ensure x + w <= 100 and y + h <= 100 (no independent rounding).
+    x_rounded = round(x0, 2)
+    x1_rounded = round(x1, 2)
+    y_rounded = round(y0, 2)
+    y1_rounded = round(y1, 2)
+
+    w = round(x1_rounded - x_rounded, 2)
+    h = round(y1_rounded - y_rounded, 2)
+
+    # Drop degenerate boxes after rounding (collapse to zero width/height).
+    if w <= 0 or h <= 0:
         return None
+
     return {
         "t": "".join(s.text for s in word.symbols),
-        "x": round(x0, 2),
-        "y": round(y0, 2),
-        "w": round(x1 - x0, 2),
-        "h": round(y1 - y0, 2),
+        "x": x_rounded,
+        "y": y_rounded,
+        "w": w,
+        "h": h,
         "c": round((getattr(word, "confidence", 0.0) or 0.0), 2),
     }
 
