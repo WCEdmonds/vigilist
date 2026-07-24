@@ -336,3 +336,103 @@ def test_manual_merge_403_for_readonly(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(er.manual_merge(body=body, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+# --- retroactive auto-resolve-typos endpoint --------------------------------
+
+# Distinguishing substring for the endpoint's own pending-suggestions query
+# (production-scoped), vs. merge_entities' internal per-loser query (which
+# filters on entity_a_id/entity_b_id instead — see _WINNER_* substrings and
+# "entity_merge_suggestions" generic responder used elsewhere in this file).
+_PENDING_BY_PRODUCTION_SQL = "WHERE entity_merge_suggestions.production_id"
+
+
+def _typo_pair(a_mentions=5, b_mentions=2):
+    a = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="Lynelle Lyles", aliases=[], attributes={}, mention_count=a_mentions)
+    b = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="Lynell Lyles", aliases=[], attributes={}, mention_count=b_mentions)
+    return a, b
+
+
+def _substitution_pair():
+    a = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="John Smith", aliases=[], attributes={}, mention_count=5)
+    b = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+              canonical_name="Joan Smith", aliases=[], attributes={}, mention_count=2)
+    return a, b
+
+
+def _merge_internals_responders():
+    """Empty collision/collection responders so merge_entities' internal
+    queries (mentions/edges/participants/suggestions-touching-loser) all
+    resolve to empty results, isolating the test on the typo-detection and
+    top-level pending-suggestions query behavior."""
+    return [
+        (_WINNER_MENTION_KEYS_SQL, FakeResult(rows=[])),
+        ("entity_mentions", FakeResult(items=[])),
+        (_WINNER_EDGE_KEYS_SQL, FakeResult(rows=[])),
+        ("entity_relationships", FakeResult(items=[])),
+        (_WINNER_EVENT_IDS_SQL, FakeResult(rows=[])),
+        ("event_participants", FakeResult(items=[])),
+        ("entity_merge_suggestions", FakeResult(items=[])),
+    ]
+
+
+def test_auto_resolve_typos_merges_typo_pair(monkeypatch):
+    _patch_scope(monkeypatch)
+    a, b = _typo_pair()
+    sugg = FakeSuggestion(1, 1, a.id, b.id)
+    db = FakeSession(
+        get_objects={("Entity", a.id): a, ("Entity", b.id): b},
+        responders=[(_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[sugg]))] + _merge_internals_responders(),
+    )
+    out = asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+    assert out == {"merged": 1}
+    # verify the pending-suggestions responder actually fired, not the
+    # default-empty fallthrough.
+    assert any(_PENDING_BY_PRODUCTION_SQL in sql for sql in db.executed)
+    assert b in db.deleted  # a has more mentions (5 > 2) -> a wins, b is folded in
+
+
+def test_auto_resolve_typos_leaves_substitution_pending(monkeypatch):
+    _patch_scope(monkeypatch)
+    a, b = _substitution_pair()
+    sugg = FakeSuggestion(1, 1, a.id, b.id)
+    db = FakeSession(
+        get_objects={("Entity", a.id): a, ("Entity", b.id): b},
+        responders=[(_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[sugg]))] + _merge_internals_responders(),
+    )
+    out = asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+    assert out == {"merged": 0}
+    assert a not in db.deleted and b not in db.deleted
+    assert sugg.status == "pending"
+
+
+def test_auto_resolve_typos_skips_missing_entity_without_raising(monkeypatch):
+    _patch_scope(monkeypatch)
+    a, _b = _typo_pair()
+    missing_id = uuid.uuid4()
+    sugg = FakeSuggestion(1, 1, a.id, missing_id)
+    db = FakeSession(
+        get_objects={("Entity", a.id): a},
+        responders=[(_PENDING_BY_PRODUCTION_SQL, FakeResult(items=[sugg]))] + _merge_internals_responders(),
+    )
+    out = asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+    assert out == {"merged": 0}
+
+
+def test_auto_resolve_typos_404_out_of_scope(monkeypatch):
+    _patch_scope(monkeypatch, accessible=(2,))
+    db = FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_auto_resolve_typos_403_below_manager(monkeypatch):
+    _patch_scope(monkeypatch, role="reviewer")
+    db = FakeSession()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.auto_resolve_typo_suggestions(production_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 403

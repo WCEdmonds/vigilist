@@ -1,7 +1,7 @@
 """Pure resolution-tier tests. Wrong merges mislead reviewers — every tier
 transition here is a behavioral contract, not an implementation detail."""
 
-from app.services.entity_resolution import match_entity, normalize_name
+from app.services.entity_resolution import is_typo_variant, match_entity, normalize_name
 
 
 class E:
@@ -94,3 +94,63 @@ def test_org_comma_form_attaches_to_noncomma_canonical():
     kind, ent = match_entity(
         {"name": "Acme Corp, Inc.", "type": "org", "surface_forms": [], "emails": []}, [e])
     assert (kind, ent) == ("attach", e)
+
+
+# --- is_typo_variant: safe single-indel auto-merge class --------------------
+
+def test_typo_variant_single_indel_attaches():
+    assert is_typo_variant("lynell lyles", "lynelle lyles") is True
+    assert is_typo_variant("lynelle lyles", "lynell lyles") is True
+
+
+def test_typo_variant_rejects_substitution_same_length():
+    # Joan/John and Andersen/Anderson are equal-length substitutions, not
+    # indels — these must stay queued for human review, not auto-merge.
+    assert is_typo_variant("joan smith", "john smith") is False
+    assert is_typo_variant("andersen law", "anderson law") is False
+
+
+def test_typo_variant_rejects_short_differing_token():
+    assert is_typo_variant("jon doe", "jan doe") is False
+
+
+def test_typo_variant_rejects_identical_or_empty():
+    assert is_typo_variant("jorge rivera", "jorge rivera") is False
+    assert is_typo_variant("", "jorge rivera") is False
+    assert is_typo_variant("jorge rivera", "") is False
+
+
+def test_typo_variant_rejects_multiple_differing_tokens():
+    assert is_typo_variant("jonn smithh", "john smith") is False
+
+
+def test_typo_variant_rejects_different_token_counts():
+    assert is_typo_variant("lynell lyles jr", "lynelle lyles") is False
+
+
+def test_match_entity_attaches_on_typo_variant():
+    e = E("Lynelle Lyles")
+    kind, ent = match_entity(
+        {"name": "Lynell Lyles", "type": "person", "surface_forms": [], "emails": []}, [e])
+    assert (kind, ent) == ("attach", e)
+
+
+def test_match_entity_does_not_attach_on_substitution():
+    e = E("John Smith")
+    kind, *_ = match_entity(
+        {"name": "Joan Smith", "type": "person", "surface_forms": [], "emails": []}, [e])
+    assert kind != "attach"
+
+
+def test_match_entity_does_not_attach_on_org_substitution():
+    e = E("Anderson Law", etype="org")
+    kind, *_ = match_entity(
+        {"name": "Andersen Law", "type": "org", "surface_forms": [], "emails": []}, [e])
+    assert kind != "attach"
+
+
+def test_match_entity_typo_variant_never_crosses_type():
+    e = E("Lynelle Lyles", etype="org")
+    kind, *_ = match_entity(
+        {"name": "Lynell Lyles", "type": "person", "surface_forms": [], "emails": []}, [e])
+    assert kind == "create"
