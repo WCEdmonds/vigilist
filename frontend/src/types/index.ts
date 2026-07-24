@@ -519,6 +519,12 @@ export interface TimelinePage {
   undated_count: number;
 }
 
+export interface TimelineReviewStatus {
+  state: 'running' | 'done' | 'failed' | null;
+  error?: string | null;
+  summary: { merged?: number; deleted?: number; edited?: number; skipped?: number } | null;
+}
+
 export interface GraphNode {
   id: string;
   canonical_name: string;

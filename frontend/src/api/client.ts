@@ -4,7 +4,7 @@ import type {
   DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
-  SearchResponse, SearchResult, Tag, TimelinePage,
+  SearchResponse, SearchResult, Tag, TimelinePage, TimelineReviewStatus,
 } from '../types';
 
 /**
@@ -877,6 +877,12 @@ export const autoResolveTypos = (productionId: number) =>
 
 export const triggerEntityExtraction = (productionId: number, rebuild = false) =>
   request<{ status: string }>(`/api/productions/${productionId}/extract-entities${rebuild ? '?rebuild=true' : ''}`, { method: 'POST' });
+
+export const triggerTimelineReview = (productionId: number) =>
+  request<{ status: string }>(`/api/productions/${productionId}/timeline-review`, { method: 'POST' });
+
+export const getTimelineReviewStatus = (productionId: number) =>
+  request<TimelineReviewStatus>(`/api/productions/${productionId}/timeline-review/status`);
 
 export function getTimeline(
   productionId: number, entityId?: string, eventType?: string,
