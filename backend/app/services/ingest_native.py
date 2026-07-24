@@ -479,9 +479,7 @@ def _build_zip_pdf_document(
     """Render a PDF found inside a zip through the SAME page-render path as a
     top-level PDF upload (``process_pdf_record``), just fed from in-memory
     bytes instead of a storage download. Never raises."""
-    from app.services.ingest_pdf import iter_pdf_pages, looks_like_bates_stub
-    from app.services.ocr import sidecar_bytes, sidecar_remote_path
-    from app.services.storage import upload_bytes
+    from app.services.ingest_pdf import iter_pdf_pages, looks_like_bates_stub, upload_page_assets
 
     image_paths: list[str] = []
     ocr_paths: list[str] = []
@@ -492,29 +490,10 @@ def _build_zip_pdf_document(
             page_count = page_num
             if page_ocr is not None and page_ocr.text:
                 text_parts.append(page_ocr.text)
-            page_stem = f"{control_number.replace(' ', '_')}_{page_num:04d}"
-            remote = f"productions/{production_id}/converted/{page_stem}.jpg"
-            try:
-                upload_bytes(jpeg, remote, content_type="image/jpeg")
-                image_paths.append(remote)
-            except Exception as e:
-                errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
-                image_paths.append("")
-            if page_ocr is None:
-                ocr_paths.append("")  # OCR failed: distinguishable from words=[]
-            else:
-                try:
-                    sidecar_remote = sidecar_remote_path(production_id, page_stem)
-                    upload_bytes(
-                        sidecar_bytes(page_ocr), sidecar_remote,
-                        content_type="application/json",
-                    )
-                    ocr_paths.append(sidecar_remote)
-                except Exception as e:
-                    errors.append(
-                        f"{control_number}: sidecar upload failed page {page_num}: {e}"
-                    )
-                    ocr_paths.append("")
+            upload_page_assets(
+                production_id, control_number, page_num, jpeg, page_ocr,
+                image_paths, ocr_paths, errors
+            )
     except Exception as e:
         errors.append(f"{control_number}: failed to render {name}: {e}")
         return None

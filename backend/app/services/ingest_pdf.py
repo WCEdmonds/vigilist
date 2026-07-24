@@ -160,6 +160,57 @@ def _ocr_jpeg(jpeg_bytes: bytes) -> PageOcr | None:
         return None
 
 
+def upload_page_assets(
+    production_id: int,
+    control_number: str,
+    page_num: int,
+    jpeg: bytes,
+    page_ocr: PageOcr | None,
+    image_paths: list[str],
+    ocr_paths: list[str],
+    errors: list[str],
+) -> None:
+    """Upload page JPEG and (if present) sidecar, appending paths or errors.
+
+    Computes page_stem from control_number and page_num. Uploads JPEG with
+    content_type="image/jpeg"; on success appends remote path to image_paths,
+    on failure appends "" and logs error. If page_ocr is None (OCR failed),
+    appends "" to ocr_paths; otherwise uploads sidecar JSON with
+    content_type="application/json". On sidecar success appends remote path,
+    on failure appends "" and logs error. Semantics preserve the invariant
+    that image_paths and ocr_paths are index-aligned and distinguishable
+    (empty string for failure vs. empty words list in a successful PageOcr).
+    """
+    page_stem = f"{control_number.replace(' ', '_')}_{page_num:04d}"
+
+    # Upload JPEG
+    jpeg_remote = f"productions/{production_id}/converted/{page_stem}.jpg"
+    try:
+        upload_bytes(jpeg, jpeg_remote, content_type="image/jpeg")
+        image_paths.append(jpeg_remote)
+    except Exception as e:
+        errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
+        image_paths.append("")
+
+    # Upload sidecar (or mark failure)
+    if page_ocr is None:
+        ocr_paths.append("")  # OCR failed: distinguishable from words=[]
+    else:
+        try:
+            sidecar_remote = sidecar_remote_path(production_id, page_stem)
+            upload_bytes(
+                sidecar_bytes(page_ocr),
+                sidecar_remote,
+                content_type="application/json",
+            )
+            ocr_paths.append(sidecar_remote)
+        except Exception as e:
+            errors.append(
+                f"{control_number}: sidecar upload failed page {page_num}: {e}"
+            )
+            ocr_paths.append("")
+
+
 def process_pdf_record(
     production_id: int,
     item: dict,
@@ -196,29 +247,10 @@ def process_pdf_record(
             page_count = page_num
             if page_ocr is not None and page_ocr.text:
                 text_parts.append(page_ocr.text)
-            page_stem = f"{control_number.replace(' ', '_')}_{page_num:04d}"
-            remote = f"productions/{production_id}/converted/{page_stem}.jpg"
-            try:
-                upload_bytes(jpeg, remote, content_type="image/jpeg")
-                image_paths.append(remote)
-            except Exception as e:
-                errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
-                image_paths.append("")
-            if page_ocr is None:
-                ocr_paths.append("")  # OCR failed: distinguishable from words=[]
-            else:
-                try:
-                    sidecar_remote = sidecar_remote_path(production_id, page_stem)
-                    upload_bytes(
-                        sidecar_bytes(page_ocr), sidecar_remote,
-                        content_type="application/json",
-                    )
-                    ocr_paths.append(sidecar_remote)
-                except Exception as e:
-                    errors.append(
-                        f"{control_number}: sidecar upload failed page {page_num}: {e}"
-                    )
-                    ocr_paths.append("")
+            upload_page_assets(
+                production_id, control_number, page_num, jpeg, page_ocr,
+                image_paths, ocr_paths, errors
+            )
     except Exception as e:
         errors.append(f"{control_number}: failed to render {relative_path}: {e}")
         return None

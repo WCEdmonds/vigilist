@@ -7,6 +7,7 @@ import zipfile
 import fitz  # PyMuPDF
 
 from app.services import ingest_native as ingest_native_mod
+from app.services import ingest_pdf as pdf_mod
 from app.services import storage as storage_mod
 from app.services.ingest_native import build_zip_documents
 
@@ -303,8 +304,9 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
     from app.services.ocr import PageOcr
 
     uploaded: list[str] = []
+    # Mock upload_bytes in pdf_mod since upload_page_assets uses it from there
     monkeypatch.setattr(
-        storage_mod,
+        pdf_mod,
         "upload_bytes",
         lambda data, remote, content_type=None: uploaded.append(remote) or remote,
     )

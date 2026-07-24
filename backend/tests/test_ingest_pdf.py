@@ -236,6 +236,42 @@ def test_process_pdf_record_ocr_failure_marks_empty_ocr_path(monkeypatch):
     assert doc.ocr_paths == [""]
 
 
+def test_process_pdf_record_sidecar_upload_failure(monkeypatch):
+    """Sidecar upload fails (e.g., perms): page still builds, ocr_paths=[''], error logged."""
+    item = {
+        "storage_path": "productions/7/raw/A/first.pdf",
+        "relative_path": "A/first.pdf",
+        "filename": "first.pdf",
+    }
+    monkeypatch.setattr(pdf_mod, "get_download_bytes", lambda path: b"%PDF-fake")
+    monkeypatch.setattr(
+        pdf_mod,
+        "iter_pdf_pages",
+        lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: iter(
+            [
+                (1, b"\xff\xd8jpeg1", PageOcr(text="extracted text", words=[], width=100, height=200)),
+            ]
+        ),
+    )
+    uploaded = []
+    def fake_upload(data, remote, content_type=None):
+        uploaded.append(remote)
+        if remote.endswith(".json"):
+            raise IOError("sidecar upload denied")
+        return remote
+    monkeypatch.setattr(pdf_mod, "upload_bytes", fake_upload)
+
+    errors: list[str] = []
+    doc = process_pdf_record(7, item, 0, "SMITH", errors)
+
+    assert doc is not None
+    assert doc.text_content == "extracted text"
+    assert doc.image_paths == ["productions/7/converted/SMITH_000001_0001.jpg"]
+    assert doc.ocr_paths == [""]
+    assert any("sidecar upload failed" in e for e in errors)
+    assert len(uploaded) == 2  # JPEG attempted, then sidecar attempted
+
+
 def test_inline_ingest_fails_job_when_no_sources_found(monkeypatch):
     """Regression: zero PDF sources must fail the job, not strand it.
 
