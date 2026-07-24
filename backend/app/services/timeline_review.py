@@ -141,3 +141,156 @@ def parse_review_response(raw: str) -> list[dict]:
     if not isinstance(verdicts, list):
         raise ReviewError("Review response missing 'verdicts' list")
     return [v for v in verdicts if isinstance(v, dict)]
+
+
+# ── Applying verdicts ──
+
+def _snapshot(ev) -> dict:
+    return {"event_type": ev.event_type, "description": ev.description,
+            "event_date": ev.event_date.isoformat() if ev.event_date else None,
+            "date_precision": ev.date_precision, "significance": ev.significance,
+            "date_source_text": ev.date_source_text,
+            "document_id": str(ev.document_id)}
+
+
+def _parse_iso_date(raw: str | None):
+    """Returns (ok, date|None)."""
+    if raw is None:
+        return True, None
+    try:
+        return True, date.fromisoformat(raw)
+    except ValueError:
+        return False, None
+
+
+async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) -> dict:
+    """Apply parsed verdicts. Per-verdict validation failures skip-and-count,
+    never abort; the caller owns the transaction."""
+    events = {e.id: e for e in (await db.execute(
+        select(OntologyEvent).where(OntologyEvent.production_id == production_id)
+    )).scalars().all()}
+
+    rows = (await db.execute(
+        select(AuditLog.resource_id).where(
+            AuditLog.production_id == production_id,
+            AuditLog.action == "event_edited"))).all()
+    human_edited = {int(r[0]) for r in rows if r[0] and str(r[0]).isdigit()}
+
+    part_rows = (await db.execute(
+        select(EventParticipant.event_id, EventParticipant.entity_id).where(
+            EventParticipant.event_id.in_(list(events.keys()) or [0])))).all()
+    parts_by_event: dict[int, set] = {}
+    for ev_id, ent_id in part_rows:
+        parts_by_event.setdefault(ev_id, set()).add(ent_id)
+
+    summary = {"merged": 0, "deleted": 0, "edited": 0, "skipped": 0,
+               "skip_reasons": []}
+
+    def skip(msg: str) -> None:
+        summary["skipped"] += 1
+        if len(summary["skip_reasons"]) < 50:
+            summary["skip_reasons"].append(msg)
+
+    def details_for(v: dict) -> dict:
+        return {"actor": "ai_timeline_review", "model": REVIEW_MODEL,
+                "reason": v.get("reason"), "confidence": v.get("confidence")}
+
+    for v in verdicts:
+        kind = v.get("kind")
+        conf = v.get("confidence")
+        if not isinstance(conf, (int, float)) or conf < REVIEW_MIN_CONFIDENCE:
+            skip(f"{kind}: confidence below threshold")
+            continue
+
+        if kind == "delete":
+            ev = events.get(v.get("event_id"))
+            if ev is None:
+                skip(f"delete: unknown event {v.get('event_id')}")
+                continue
+            if ev.id in human_edited:
+                skip(f"delete: event {ev.id} was human-edited")
+                continue
+            await log_action(db, actor, "event_deleted_by_review", "ontology_event",
+                            str(ev.id), production_id=production_id,
+                            details={**details_for(v), "snapshot": _snapshot(ev)})
+            await db.delete(ev)
+            events.pop(ev.id, None)
+            summary["deleted"] += 1
+
+        elif kind == "merge":
+            ids = v.get("event_ids") or []
+            keep_id = v.get("keep_id")
+            if len(ids) < 2 or keep_id not in ids:
+                skip(f"merge: bad group {ids} keep={keep_id}")
+                continue
+            if any(i not in events for i in ids):
+                skip(f"merge: unknown event in group {ids}")
+                continue
+            absorbed = [i for i in ids if i != keep_id]
+            if any(i in human_edited for i in absorbed):
+                skip(f"merge: group {ids} contains human-edited event")
+                continue
+            keeper = events[keep_id]
+            ok, new_date = _parse_iso_date(v.get("date"))
+            if not ok:
+                skip(f"merge: bad date {v.get('date')!r}")
+                continue
+            keeper_parts = parts_by_event.setdefault(keep_id, set())
+            for aid in absorbed:
+                for ent_id in parts_by_event.get(aid, set()):
+                    if ent_id not in keeper_parts:
+                        db.add(EventParticipant(event_id=keep_id, entity_id=ent_id))
+                        keeper_parts.add(ent_id)
+            # Keeper corrections — skipped when a human already edited it.
+            if keep_id not in human_edited:
+                if v.get("description"):
+                    keeper.description = v["description"]
+                if new_date is not None and v.get("precision"):
+                    keeper.event_date = new_date
+                    keeper.date_precision = v["precision"]
+            await log_action(db, actor, "event_merged_by_review", "ontology_event",
+                            str(keep_id), production_id=production_id,
+                            details={**details_for(v), "absorbed": absorbed})
+            for aid in absorbed:
+                ev = events.pop(aid)
+                await log_action(db, actor, "event_deleted_by_review", "ontology_event",
+                                str(aid), production_id=production_id,
+                                details={**details_for(v), "merged_into": keep_id,
+                                         "snapshot": _snapshot(ev)})
+                await db.delete(ev)
+            summary["merged"] += 1
+
+        elif kind == "edit":
+            ev = events.get(v.get("event_id"))
+            if ev is None:
+                skip(f"edit: unknown event {v.get('event_id')}")
+                continue
+            if ev.id in human_edited:
+                skip(f"edit: event {ev.id} was human-edited")
+                continue
+            ok, new_date = _parse_iso_date(v.get("date"))
+            if not ok:
+                skip(f"edit: bad date {v.get('date')!r}")
+                continue
+            new_type = v.get("event_type")
+            if new_type is not None and new_type not in EVENT_TYPES:
+                skip(f"edit: bad event_type {new_type!r}")
+                continue
+            before = _snapshot(ev)
+            if new_date is not None and v.get("precision"):
+                ev.event_date = new_date
+                ev.date_precision = v["precision"]
+            if new_type is not None:
+                ev.event_type = new_type
+            if v.get("description"):
+                ev.description = v["description"]
+            await log_action(db, actor, "event_edited_by_review", "ontology_event",
+                            str(ev.id), production_id=production_id,
+                            details={**details_for(v), "before": before,
+                                     "after": _snapshot(ev)})
+            summary["edited"] += 1
+
+        else:
+            skip(f"unknown verdict kind {kind!r}")
+
+    return summary
