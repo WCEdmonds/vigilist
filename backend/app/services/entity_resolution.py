@@ -1,8 +1,13 @@
 """Deterministic entity resolution tiers. No LLM in the loop.
 
-Tier 1 (attach): normalized-name equality, known alias, or shared email.
-Tier 2 (suggest): initial-pattern or high string similarity — creates a
-merge suggestion for a human; nothing merges silently.
+Tier 1 (attach): normalized-name equality, known alias, shared email, or the
+safe-typo class (single inserted/deleted character within one token of a
+multi-token name — see is_typo_variant). These attach without human review.
+Substitutions (Joan/John) and single-token names are NOT in tier 1; they
+fall through to tier 2.
+Tier 2 (suggest): initial-pattern, high string similarity, or token-aware
+fuzzy similarity — creates a merge suggestion for a human; nothing in this
+tier merges without review.
 Tier 3 (create): everything else.
 """
 
@@ -78,6 +83,51 @@ def _token_similarity(a: str, b: str) -> float:
     return (total / len(ta)) * (0.5 + 0.5 * coverage)
 
 
+def _is_single_indel(x: str, y: str) -> bool:
+    """True iff x and y differ by exactly one inserted/deleted character."""
+    if abs(len(x) - len(y)) != 1:
+        return False
+    longer, shorter = (x, y) if len(x) > len(y) else (y, x)
+    i = j = 0
+    skipped = False
+    while i < len(longer) and j < len(shorter):
+        if longer[i] == shorter[j]:
+            i += 1
+            j += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True
+            i += 1
+    return True
+
+
+def is_typo_variant(a_norm: str, b_norm: str, min_token_len: int = 4) -> bool:
+    """Safe auto-merge class: exactly one token differs, by a single indel,
+    and that token is long enough to be distinctive. Excludes substitutions
+    (Joan/John, Andersen/Anderson) which can be genuinely different identities."""
+    if not a_norm or not b_norm or a_norm == b_norm:
+        return False
+    ta, tb = a_norm.split(), b_norm.split()
+    if len(ta) < 2:
+        # A single-token name has no anchoring token — the entire name IS
+        # the "differing token" below, so a single-character indel there
+        # (Rogers/Roger, Lyles/Lyle, Michele/Michelle, Grant/Grants) is just
+        # as likely to be a different identity as a typo. Require at least
+        # one other token to agree before trusting an indel as safe;
+        # single-token pairs fall through to tier-2 suggest instead.
+        return False
+    if len(ta) != len(tb):
+        return False
+    diffs = [(x, y) for x, y in zip(ta, tb) if x != y]
+    if len(diffs) != 1:
+        return False
+    x, y = diffs[0]
+    if max(len(x), len(y)) < min_token_len:
+        return False
+    return _is_single_indel(x, y)
+
+
 def _initial_pattern(a: str, b: str) -> bool:
     """'j rivera' vs 'jorge rivera' — same last token, first tokens agree on initial."""
     ta, tb = a.split(), b.split()
@@ -120,6 +170,15 @@ def match_entity(candidate: dict, existing: list) -> tuple:
                 em.lower() for em in (e.attributes or {}).get("emails", []) if em and "@" in em
             }
             if cand_emails_valid & e_emails_valid:
+                return ("attach", e)
+
+    # Pass 4: safe-typo auto-attach — single inserted/deleted character within
+    # one token, rest of the name identical. Deliberately conservative:
+    # substitutions (Joan/John, Andersen/Anderson) are excluded and fall
+    # through to tier-2 suggest instead of auto-merging.
+    if cand_norm:
+        for e in same_type:
+            if is_typo_variant(cand_norm, normalize_name(e.canonical_name)):
                 return ("attach", e)
 
     best = None  # (score, entity, rationale)

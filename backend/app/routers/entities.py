@@ -26,6 +26,7 @@ from app.services.audit import log_action
 from app.services.entity_extraction import EVENT_TYPES, parse_event_date
 from app.services.entity_merge import merge_entities, undo_merge
 from app.services.entity_profile import generate_entity_overview, is_overview_stale
+from app.services.entity_resolution import is_typo_variant, normalize_name
 
 router = APIRouter(prefix="/api", tags=["entities"])
 
@@ -425,6 +426,65 @@ async def list_merge_suggestions(
             out.append(MergeSuggestionOut(id=s.id, score=s.score, rationale=s.rationale,
                                           status=s.status, entity_a=a, entity_b=b))
     return out
+
+
+@router.post("/productions/{production_id}/merge-suggestions/auto-resolve-typos")
+async def auto_resolve_typo_suggestions(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Retroactive cleanup: auto-merge pending suggestions whose pair is a
+    safe typo variant (see is_typo_variant). Same write-access gate as
+    accept/reject/manual-merge (_require_writer) — this is not a more
+    dangerous action than a manual merge, so it should not require a higher
+    role; a reviewer who can merge by hand should not 403 on this button.
+    Bad pairs (missing entity, cross-type, merge_entities ValueError) are
+    skipped, not raised — one broken suggestion must not block the rest of
+    the batch."""
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    await _require_writer(db, user, production_id)
+
+    rows = (await db.execute(
+        select(EntityMergeSuggestion)
+        .where(EntityMergeSuggestion.production_id == production_id,
+               EntityMergeSuggestion.status == "pending")
+    )).scalars().all()
+
+    merged = 0
+    consumed: set = set()  # entity ids already merged away (deleted) this run
+    for sugg in rows:
+        # `consumed` guards this loop against re-targeting an entity this run
+        # already deleted. It is belt-and-braces: merge_entities' own cleanup
+        # pass (below) also marks any other pending suggestion touching the
+        # loser as "rejected" as soon as that merge lands, so an overlapping
+        # suggestion (e.g. B~C when A~B just consumed B) disappears from the
+        # queue either way — just skipped here vs. rejected there.
+        if sugg.entity_a_id in consumed or sugg.entity_b_id in consumed:
+            continue
+        a = await db.get(Entity, sugg.entity_a_id)
+        b = await db.get(Entity, sugg.entity_b_id)
+        if a is None or b is None or a.entity_type != b.entity_type:
+            continue
+        if not is_typo_variant(normalize_name(a.canonical_name), normalize_name(b.canonical_name)):
+            continue
+        winner, loser = (a, b) if (a.mention_count or 0) >= (b.mention_count or 0) else (b, a)
+        try:
+            await merge_entities(db, winner, loser, user.id)
+        except ValueError:
+            continue
+        consumed.add(loser.id)
+        await db.flush()  # make the delete visible so a later db.get returns None too (belt + braces)
+        merged += 1
+
+    if merged:
+        await db.flush()
+        await log_action(db, user, "entity_merge_auto_resolved_typos", "production", str(production_id),
+                         production_id=production_id, details={"merged": merged})
+    await db.commit()
+    return {"merged": merged}
 
 
 @router.post("/merge-suggestions/{suggestion_id}/accept", response_model=MergeResultOut)
