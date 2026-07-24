@@ -40,6 +40,17 @@ def _retryable_errors() -> tuple[type[BaseException], ...]:
 
 _CLASSIFY_MAX_ATTEMPTS = 3
 
+# Two-pass cascade: SCREEN_MODEL reads every document; CONFIRM_MODEL re-reads
+# (and its answer wins) unless the screen pass returned a screen-out decision
+# at or above the confidence threshold. Projects with custom categories that
+# lack a screen-out decision escalate everything — the cascade only ever
+# saves cost, never lets the cheap model be the last word on a document that
+# might matter.
+SCREEN_MODEL = "claude-haiku-4-5"
+CONFIRM_MODEL = "claude-sonnet-4-6"
+SCREEN_OUT_DECISIONS = {"not_relevant"}
+SCREEN_CONFIDENCE_THRESHOLD = 80
+
 DEFAULT_CATEGORIES = [
     {"name": "relevant", "color": "green", "description": "Supports our case theory or relates to key issues"},
     {"name": "key_document", "color": "blue", "description": "Particularly significant, needs attorney attention"},
@@ -175,3 +186,36 @@ async def classify_document(
 
     logger.error("Classification failed after %d retryable attempts", _CLASSIFY_MAX_ATTEMPTS)
     return parse_classification_response("{}"), 0
+
+
+async def classify_document_cascade(
+    review_criteria: str,
+    document_text: str,
+    categories: list[dict] | None = None,
+) -> tuple[dict, int, str]:
+    """Classify with the screen model, escalating to the confirm model.
+
+    Returns (result, total_tokens, model) where model is the one whose answer
+    is being returned. Follows classify_document's failure contract: tokens
+    == 0 means no real answer was produced — including when the confirm pass
+    fails after a successful screen, so a document the screen flagged as
+    possibly relevant is never recorded on the cheap model's say-so.
+    """
+    screen, screen_tokens = await classify_document(
+        review_criteria, document_text, categories=categories, model=SCREEN_MODEL
+    )
+    if screen_tokens == 0:
+        return screen, 0, SCREEN_MODEL
+
+    if (
+        screen["decision"] in SCREEN_OUT_DECISIONS
+        and screen["confidence"] >= SCREEN_CONFIDENCE_THRESHOLD
+    ):
+        return screen, screen_tokens, SCREEN_MODEL
+
+    confirm, confirm_tokens = await classify_document(
+        review_criteria, document_text, categories=categories, model=CONFIRM_MODEL
+    )
+    if confirm_tokens == 0:
+        return confirm, 0, CONFIRM_MODEL
+    return confirm, screen_tokens + confirm_tokens, CONFIRM_MODEL
