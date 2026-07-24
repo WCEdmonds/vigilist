@@ -1659,3 +1659,23 @@ mark {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+
+/* ── Entity graph: the dark examination band (record §000004) ── */
+.egraph { background: var(--color-redact); }
+.egraph circle { transition: stroke 120ms ease, stroke-width 120ms ease; }
+.egraph circle:hover { stroke: var(--color-marker); stroke-width: 3px; }
+
+/* Timeline: docket-style epoch headers */
+.timeline-epoch {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-stamp);
+  padding: var(--space-3) 0 var(--space-1);
+  border-bottom: 2px solid var(--color-redact);
+  margin-bottom: var(--space-2);
+}
+
+.stamp-badge--ink { color: var(--color-ink-light); border-color: var(--color-neutral-300); }

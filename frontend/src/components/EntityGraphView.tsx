@@ -18,7 +18,9 @@ interface Transform {
   k: number;
 }
 
-const NODE_COLOR: Record<string, string> = { person: '#4f7cff', org: '#b4690e' };
+// Record language (§000004): white nodes on the redaction-black band,
+// typed by ring color — person = stamp blue, org = marker gold.
+const NODE_RING: Record<string, string> = { person: '#2f3dbd', org: '#f5ce00' };
 
 export default function EntityGraphView({ productionId, openEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
@@ -110,9 +112,9 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
       <line
         key={`${e.source}-${e.target}-${i}`}
         x1={source.x} y1={source.y} x2={target.x} y2={target.y}
-        stroke="var(--color-border, #999)"
+        stroke="#ffffff"
         strokeWidth={stated ? 1.5 : Math.min(4, e.weight / 2)}
-        strokeOpacity={stated ? 0.7 : 0.25}
+        strokeOpacity={stated ? 0.55 : 0.22}
         strokeDasharray={stated ? undefined : '4 3'}
       >
         {e.relationship_type && <title>{e.relationship_type}</title>}
@@ -143,6 +145,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
 
         {graphData && graphData.nodes.length > 0 && (
           <svg
+            className="egraph"
             style={{ width: '100%', height: '100%', touchAction: 'none' }}
             onWheel={onWheel}
             onPointerDown={onBackgroundPointerDown}
@@ -156,9 +159,9 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
                 <g key={n.id}>
                   <circle
                     cx={n.x} cy={n.y} r={n.r}
-                    fill={NODE_COLOR[n.entity_type] || NODE_COLOR.person}
-                    stroke="#fff"
-                    strokeWidth={1.5}
+                    fill="#ffffff"
+                    stroke={NODE_RING[n.entity_type] || NODE_RING.person}
+                    strokeWidth={2}
                     style={{ cursor: 'pointer' }}
                     onPointerDown={onNodePointerDown(n.id)}
                     onClick={onNodeClick(n.id)}
@@ -167,10 +170,10 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
                   </circle>
                   {showLabels && (
                     <text
-                      x={n.x + n.r + 4} y={n.y}
-                      fontSize={11}
+                      x={n.x + n.r + 5} y={n.y}
+                      fontSize={10.5}
                       dominantBaseline="middle"
-                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+                      style={{ pointerEvents: 'none', userSelect: 'none', fill: 'rgba(255,255,255,0.85)', fontFamily: 'var(--font-mono)' }}
                     >
                       {n.canonical_name}
                     </text>

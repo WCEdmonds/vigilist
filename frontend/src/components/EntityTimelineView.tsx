@@ -75,8 +75,8 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
   const renderEvent = (e: TimelineEvent) => (
     <div key={e.event_id} className="card" style={{ padding: 'var(--space-3)', marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-        <span className="badge badge-gray">{TYPE_BADGES[e.event_type] || e.event_type}</span>
-        <span style={{ fontSize: 'var(--text-xs)', opacity: 0.7 }}>{dateLabel(e)}</span>
+        <span className="stamp-badge stamp-badge--ink">{TYPE_BADGES[e.event_type] || e.event_type}</span>
+        <span style={{ fontSize: 'var(--text-xs)', opacity: 0.7, fontFamily: 'var(--font-mono)' }}>{dateLabel(e)}</span>
         <button className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }}
                 onClick={() => onViewDocument(e.document_id)}>
           {e.bates_begin}{e.title ? ` — ${e.title}` : ''}
@@ -115,7 +115,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
         {groups.map(g => (
           <div key={g.key}>
-            <div className="panel-header" style={{ padding: '8px 0' }}>{g.key}</div>
+            <div className="timeline-epoch">{g.key}</div>
             {g.items.map(renderEvent)}
           </div>
         ))}

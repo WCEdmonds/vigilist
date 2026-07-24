@@ -140,7 +140,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
             {entities.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => openEntity(e.id)}>
                 <td>{e.canonical_name}</td>
-                <td>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
+                <td><span className={`entity-dot entity-${e.entity_type}`} style={{ marginRight: 5 }}>●</span>{e.entity_type === 'person' ? 'Person' : 'Org'}</td>
                 <td>{e.mention_count}</td>
                 <td>{e.document_count}</td>
               </tr>
