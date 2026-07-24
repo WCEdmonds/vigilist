@@ -3,15 +3,15 @@
 import re
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.models import (
-    Document, Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
-    EntityRelationship, EventParticipant, OntologyEvent, User,
+    AuditLog, Document, Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
+    EntityRelationship, EventParticipant, OntologyEvent, Production, User,
 )
 from app.routers.auth import get_current_user
 from app.schemas import (
@@ -839,6 +839,58 @@ async def delete_event(
                      production_id=production_id, details=snapshot)
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/productions/{production_id}/timeline-review")
+async def trigger_timeline_review(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Run the AI timeline review for this production in the background.
+    Manager or admin only; 404 for productions outside the caller's scope.
+    Same run as the automatic post-extraction pipeline stage — this is the
+    on-demand/backfill trigger. Status via GET .../timeline-review/status."""
+    import app.dependencies as deps
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    role = await deps.get_user_role_for_production(db, user, production_id)
+    if deps.ROLE_RANK.get(role, 0) < deps.ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    await log_action(db, user, "timeline_review_triggered", "production",
+                     str(production_id), production_id=production_id)
+    # Commit before handing off: the background run opens its own sessions.
+    await db.commit()
+    from app.services.pipeline import run_timeline_review_stage
+    background_tasks.add_task(run_timeline_review_stage, production_id)
+    return {"status": "started"}
+
+
+@router.get("/productions/{production_id}/timeline-review/status")
+async def get_timeline_review_status(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Stage state from ai_pipeline_status + the latest run summary from the
+    audit log (the run row is the durable summary store — no new table)."""
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    prod = await db.get(Production, production_id)
+    status = dict((prod.ai_pipeline_status if prod else None) or {})
+    row = (await db.execute(
+        select(AuditLog)
+        .where(AuditLog.production_id == production_id,
+               AuditLog.action == "timeline_review_completed")
+        .order_by(AuditLog.created_at.desc())
+        .limit(1))).scalars().first()
+    return {"state": status.get("timeline_review"),
+            "error": (status.get("errors") or {}).get("timeline_review"),
+            "summary": row.details if row else None}
 
 
 @router.get("/productions/{production_id}/graph", response_model=GraphOut)
