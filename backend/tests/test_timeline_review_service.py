@@ -250,6 +250,7 @@ def test_run_happy_path_applies_and_audits(monkeypatch):
     assert len(run_rows) == 1
     assert run_rows[0].details["model"] == tr.REVIEW_MODEL
     assert run_rows[0].details["usage"] == {"input_tokens": 10, "output_tokens": 5}
+    assert run_rows[0].details["skip_reasons"] == []
 
 
 def test_run_truncated_response_fails_applies_nothing(monkeypatch):

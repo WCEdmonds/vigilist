@@ -383,6 +383,7 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
                      details={"model": REVIEW_MODEL, "usage": usage,
                               "event_count": len(events),
                               "verdict_count": len(verdicts),
+                              "skip_reasons": summary["skip_reasons"],
                               **{k: summary[k] for k in
                                  ("merged", "deleted", "edited", "skipped")}})
     return summary

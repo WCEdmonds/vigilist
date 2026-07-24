@@ -845,13 +845,30 @@ async def delete_event(
 async def trigger_timeline_review(
     production_id: int,
     background_tasks: BackgroundTasks,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Run the AI timeline review for this production in the background.
-    Manager or admin only; 404 for productions outside the caller's scope.
-    Same run as the automatic post-extraction pipeline stage — this is the
-    on-demand/backfill trigger. Status via GET .../timeline-review/status."""
+    """Run the AI timeline review for this production. Manager or admin only;
+    404 for productions outside the caller's scope. Same run as the automatic
+    post-extraction pipeline stage — this is the on-demand/backfill trigger.
+    Status via GET .../timeline-review/status.
+
+    Rejects with 409 when a review is already queued or running: concurrent
+    reviews apply non-deterministic destructive verdicts (two runs can merge
+    the same duplicate pair with different keepers, deleting both). `force`
+    is the escape hatch for a crashed run that leaves the stage stuck --
+    simpler and more honest than a staleness timestamp, since
+    ai_pipeline_status only carries a whole-dict `updated_at` (see
+    merge_stage in services/pipeline.py), not a per-stage one that could
+    tell a genuinely-running review apart from a stuck one.
+
+    Dispatch mirrors trigger_entity_extraction (routers/ingest.py): Cloud
+    Tasks when configured (production-safe -- a multi-minute model call
+    must not run in-process on Cloud Run, which can kill the instance
+    mid-run and strand the stage on "running"), otherwise an in-process
+    background task for local dev.
+    """
     import app.dependencies as deps
     accessible = await get_accessible_production_ids(db, user)
     if production_id not in accessible:
@@ -860,8 +877,29 @@ async def trigger_timeline_review(
     if deps.ROLE_RANK.get(role, 0) < deps.ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Manager or admin role required")
 
+    prod = await db.get(Production, production_id)
+    status = dict((prod.ai_pipeline_status if prod else None) or {})
+    state = status.get("timeline_review")
+    if state in ("queued", "running") and not force:
+        raise HTTPException(status_code=409,
+                            detail="A timeline review is already queued or running; "
+                                   "retry with force=true if it appears stuck")
+
     await log_action(db, user, "timeline_review_triggered", "production",
                      str(production_id), production_id=production_id)
+
+    from app.services import tasks as task_service
+    if task_service.is_configured():
+        if prod is not None:
+            # Reassign (not mutate in place) so SQLAlchemy detects the JSONB
+            # change -- in-place mutation of the existing dict is invisible
+            # to the ORM's change tracking and silently fails to persist
+            # (same pattern/comment as ingest.py's rebuild block).
+            prod.ai_pipeline_status = {**status, "timeline_review": "queued"}
+        await db.commit()
+        task_service.enqueue_pipeline(production_id)
+        return {"status": "enqueued"}
+
     # Commit before handing off: the background run opens its own sessions.
     await db.commit()
     from app.services.pipeline import run_timeline_review_stage
