@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { getEntity, getEntityConnections, getEntityMentions } from '../api/client';
 import type { EntityConnections, EntityMentionsPage, EntityProfile } from '../types';
 
@@ -7,6 +9,19 @@ interface Props {
   onClose: () => void;
   onOpenEntity: (entityId: string) => void;
   onOpenDocument: (docId: string, entityId: string) => void;
+}
+
+/** Mention snippet with the entity's surface text marker-highlighted. */
+function Snippet({ text, name }: { text: string; name: string }) {
+  const idx = name ? text.toLowerCase().indexOf(name.toLowerCase()) : -1;
+  if (idx === -1) return <>…{text}…</>;
+  return (
+    <>
+      …{text.slice(0, idx)}
+      <span className="marker-hl">{text.slice(idx, idx + name.length)}</span>
+      {text.slice(idx + name.length)}…
+    </>
+  );
 }
 
 export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDocument }: Props) {
@@ -33,18 +48,22 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
   const currentMentions = mentions?.id === entityId ? mentions.value : null;
   const currentConnections = connections?.id === entityId ? connections.value : null;
   const currentError = error?.id === entityId ? error.value : null;
+  const loading = !currentProfile && !currentError;
 
   return (
     <div className="entity-panel" style={{
       position: 'absolute', top: 0, right: 0, bottom: 0, width: 380, zIndex: 30,
-      background: 'var(--color-bg, #fff)', borderLeft: '1px solid var(--color-border, #ddd)',
-      display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 16px rgba(0,0,0,0.12)',
+      background: 'var(--color-card)', borderLeft: '1px solid var(--color-neutral-200)',
+      display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 16px rgba(20,24,29,0.12)',
     }}>
       <div className="panel-header" style={{ display: 'flex', alignItems: 'center' }}>
         <span style={{ fontWeight: 600 }}>
-          {currentProfile ? currentProfile.canonical_name : 'Loading…'}
+          {currentProfile ? currentProfile.canonical_name : 'Entity'}
           {currentProfile && (
-            <span className="badge" style={{ marginLeft: 8, fontSize: 'var(--text-xs)' }}>
+            <span className={`entity-dot entity-${currentProfile.entity_type}`} style={{ marginLeft: 8 }}>●</span>
+          )}
+          {currentProfile && (
+            <span style={{ marginLeft: 4, fontWeight: 400 }}>
               {currentProfile.entity_type === 'person' ? 'Person' : 'Organization'}
             </span>
           )}
@@ -53,19 +72,35 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)', fontSize: 'var(--text-sm)' }}>
         {currentError && <div className="empty-state">{currentError}</div>}
+
+        {loading && (
+          <div className="entity-loading">
+            <span className="spinner spinner-md" />
+            <span>Pulling the record on this entity…</span>
+          </div>
+        )}
+
         {currentProfile && (
           <>
-            {currentProfile.attributes.role && <div style={{ marginBottom: 8, opacity: 0.85 }}>{currentProfile.attributes.role}</div>}
-            {currentProfile.overview
-              ? <p style={{ marginBottom: 12 }}>{currentProfile.overview}</p>
-              : <p style={{ marginBottom: 12, opacity: 0.6 }}>No overview yet.</p>}
-            <div style={{ marginBottom: 12, opacity: 0.75 }}>
-              Mentioned {currentProfile.mention_count} times across {currentProfile.document_count} documents.
+            {currentProfile.attributes.role && (
+              <div className="entity-role">{currentProfile.attributes.role}</div>
+            )}
+            <div className="entity-stat-line">
+              {currentProfile.mention_count.toLocaleString()}&nbsp;MENTIONS&nbsp;·&nbsp;{currentProfile.document_count.toLocaleString()}&nbsp;DOCUMENTS
             </div>
+            {currentProfile.overview
+              ? (
+                <div className="entity-overview">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{currentProfile.overview}</ReactMarkdown>
+                </div>
+              )
+              : <p style={{ margin: '0 0 12px', opacity: 0.6 }}>No overview yet.</p>}
             {currentProfile.aliases.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <div className="panel-header" style={{ padding: 0 }}>Also appears as</div>
-                <div>{currentProfile.aliases.join(' · ')}</div>
+                <div className="panel-header" style={{ padding: 0, background: 'none', border: 'none' }}>Also appears as</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                  {currentProfile.aliases.map(a => <span key={a} className="badge badge-gray">{a}</span>)}
+                </div>
               </div>
             )}
           </>
@@ -73,22 +108,22 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
 
         {currentConnections && (currentConnections.stated.length > 0 || currentConnections.cooccurrence.length > 0) && (
           <div style={{ marginBottom: 16 }}>
-            <div className="panel-header" style={{ padding: 0 }}>Connections</div>
+            <div className="panel-header" style={{ padding: 0, background: 'none', border: 'none' }}>Connections</div>
             {currentConnections.stated.map((c, i) => (
-              <div key={`s${i}`} style={{ padding: '4px 0' }}>
-                <button className="btn btn-ghost btn-xs" onClick={() => onOpenEntity(c.entity_id)}>
+              <div key={`s${i}`} className="entity-conn">
+                <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => onOpenEntity(c.entity_id)}>
                   {c.canonical_name}
                 </button>
-                <span style={{ opacity: 0.7 }}> — {c.relationship_type?.replace(/_/g, ' ')}</span>
-                {c.description && <div style={{ opacity: 0.6, fontSize: 'var(--text-xs)' }}>{c.description}</div>}
+                <span className="entity-rel">{c.relationship_type?.replace(/_/g, ' ')}</span>
+                {c.description && <div className="entity-conn-desc">"{c.description}"</div>}
               </div>
             ))}
             {currentConnections.cooccurrence.map((c, i) => (
-              <div key={`c${i}`} style={{ padding: '4px 0' }}>
-                <button className="btn btn-ghost btn-xs" onClick={() => onOpenEntity(c.entity_id)}>
+              <div key={`c${i}`} className="entity-conn">
+                <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }} onClick={() => onOpenEntity(c.entity_id)}>
                   {c.canonical_name}
                 </button>
-                <span style={{ opacity: 0.7 }}> — appear together in {c.shared_doc_count} docs</span>
+                <span className="entity-rel">together in {c.shared_doc_count} docs</span>
               </div>
             ))}
           </div>
@@ -96,16 +131,20 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
 
         {currentMentions && currentMentions.documents.length > 0 && (
           <div>
-            <div className="panel-header" style={{ padding: 0 }}>Mentions ({currentMentions.total} documents)</div>
+            <div className="panel-header" style={{ padding: 0, background: 'none', border: 'none' }}>
+              Mentions ({currentMentions.total} documents)
+            </div>
             {currentMentions.documents.map(d => (
-              <div key={d.document_id} style={{ margin: '8px 0' }}>
-                <button className="btn btn-ghost btn-xs" style={{ fontWeight: 600 }}
-                        onClick={() => onOpenDocument(d.document_id, entityId)}>
+              <div key={d.document_id} style={{ margin: '10px 0' }}>
+                <button className="btn btn-ghost btn-xs entity-bates" onClick={() => onOpenDocument(d.document_id, entityId)}>
                   {d.bates_begin}{d.title ? ` — ${d.title}` : ''}
                 </button>
                 {d.mentions.slice(0, 3).map((m, i) => (
-                  <div key={i} style={{ opacity: 0.7, fontSize: 'var(--text-xs)', padding: '2px 0 2px 12px' }}>
-                    …{m.context_snippet || m.surface_text}…
+                  <div key={i} className="entity-snippet">
+                    <Snippet
+                      text={m.context_snippet || m.surface_text}
+                      name={m.surface_text}
+                    />
                   </div>
                 ))}
               </div>
