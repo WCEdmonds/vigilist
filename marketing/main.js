@@ -101,3 +101,13 @@ document.querySelectorAll('.graph__node[data-key]').forEach((node) => {
   slider.addEventListener('input', render);
   render();
 })();
+
+// Feature cards collapse to headings on small screens; tap to expand.
+(() => {
+  const mq = window.matchMedia('(max-width: 620px)');
+  document.querySelectorAll('.grid .card').forEach((card) => {
+    card.addEventListener('click', () => {
+      if (mq.matches) card.classList.toggle('is-open');
+    });
+  });
+})();
