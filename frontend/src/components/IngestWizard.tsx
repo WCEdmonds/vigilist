@@ -48,9 +48,9 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
   const [startingClassification, setStartingClassification] = useState(false);
   const [intakeSummary, setIntakeSummary] = useState<IntakeSummary | null>(null);
 
-  // Email containers (.eml/.msg/.pst) expand into parent + attachment
+  // Email containers (.eml/.msg/.pst/.mbox) expand into parent + attachment
   // families during native ingest — counted so the wizard can say so.
-  const emailContainerCount = files.filter(f => /\.(eml|msg|pst)$/i.test(f.name)).length;
+  const emailContainerCount = files.filter(f => /\.(eml|msg|pst|mbox)$/i.test(f.name)).length;
 
   // The post-ingest receipt: what intake actually created.
   useEffect(() => {
@@ -530,15 +530,16 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
                     }}>
                       {emailContainerCount > 0 ? (
                         <>
-                          <strong>{emailContainerCount} email container{emailContainerCount === 1 ? '' : 's'}</strong> (.eml/.msg/.pst)
+                          <strong>{emailContainerCount} email container{emailContainerCount === 1 ? '' : 's'}</strong> (.eml/.msg/.pst/.mbox)
                           detected — each expands into its message plus attachments as a linked{' '}
                           <strong>document family</strong>, and reply threads are stitched together
-                          automatically. Other files are processed as native documents.
+                          automatically. Zip archives are unpacked and their contents ingested as a
+                          document family; other files are processed as native documents.
                         </>
                       ) : (
                         <>
                           Files are processed as native documents. Any email containers
-                          (.eml/.msg/.pst) expand into message + attachment families with
+                          (.eml/.msg/.pst/.mbox) expand into message + attachment families with
                           reply threads stitched automatically.
                         </>
                       )}

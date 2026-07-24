@@ -2,16 +2,19 @@
 
 Pure and storage-free. `.eml` uses the Python stdlib; `.msg` uses extract-msg;
 `.pst`/`.ost` shell out to the `readpst` CLI (pst-utils) to explode into `.eml`
-files that are then parsed by the stdlib path.
+files that are then parsed by the stdlib path. `.mbox` uses the stdlib
+`mailbox` module to split the container, then feeds each message's raw bytes
+through the same `_parse_eml_bytes` the PST/`.eml` path uses.
 
-`expand_email` NEVER raises: any parse/readpst failure yields `[]`, and the
-caller records an error row instead of aborting the ingest batch.
+`expand_email` NEVER raises: any parse/readpst/mailbox failure yields `[]`,
+and the caller records an error row instead of aborting the ingest batch.
 """
 
 from __future__ import annotations
 
 import glob
 import logging
+import mailbox
 import os
 import shutil
 import subprocess
@@ -28,6 +31,7 @@ READPST_TIMEOUT = 900
 _EML_EXTS = {".eml"}
 _MSG_EXTS = {".msg"}
 _PST_EXTS = {".pst", ".ost"}
+_MBOX_EXTS = {".mbox"}
 
 
 @dataclass
@@ -205,6 +209,34 @@ def _explode_pst(data: bytes) -> list[ParsedMessage]:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _explode_mbox(data: bytes) -> list[ParsedMessage]:
+    """Explode an mbox container via the stdlib `mailbox` module.
+
+    Writes the bytes to a temp file (mailbox.mbox requires a real path), then
+    parses each message's raw bytes through the SAME `_parse_eml_bytes` the
+    PST/.eml path uses — no parallel implementation.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="mbox_")
+    try:
+        mbox_path = os.path.join(tmpdir, "container.mbox")
+        with open(mbox_path, "wb") as fh:
+            fh.write(data)
+
+        box = mailbox.mbox(mbox_path)
+        try:
+            messages: list[ParsedMessage] = []
+            for key in box.keys():
+                try:
+                    messages.append(_parse_eml_bytes(box.get_bytes(key)))
+                except Exception:
+                    logger.exception("Failed to parse mbox message %s", key)
+            return messages
+        finally:
+            box.close()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def expand_email(filename: str, data: bytes) -> list[ParsedMessage]:
     """Expand an email container into its messages. Never raises → [] on failure."""
     ext = _ext(filename)
@@ -215,6 +247,8 @@ def expand_email(filename: str, data: bytes) -> list[ParsedMessage]:
             return [_parse_msg_bytes(data)]
         if ext in _PST_EXTS:
             return _explode_pst(data)
+        if ext in _MBOX_EXTS:
+            return _explode_mbox(data)
         return []
     except Exception:
         logger.exception("Failed to expand email container %s", filename)
