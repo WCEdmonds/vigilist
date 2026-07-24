@@ -71,7 +71,7 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
     ev.currentTarget.setPointerCapture(ev.pointerId);
   };
 
-  const onNodePointerDown = (id: string) => (ev: React.PointerEvent<SVGCircleElement>) => {
+  const onNodePointerDown = (id: string) => (ev: React.PointerEvent<SVGRectElement>) => {
     ev.stopPropagation();
     dragTargetRef.current = id;
     dragDistanceRef.current = 0;
@@ -122,8 +122,6 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
     );
   };
 
-  const showLabels = !(transform.k < 0.7 && layout.length > 40);
-
   return (
     <div style={{ position: 'relative', height: '100dvh', display: 'flex', flexDirection: 'column' }}>
       <div className="panel-header" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -155,33 +153,51 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
           >
             <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
               {graphData.edges.map(edgeLine)}
-              {layout.map(n => (
-                <g key={n.id}>
-                  <circle
-                    cx={n.x} cy={n.y} r={n.r}
-                    fill="#ffffff"
-                    stroke={NODE_RING[n.entity_type] || NODE_RING.person}
-                    strokeWidth={2}
-                    style={{ cursor: 'pointer' }}
-                    onPointerDown={onNodePointerDown(n.id)}
-                    onClick={onNodeClick(n.id)}
-                  >
-                    <title>{n.canonical_name}</title>
-                  </circle>
-                  {showLabels && (
-                    <text
-                      x={n.x + n.r + 5} y={n.y}
-                      fontSize={10.5}
-                      dominantBaseline="middle"
-                      style={{ pointerEvents: 'none', userSelect: 'none', fill: 'rgba(255,255,255,0.85)', fontFamily: 'var(--font-mono)' }}
+              {layout.map(n => {
+                // Nodes are the marketing-graph name cards: white, mono
+                // label, ring color by type, mention count sets the scale.
+                // Mono metrics make the text width computable (0.6em/char).
+                const isOpen = openEntityId === n.id;
+                const label = n.canonical_name.length > 24
+                  ? n.canonical_name.slice(0, 23) + '…'
+                  : n.canonical_name;
+                const fs = 9.5 + (n.r - 8) * 0.18;
+                const w = label.length * fs * 0.62 + 18;
+                const h = fs + 13;
+                return (
+                  <g key={n.id} transform={`translate(${n.x},${n.y})`}>
+                    <rect
+                      className="egraph-node"
+                      x={-w / 2} y={-h / 2} width={w} height={h} rx={2}
+                      fill="#ffffff"
+                      stroke={isOpen ? '#ffe24a' : (NODE_RING[n.entity_type] || NODE_RING.person)}
+                      strokeWidth={isOpen ? 2.5 : 1.5}
+                      onPointerDown={onNodePointerDown(n.id)}
+                      onClick={onNodeClick(n.id)}
                     >
-                      {n.canonical_name}
+                      <title>{n.canonical_name} · {n.mention_count} mentions</title>
+                    </rect>
+                    <text
+                      y={1}
+                      fontSize={fs}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      style={{ pointerEvents: 'none', userSelect: 'none', fill: '#14181d', fontFamily: 'var(--font-mono)', fontWeight: 500 }}
+                    >
+                      {label}
                     </text>
-                  )}
-                </g>
-              ))}
+                  </g>
+                );
+              })}
             </g>
           </svg>
+        )}
+        {graphData && graphData.nodes.length > 0 && (
+          <div className="egraph-legend">
+            <span><i className="egraph-key" style={{ borderColor: '#2f3dbd' }} />PERSON</span>
+            <span><i className="egraph-key" style={{ borderColor: '#f5ce00' }} />ORGANIZATION</span>
+            <span className="egraph-legend-hint">SOLID&nbsp;=&nbsp;STATED&nbsp;·&nbsp;DASHED&nbsp;=&nbsp;CO-OCCURRENCE&nbsp;·&nbsp;DRAG&nbsp;TO&nbsp;ARRANGE</span>
+          </div>
         )}
       </div>
 

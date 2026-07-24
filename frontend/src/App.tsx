@@ -609,7 +609,6 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             onOpenDoc={setViewDocId}
           />
         )}
-        <DefensibilityPanel productionId={production.id} tags={allTags} />
         <ProductionBrief
           production={production}
           clusters={clusters}
@@ -1016,6 +1015,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             </button>
           </div>
         )}
+
+        {/* Defensibility tools live at the foot of the matter view — reach
+            for them when you need the record, not on every visit. */}
+        <DefensibilityPanel productionId={production.id} tags={allTags} />
         </div>
         <ContextRail
           production={production}
