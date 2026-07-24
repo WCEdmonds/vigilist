@@ -1,7 +1,7 @@
 import { auth } from '../firebase';
 import type {
   AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile,
-  FamilyThread, GraphData,
+  DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag, TimelinePage,
@@ -854,12 +854,35 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
 export const triggerEntityExtraction = (productionId: number) =>
   request<{ status: string }>(`/api/productions/${productionId}/extract-entities`, { method: 'POST' });
 
-export function getTimeline(productionId: number, entityId?: string, eventType?: string, page = 1, perPage = 50) {
+export function getTimeline(
+  productionId: number, entityId?: string, eventType?: string,
+  page = 1, perPage = 50, minSignificance?: number,
+) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage) });
   if (entityId) params.set('entity_id', entityId);
   if (eventType) params.set('event_type', eventType);
+  // Omitted lets the server default (key events, >= 3) stand.
+  if (minSignificance !== undefined) params.set('min_significance', String(minSignificance));
   return request<TimelinePage>(`/api/productions/${productionId}/timeline?${params}`);
 }
+
+/**
+ * Correct or clear an event's date. Manager+ only (403 otherwise).
+ * `eventDate` accepts YYYY, YYYY-MM or YYYY-MM-DD; pass null to clear the date
+ * and its precision. Omitting `eventDate` leaves the date untouched.
+ */
+export const updateEvent = (
+  eventId: number,
+  body: { event_date?: string | null; date_precision?: DatePrecision },
+) => request<EventEditResult>(`/api/events/${eventId}`, {
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+/** Delete a spurious event (participants cascade). Manager+ only. */
+export const deleteEvent = (eventId: number) =>
+  request<{ ok: boolean }>(`/api/events/${eventId}`, { method: 'DELETE' });
 
 export const getGraph = (productionId: number, maxNodes = 75, minSharedDocs = 2) =>
   request<GraphData>(`/api/productions/${productionId}/graph?max_nodes=${maxNodes}&min_shared_docs=${minSharedDocs}`);
