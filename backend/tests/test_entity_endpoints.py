@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 import app.routers.entities as er
 from app.models import Entity, OntologyEvent
-from app.schemas import EventEditRequest
+from app.schemas import EntityRenameRequest, EventEditRequest
 from tests.fakes import FakeResult, FakeSession, FakeUser
 
 
@@ -319,3 +319,210 @@ def test_delete_audit_log_includes_event_snapshot(monkeypatch):
     assert details["event_date"] == "2021-06-15"
     assert details["date_precision"] == "day"
     assert details["significance"] == 4
+
+
+# ── PATCH / DELETE /api/entities/{entity_id} (rename + delete) ────────────
+
+def _patch_writer(monkeypatch, accessible=(1,), role="manager"):
+    """Same shape as _patch_event: patches the scope/role/audit hooks the
+    write-gated entity endpoints call through."""
+    async def fake_accessible(db, user):
+        return list(accessible)
+
+    async def fake_role(db, user, production_id):
+        return role
+
+    async def fake_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(er, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(er, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(er, "log_action", fake_log)
+
+
+def _entity_db(entity):
+    return FakeSession(get_objects={("Entity", ENT_ID): entity})
+
+
+def test_rename_preserves_old_canonical_as_alias(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    db = _entity_db(ent)
+    out = asyncio.run(er.rename_entity(
+        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="Jorge A. Rivera"),
+        db=db, user=FakeUser()))
+    assert ent.canonical_name == "Jorge A. Rivera"
+    assert "Jorge Rivera" in ent.aliases  # old canonical preserved as alias
+    assert "J. Rivera" in ent.aliases  # pre-existing alias untouched
+    assert out.canonical_name == "Jorge A. Rivera"
+    assert "Jorge Rivera" in out.aliases
+
+
+def test_rename_does_not_duplicate_alias_already_present(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    ent.aliases = ["J. Rivera", "Jorge Rivera"]  # old canonical already an alias
+    db = _entity_db(ent)
+    asyncio.run(er.rename_entity(
+        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="Jorge A. Rivera"),
+        db=db, user=FakeUser()))
+    assert ent.aliases.count("Jorge Rivera") == 1
+
+
+def test_rename_rejects_empty_name(monkeypatch):
+    _patch_writer(monkeypatch)
+    db = _entity_db(_entity())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.rename_entity(
+            entity_id=ENT_ID, body=EntityRenameRequest(canonical_name=""),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_rename_rejects_whitespace_only_name(monkeypatch):
+    _patch_writer(monkeypatch)
+    db = _entity_db(_entity())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.rename_entity(
+            entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="   "),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 422
+
+
+def test_rename_caps_at_column_length(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    db = _entity_db(ent)
+    long_name = "A" * 600
+    out = asyncio.run(er.rename_entity(
+        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name=long_name),
+        db=db, user=FakeUser()))
+    assert len(ent.canonical_name) == 500
+    assert len(out.canonical_name) == 500
+
+
+def test_rename_denies_out_of_scope(monkeypatch):
+    _patch_writer(monkeypatch, accessible=(2,))  # entity is in production 1
+    db = _entity_db(_entity(production_id=1))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.rename_entity(
+            entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="New Name"),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_rename_readonly_gate(monkeypatch):
+    _patch_writer(monkeypatch, role="readonly")
+    db = _entity_db(_entity())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.rename_entity(
+            entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="New Name"),
+            db=db, user=FakeUser()))
+    assert exc.value.status_code == 403
+
+
+def test_rename_allows_reviewer(monkeypatch):
+    _patch_writer(monkeypatch, role="reviewer")
+    ent = _entity()
+    db = _entity_db(ent)
+    out = asyncio.run(er.rename_entity(
+        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="New Name"),
+        db=db, user=FakeUser()))
+    assert ent.canonical_name == "New Name"
+    assert out.canonical_name == "New Name"
+
+
+def test_rename_audit_log_includes_old_and_new_names(monkeypatch):
+    audit_calls = []
+
+    async def fake_accessible(db, user):
+        return [1]
+
+    async def fake_role(db, user, production_id):
+        return "manager"
+
+    async def fake_log(db, user, action, resource_type, resource_id=None, **kwargs):
+        audit_calls.append((action, resource_type, resource_id, kwargs))
+
+    monkeypatch.setattr(er, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(er, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(er, "log_action", fake_log)
+
+    db = _entity_db(_entity())
+    out = asyncio.run(er.rename_entity(
+        entity_id=ENT_ID, body=EntityRenameRequest(canonical_name="Jorge A. Rivera"),
+        db=db, user=FakeUser()))
+    assert out.canonical_name == "Jorge A. Rivera"
+
+    assert len(audit_calls) == 1
+    action, resource_type, resource_id, kwargs = audit_calls[0]
+    assert (action, resource_type, resource_id) == ("entity_renamed", "entity", str(ENT_ID))
+    details = kwargs["details"]
+    assert details["old_name"] == "Jorge Rivera"
+    assert details["new_name"] == "Jorge A. Rivera"
+
+
+def test_delete_entity_removes_entity(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    db = _entity_db(ent)
+    out = asyncio.run(er.delete_entity(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert out == {"ok": True}
+    assert ent in db.deleted
+
+
+def test_delete_entity_denies_out_of_scope(monkeypatch):
+    _patch_writer(monkeypatch, accessible=(2,))  # entity is in production 1
+    db = _entity_db(_entity(production_id=1))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.delete_entity(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert exc.value.status_code == 404
+
+
+def test_delete_entity_readonly_gate(monkeypatch):
+    _patch_writer(monkeypatch, role="readonly")
+    db = _entity_db(_entity())
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.delete_entity(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert exc.value.status_code == 403
+
+
+def test_delete_entity_allows_reviewer(monkeypatch):
+    _patch_writer(monkeypatch, role="reviewer")
+    ent = _entity()
+    db = _entity_db(ent)
+    out = asyncio.run(er.delete_entity(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert out == {"ok": True}
+    assert ent in db.deleted
+
+
+def test_delete_entity_audit_log_includes_snapshot(monkeypatch):
+    audit_calls = []
+
+    async def fake_accessible(db, user):
+        return [1]
+
+    async def fake_role(db, user, production_id):
+        return "manager"
+
+    async def fake_log(db, user, action, resource_type, resource_id=None, **kwargs):
+        audit_calls.append((action, resource_type, resource_id, kwargs))
+
+    monkeypatch.setattr(er, "get_accessible_production_ids", fake_accessible)
+    monkeypatch.setattr(er, "get_user_role_for_production", fake_role)
+    monkeypatch.setattr(er, "log_action", fake_log)
+
+    ent = _entity()
+    db = _entity_db(ent)
+    out = asyncio.run(er.delete_entity(entity_id=ENT_ID, db=db, user=FakeUser()))
+    assert out == {"ok": True}
+    assert ent in db.deleted
+
+    assert len(audit_calls) == 1
+    action, resource_type, resource_id, kwargs = audit_calls[0]
+    assert (action, resource_type, resource_id) == ("entity_deleted", "entity", str(ENT_ID))
+    details = kwargs["details"]
+    assert details["canonical_name"] == "Jorge Rivera"
+    assert details["entity_type"] == "person"
+    assert details["mention_count"] == 100
+    assert details["aliases"] == ["J. Rivera"]

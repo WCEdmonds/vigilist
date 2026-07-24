@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { getEntity, getEntityConnections, getEntityMentions } from '../api/client';
+import { deleteEntity, getEntity, getEntityConnections, getEntityMentions, renameEntity } from '../api/client';
 import { entityDisplayName } from '../utils/entityDisplay';
+import { showToast } from './Toast';
 import type { EntityConnection, EntityConnections, EntityMentionsPage, EntityProfile } from '../types';
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
 
 /** One row per counterpart+relationship: relationships are stored
  * per-document (that's the citation trail), but the panel reads better
@@ -61,6 +66,21 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
   const [error, setError] = useState<{ id: string; value: string } | null>(null);
   const [openConnKey, setOpenConnKey] = useState<string | null>(null);
 
+  // ── Rename / delete (record correction — the AI's extracted name can be
+  // misspelled everywhere in the source, or the "entity" can be junk a merge
+  // has nothing to merge into) ──
+  // editingFor/deletingFor hold the entityId the action applies to (like
+  // profile/mentions/connections/error above) rather than a bare boolean, so
+  // switching entities drops any stale edit/delete UI for free via the
+  // comparison below instead of needing an effect to reset it (an effect
+  // resetting state synchronously in its body is a react-hooks/set-state-in-effect
+  // violation under this repo's React Compiler lint config).
+  const [editingFor, setEditingFor] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [savingName, setSavingName] = useState(false);
+  const [deletingFor, setDeletingFor] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     getEntity(entityId)
@@ -80,6 +100,66 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
   const currentConnections = connections?.id === entityId ? connections.value : null;
   const currentError = error?.id === entityId ? error.value : null;
   const loading = !currentProfile && !currentError;
+  const editingName = editingFor === entityId;
+  const deleting = deletingFor === entityId;
+
+  const startEditName = () => {
+    if (!currentProfile) return;
+    setDraftName(currentProfile.canonical_name);
+    setNameError(null);
+    setEditingFor(entityId);
+  };
+
+  const cancelEditName = () => {
+    setEditingFor(null);
+    setNameError(null);
+  };
+
+  const saveName = () => {
+    if (savingName) return;
+    const trimmed = draftName.trim();
+    if (!trimmed) {
+      setNameError('Name cannot be empty.');
+      return;
+    }
+    setSavingName(true);
+    setNameError(null);
+    renameEntity(entityId, trimmed)
+      .then(result => {
+        setProfile(prev => (prev && prev.id === entityId
+          ? { id: entityId, value: { ...prev.value, canonical_name: result.canonical_name, aliases: result.aliases } }
+          : prev));
+        setSavingName(false);
+        setEditingFor(null);
+        showToast('Entity renamed.', 'success');
+      })
+      .catch(e => {
+        setSavingName(false);
+        setNameError(errText(e));
+      });
+  };
+
+  const handleNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveName(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelEditName(); }
+  };
+
+  const handleDelete = () => {
+    if (deleting) return;
+    if (!window.confirm(
+      'Delete this entity? This removes its mentions and connections. The underlying documents and events are not affected.',
+    )) return;
+    setDeletingFor(entityId);
+    deleteEntity(entityId)
+      .then(() => {
+        showToast('Entity deleted.', 'success');
+        onClose(); // parent clears openEntityId, which unmounts this panel
+      })
+      .catch(e => {
+        setDeletingFor(null);
+        showToast(errText(e), 'error');
+      });
+  };
 
   return (
     <div className="entity-panel" style={{
@@ -87,20 +167,79 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
       background: 'var(--color-card)', borderLeft: '1px solid var(--color-neutral-200)',
       display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 16px rgba(20,24,29,0.12)',
     }}>
-      <div className="panel-header" style={{ display: 'flex', alignItems: 'center' }}>
-        <span style={{ fontWeight: 600 }}>
-          {currentProfile ? currentProfile.canonical_name : 'Entity'}
-          {currentProfile && (
-            <span className={`entity-dot entity-${currentProfile.entity_type}`} style={{ marginLeft: 8 }}>●</span>
-          )}
-          {currentProfile && (
-            <span style={{ marginLeft: 4, fontWeight: 400 }}>
-              {currentProfile.entity_type === 'person' ? 'Person' : 'Organization'}
+      <div className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+        {editingName ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flex: 1, minWidth: 0 }}>
+            <input
+              className="input input-sm"
+              value={draftName}
+              onChange={e => setDraftName(e.target.value)}
+              onKeyDown={handleNameKeyDown}
+              disabled={savingName}
+              autoFocus
+              aria-label="Entity name"
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <button className="btn btn-primary btn-xs" onClick={saveName} disabled={savingName}>
+              {savingName ? 'Saving…' : 'Save'}
+            </button>
+            <button className="btn btn-ghost btn-xs" onClick={cancelEditName} disabled={savingName}>Cancel</button>
+          </div>
+        ) : (
+          <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', minWidth: 0, overflow: 'hidden' }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {currentProfile ? currentProfile.canonical_name : 'Entity'}
             </span>
-          )}
-        </span>
-        <button onClick={onClose} className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }} aria-label="Close entity panel">✕</button>
+            {currentProfile && (
+              <span className={`entity-dot entity-${currentProfile.entity_type}`} style={{ marginLeft: 8 }}>●</span>
+            )}
+            {currentProfile && (
+              <span style={{ marginLeft: 4, fontWeight: 400 }}>
+                {currentProfile.entity_type === 'person' ? 'Person' : 'Organization'}
+              </span>
+            )}
+            {currentProfile && (
+              <button
+                className="btn btn-ghost btn-xs"
+                onClick={startEditName}
+                style={{ marginLeft: 6 }}
+                aria-label="Rename entity"
+                title="Rename entity"
+              >
+                Rename
+              </button>
+            )}
+          </span>
+        )}
+        {currentProfile && !editingName && (
+          <button
+            className="btn btn-ghost btn-xs"
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{ marginLeft: 'auto', color: 'var(--color-danger-600)' }}
+            aria-label="Delete entity"
+            title="Delete entity"
+          >
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        )}
+        <button
+          onClick={onClose}
+          className="btn btn-ghost btn-xs"
+          style={{ marginLeft: editingName || !currentProfile ? 'auto' : 0 }}
+          aria-label="Close entity panel"
+        >
+          ✕
+        </button>
       </div>
+      {editingName && nameError && (
+        <div style={{
+          padding: '4px var(--space-3)', fontSize: 'var(--text-xs)',
+          color: 'var(--color-danger-600)', borderBottom: '1px solid var(--color-neutral-100)',
+        }}>
+          {nameError}
+        </div>
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)', fontSize: 'var(--text-sm)' }}>
         {currentError && <div className="empty-state">{currentError}</div>}
 

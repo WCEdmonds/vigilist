@@ -17,7 +17,8 @@ from app.routers.auth import get_current_user
 from app.schemas import (
     ChipEntityOut, DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
     EntityDocMentionOut, EntityDocumentMentionsOut, EntitiesSummaryOut, EntityListItemOut,
-    EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, EventEditRequest, MentionSpanOut,
+    EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, EntityRenameOut, EntityRenameRequest,
+    EventEditRequest, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
     TimelineEventOut, TimelinePageOut, TimelineParticipantOut,
     GraphNodeOut, GraphEdgeOut, GraphOut,
@@ -329,6 +330,86 @@ async def _require_writer(db: AsyncSession, user: User, production_id: int) -> N
     role = await get_user_role_for_production(db, user, production_id)
     if role == "readonly":
         raise HTTPException(status_code=403, detail="Read-only access")
+
+
+@router.patch("/entities/{entity_id}", response_model=EntityRenameOut)
+async def rename_entity(
+    entity_id: UUID,
+    body: EntityRenameRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Correct an AI-extracted entity's display name. Needed because a
+    misspelling in the source (OCR'd/hand-keyed discovery) can run through
+    every document, so the correct spelling may never appear as a merge
+    candidate -- merging duplicates can't fix a display name that's wrong
+    everywhere. Any writer role (not readonly), scoped to an accessible
+    production (404 otherwise, same as timeline event edits). The previous
+    canonical_name is preserved as an alias so it stays searchable/matchable
+    instead of being silently lost."""
+    entity = await _get_scoped_entity(db, user, entity_id)
+    await _require_writer(db, user, entity.production_id)
+
+    new_name = body.canonical_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=422, detail="canonical_name cannot be empty")
+    new_name = new_name[:500]  # cap at the canonical_name column length (String(500))
+
+    old_name = entity.canonical_name
+    aliases = list(entity.aliases or [])
+    if old_name != new_name and old_name not in aliases:
+        aliases = aliases + [old_name]
+    # Reassign (not in-place mutate) so SQLAlchemy detects the JSONB change --
+    # mutating the existing list in place is invisible to the ORM's change
+    # tracking and silently fails to persist (this exact trap bit us before,
+    # see entity_merge.py's alias handling for the same pattern).
+    entity.aliases = aliases
+    entity.canonical_name = new_name
+
+    await log_action(db, user, "entity_renamed", "entity", str(entity_id),
+                     production_id=entity.production_id,
+                     details={"old_name": old_name, "new_name": new_name})
+    await db.commit()
+    return EntityRenameOut(id=entity.id, canonical_name=entity.canonical_name,
+                           aliases=list(entity.aliases or []))
+
+
+@router.delete("/entities/{entity_id}")
+async def delete_entity(
+    entity_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Delete a junk or spurious AI-extracted entity (e.g. "Local User",
+    litigation-process actors) that merging can't remove since there's no
+    duplicate to merge into. Any writer role (not readonly), scoped to an
+    accessible production (404 otherwise).
+
+    entity_mentions, entity_relationships (source + target), event_participants,
+    and entity_merge_suggestions (entity_a + entity_b) all cascade at the DB
+    level via ondelete=CASCADE on their entity FK, so a plain delete leaves no
+    orphans; entity_merges.winner_entity_id is SET NULL (not CASCADE) so merge
+    history/undo trail survives. ontology_events themselves are NOT deleted --
+    they cascade from productions, not entities, so this only removes the
+    entity's participation in an event, never the event.
+
+    The entity is hard-deleted, so the audit row's snapshot is the only
+    surviving record of what was removed (mirrors delete_event)."""
+    entity = await _get_scoped_entity(db, user, entity_id)
+    await _require_writer(db, user, entity.production_id)
+    production_id = entity.production_id
+    snapshot = {
+        "canonical_name": entity.canonical_name,
+        "entity_type": entity.entity_type,
+        "mention_count": entity.mention_count,
+        "aliases": list(entity.aliases or [])[:50],
+    }
+
+    await db.delete(entity)
+    await log_action(db, user, "entity_deleted", "entity", str(entity_id),
+                     production_id=production_id, details=snapshot)
+    await db.commit()
+    return {"ok": True}
 
 
 async def _entity_list_item(db: AsyncSession, entity_id) -> EntityListItemOut | None:
