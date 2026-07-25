@@ -36,7 +36,7 @@ def test_serialize_line_shape():
                                 participants={7: ["Jorge Rivera"]})
     row = json.loads(out)
     assert row == {"id": 7, "date": "2020-05-01", "precision": "day",
-                   "type": "payment", "desc": "Wire sent",
+                   "type": "payment", "sig": 3, "desc": "Wire sent",
                    "quote": "wired on May 1, 2020", "bates": "ABC-0042",
                    "who": ["Jorge Rivera"]}
 
@@ -98,7 +98,8 @@ def _dbase(events, participant_rows=(), edited_ids=()):
 def _verdict(**kw):
     base = {"kind": None, "event_id": None, "event_ids": None, "keep_id": None,
             "date": None, "precision": None, "event_type": None,
-            "description": None, "reason": "r", "confidence": 0.95}
+            "description": None, "significance": None,
+            "reason": "r", "confidence": 0.95}
     base.update(kw)
     return base
 
@@ -299,3 +300,37 @@ def test_run_releases_connection_before_model_call(monkeypatch):
     out = asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
     assert out["status"] == "done"
     assert commits_at_call == [1]
+
+
+def test_rerate_demotes_with_before_after_audit():
+    ev = _event(9, significance=3)
+    db = _dbase([ev])
+    summary = _run(db, [_verdict(kind="rerate", event_id=9, significance=1)])
+    assert summary["rerated"] == 1 and ev.significance == 1
+    audits = [a for a in db.added if isinstance(a, AuditLog)]
+    assert audits[0].action == "event_rerated_by_review"
+    assert audits[0].details["before"]["significance"] == 3
+    assert audits[0].details["after"]["significance"] == 1
+
+
+def test_rerate_rejects_out_of_range_significance():
+    ev = _event(9, significance=3)
+    db = _dbase([ev])
+    summary = _run(db, [_verdict(kind="rerate", event_id=9, significance=7)])
+    assert summary["rerated"] == 0 and summary["skipped"] == 1
+    assert ev.significance == 3
+
+
+def test_rerate_respects_human_edit_guardrail():
+    ev = _event(9, significance=3)
+    db = _dbase([ev], edited_ids=[9])
+    summary = _run(db, [_verdict(kind="rerate", event_id=9, significance=1)])
+    assert summary["rerated"] == 0 and summary["skipped"] == 1
+    assert ev.significance == 3
+
+
+def test_schema_includes_rerate_kind_and_significance():
+    item = tr.REVIEW_SCHEMA["properties"]["verdicts"]["items"]
+    assert "rerate" in item["properties"]["kind"]["enum"]
+    assert "significance" in item["properties"]
+    assert "significance" in item["required"]

@@ -522,7 +522,7 @@ export interface TimelinePage {
 export interface TimelineReviewStatus {
   state: 'running' | 'done' | 'failed' | null;
   error?: string | null;
-  summary: { merged?: number; deleted?: number; edited?: number; skipped?: number } | null;
+  summary: { merged?: number; deleted?: number; edited?: number; rerated?: number; skipped?: number } | null;
 }
 
 export interface GraphNode {

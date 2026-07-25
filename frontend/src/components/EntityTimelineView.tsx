@@ -342,7 +342,7 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
           setReviewing(false);
           const m = s.summary;
           setReviewMsg(m
-            ? `Review complete — ${m.merged ?? 0} merged, ${m.deleted ?? 0} removed, ${m.edited ?? 0} corrected.`
+            ? `Review complete — ${m.merged ?? 0} merged, ${m.deleted ?? 0} removed, ${m.edited ?? 0} corrected, ${m.rerated ?? 0} re-rated.`
             : 'Review complete.');
           setEvents([]);
           setPage(1);
