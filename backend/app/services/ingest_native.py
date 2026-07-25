@@ -773,6 +773,7 @@ async def ingest_native_batch(
         _persist_document,
         _persist_documents,
         _persist_job_errors,
+        _source_stamp,
         _stamp_source,
     )
     from app.services.ingest_pdf import derive_bates_prefix
@@ -783,6 +784,7 @@ async def ingest_native_batch(
     production = await db.get(Production, production_id)
     prefix = derive_bates_prefix(production.name if production else "")
     fm = job.field_mapping or {}
+    stamp = _source_stamp(job)
     custodian = fm.get("custodian")
     load_prefix = fm.get("load_prefix")
     offset = int(fm.get("control_offset") or 0)
@@ -822,7 +824,7 @@ async def ingest_native_batch(
                 # partway, nothing persists, so a retry re-expands the container
                 # cleanly instead of finding a lone parent and skipping it.
                 for d in docs:
-                    _stamp_source(d, job)
+                    _stamp_source(d, stamp)
                 await _persist_documents(db, job_id, docs)
             elif ext in _ZIP_EXTS:
                 docs = await asyncio.to_thread(
@@ -836,7 +838,7 @@ async def ingest_native_batch(
                 # retry re-explodes the container cleanly instead of finding
                 # a lone container row and skipping it.
                 for d in docs:
-                    _stamp_source(d, job)
+                    _stamp_source(d, stamp)
                 await _persist_documents(db, job_id, docs)
             else:
                 doc = await asyncio.to_thread(
@@ -846,7 +848,7 @@ async def ingest_native_batch(
                 if doc is None:
                     await _incr_skipped(db, job_id, skip_key)
                     continue
-                _stamp_source(doc, job)
+                _stamp_source(doc, stamp)
                 await _persist_document(db, job_id, doc)
         except Exception as e:
             logger.exception("Failed to process native file %s", item.get("relative_path"))
