@@ -818,6 +818,11 @@ async def ingest_native_batch(
             await _incr_skipped(db, job_id, skip_key)
             continue
         ext = os.path.splitext(item["filename"])[1].lower()
+        # Release the connection before the potentially minutes-long
+        # extraction/render — Neon kills connections idling inside a
+        # transaction and the post-work flush dies with "connection is
+        # closed" (see PR #87's identical commit-before-model-call fix).
+        await db.commit()
         try:
             if ext in EMAIL_EXTS:
                 docs = await asyncio.to_thread(

@@ -672,6 +672,14 @@ async def ingest_batch(
             if bates_begin in existing:
                 await _incr_skipped(db, job_id, f"bates:{bates_begin}")
                 continue
+            # Return the session's connection to the pool before the
+            # potentially minutes-long conversion: Neon kills connections
+            # idling inside a transaction, and the post-render flush then
+            # dies with "connection is closed" (same failure mode and fix
+            # as the timeline-review's commit-before-model-call, PR #87).
+            # pool_pre_ping only validates at checkout, so the connection
+            # must actually go back to the pool.
+            await db.commit()
             try:
                 # Run the CPU/IO-bound conversion in a thread so it can't block
                 # the event loop (a long render starves asyncpg and corrupts its
@@ -758,6 +766,12 @@ async def ingest_pdf_batch(
         if item["storage_path"] in existing:
             await _incr_skipped(db, job_id, f"pdf:{item['storage_path']}")
             continue
+        # Release the connection before the minutes-long render/OCR — Neon
+        # kills connections idling inside a transaction and the post-render
+        # flush dies with "connection is closed" (see PR #87's identical
+        # commit-before-model-call fix). This is why the largest documents
+        # of a load failed on every attempt while small ones succeeded.
+        await db.commit()
         try:
             # Offload rendering/OCR/upload to a thread; a large PDF rendered
             # inline would block the event loop and break the DB connection.
