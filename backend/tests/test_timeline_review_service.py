@@ -276,3 +276,26 @@ def test_run_refusal_fails_applies_nothing(monkeypatch):
     with pytest.raises(tr.ReviewError):
         asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
     assert db.deleted == []
+
+
+def test_run_releases_connection_before_model_call(monkeypatch):
+    # The model call takes minutes; the read transaction must end first so
+    # the pooled connection isn't held idle through it (Neon kills those —
+    # observed in prod as InterfaceError on apply's first query).
+    ev = _event(4)
+    commits_at_call = []
+
+    async def fake_call(content):
+        return json.dumps({"verdicts": []}), "end_turn", {}
+
+    db = _run_db([ev])
+    orig = fake_call
+
+    async def spying_call(content):
+        commits_at_call.append(db.commits)
+        return await orig(content)
+
+    monkeypatch.setattr(tr, "_call_review_model", spying_call)
+    out = asyncio.run(tr.run_timeline_review(db, 1, FakeUser()))
+    assert out["status"] == "done"
+    assert commits_at_call == [1]

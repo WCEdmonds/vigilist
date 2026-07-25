@@ -367,6 +367,12 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
         participants.setdefault(ev_id, []).append(name)
 
     serialized = serialize_timeline(events, bates, participants)
+    # The model call takes minutes. End the read transaction first so the
+    # connection returns to the pool — a connection held checked-out through
+    # the call sits idle past Neon's kill window and dies (InterfaceError on
+    # the next query). pool_pre_ping hands apply a fresh connection after,
+    # and expire_on_commit=False keeps the loaded rows usable.
+    await db.commit()
     raw, stop_reason, usage = await _call_review_model(
         build_review_user_content(serialized, len(events)))
     if stop_reason == "max_tokens":

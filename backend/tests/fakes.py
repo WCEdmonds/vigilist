@@ -68,6 +68,7 @@ class FakeSession:
         self.executed = []
         self.added = []
         self.deleted = []
+        self.commits = 0
 
     async def get(self, model, key):
         return self._get_objects.get((model.__name__, key))
@@ -90,7 +91,7 @@ class FakeSession:
         pass
 
     async def commit(self):
-        pass
+        self.commits += 1
 
     async def refresh(self, obj):
         _fill_timestamps(obj)
