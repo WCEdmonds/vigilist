@@ -153,7 +153,7 @@ def process_native_record(
 ) -> Document | None:
     """Turn one uploaded native file into an unsaved Document. Never raises."""
     from app.services.ingest_pdf import (
-        _ocr_jpeg,
+        _ocr_jpeg_text,
         looks_like_bates_stub,
         process_pdf_record,
     )
@@ -191,7 +191,7 @@ def process_native_record(
 
     # Everything else: dispatch text extraction (images use Vision OCR).
     try:
-        res = extract(filename, data, ocr_fn=_ocr_jpeg)
+        res = extract(filename, data, ocr_fn=_ocr_jpeg_text)
 
         folder = os.path.dirname(relative_path)
         metadata = {"File Name": filename}
@@ -286,7 +286,7 @@ def process_native_email(
     errors: list[str],
 ) -> list[Document]:
     """Expand one email container into parent + attachment Documents. Never raises."""
-    from app.services.ingest_pdf import _ocr_jpeg
+    from app.services.ingest_pdf import _ocr_jpeg_text
 
     base_control = f"{prefix} {global_index + 1:06d}"
     storage_path = item["storage_path"]
@@ -308,7 +308,7 @@ def process_native_email(
         custodian=custodian,
         errors=errors,
         native_path=storage_path,
-        ocr_fn=_ocr_jpeg,
+        ocr_fn=_ocr_jpeg_text,
     )
 
 
@@ -479,27 +479,21 @@ def _build_zip_pdf_document(
     """Render a PDF found inside a zip through the SAME page-render path as a
     top-level PDF upload (``process_pdf_record``), just fed from in-memory
     bytes instead of a storage download. Never raises."""
-    from app.services.ingest_pdf import iter_pdf_pages, looks_like_bates_stub
-    from app.services.storage import upload_bytes
+    from app.services.ingest_pdf import iter_pdf_pages, looks_like_bates_stub, upload_page_assets
 
     image_paths: list[str] = []
+    ocr_paths: list[str] = []
     text_parts: list[str] = []
     page_count = 0
     try:
-        for page_num, jpeg, page_text in iter_pdf_pages(data, ocr_fn=ocr_fn):
+        for page_num, jpeg, page_ocr in iter_pdf_pages(data, ocr_fn=ocr_fn):
             page_count = page_num
-            if page_text:
-                text_parts.append(page_text)
-            remote = (
-                f"productions/{production_id}/converted/"
-                f"{control_number.replace(' ', '_')}_{page_num:04d}.jpg"
+            if page_ocr is not None and page_ocr.text:
+                text_parts.append(page_ocr.text)
+            upload_page_assets(
+                production_id, control_number, page_num, jpeg, page_ocr,
+                image_paths, ocr_paths, errors
             )
-            try:
-                upload_bytes(jpeg, remote, content_type="image/jpeg")
-                image_paths.append(remote)
-            except Exception as e:
-                errors.append(f"{control_number}: image upload failed page {page_num}: {e}")
-                image_paths.append("")
     except Exception as e:
         errors.append(f"{control_number}: failed to render {name}: {e}")
         return None
@@ -516,6 +510,7 @@ def _build_zip_pdf_document(
         text_content=("\n\n".join(text_parts) or None),
         native_path=None,
         image_paths=image_paths,
+        ocr_paths=ocr_paths,
         family_id=family_id,
         file_name=name,
         file_type="pdf",
@@ -546,7 +541,19 @@ def _build_zip_child_documents(
     convention). Never raises — worst case is a skipped/error entry."""
     from app.services.ingest_pdf import _ocr_jpeg, looks_like_bates_stub
 
-    effective_ocr = ocr_fn if ocr_fn is not None else _ocr_jpeg
+    # ``ocr_fn`` (injected by tests) or the real Vision OCR, both returning
+    # the PageOcr contract — this is what the PDF branch (iter_pdf_pages)
+    # needs. The email/generic branches ultimately feed extract(), which
+    # expects a plain str, so image_ocr_fn adapts pdf_ocr_fn's PageOcr result
+    # down to its .text at that boundary. Keeping these separate (rather than
+    # one "effective_ocr" serving both) is what avoids a PageOcr leaking into
+    # extract()'s str-only contract.
+    pdf_ocr_fn = ocr_fn if ocr_fn is not None else _ocr_jpeg
+
+    def image_ocr_fn(jpeg_bytes: bytes) -> str:
+        page = pdf_ocr_fn(jpeg_bytes)
+        return page.text if page else ""
+
     ext = os.path.splitext(name)[1].lower()
 
     if ext == ".pdf":
@@ -559,7 +566,7 @@ def _build_zip_child_documents(
             custodian=custodian,
             source_path=source_path,
             errors=errors,
-            ocr_fn=effective_ocr,
+            ocr_fn=pdf_ocr_fn,
         )
         return [doc] if doc else []
 
@@ -573,7 +580,7 @@ def _build_zip_child_documents(
             custodian=custodian,
             errors=errors,
             native_path=None,
-            ocr_fn=effective_ocr,
+            ocr_fn=image_ocr_fn,
         )
         # Every message/attachment this email container expands into still
         # joins the zip container's family — not its own per-message family.
@@ -582,7 +589,7 @@ def _build_zip_child_documents(
         return docs
 
     try:
-        res = extract(name, data, ocr_fn=effective_ocr)
+        res = extract(name, data, ocr_fn=image_ocr_fn)
     except Exception as e:  # extract() already never raises; belt and suspenders
         errors.append(f"{control_number}: extraction failed: {e}")
         return []

@@ -65,6 +65,34 @@ def test_extract_image_uses_ocr_fn():
     assert r.file_type == "image"
 
 
+def test_extract_image_with_real_ocr_jpeg_text_wrapper(monkeypatch):
+    """Regression (final review Finding 1): ``_ocr_jpeg`` returns ``PageOcr |
+    None`` (the layout-aware contract ``iter_pdf_pages`` needs), but
+    ``extract()`` expects a plain ``str`` ocr_fn and calls ``.strip()`` on the
+    result — mixing the two contracts raised
+    ``'PageOcr' object has no attribute 'strip'`` for every standalone image
+    routed through ``extract(ocr_fn=_ocr_jpeg)``.
+
+    This exercises the REAL wiring: monkeypatch the actual Vision entry point
+    (``app.services.ocr.ocr_page_vision_bytes``) to return a PageOcr, then
+    call ``extract()`` with the real ``_ocr_jpeg_text`` adapter — not a
+    hand-stubbed string fn — so a regression that reintroduces the PageOcr
+    leak fails with an AttributeError instead of silently passing.
+    """
+    import app.services.ocr as ocr_mod
+    from app.services.ingest_pdf import _ocr_jpeg_text
+    from app.services.ocr import PageOcr
+
+    monkeypatch.setattr(ocr_mod, "ocr_page_vision_bytes", lambda b: PageOcr(text="RECOVERED"))
+
+    r = extract("scan.jpg", b"\xff\xd8\xff-fake-jpeg", ocr_fn=_ocr_jpeg_text)
+
+    assert r.text == "RECOVERED"
+    assert r.extraction_status == "ok"
+    assert r.extraction_status != "error"
+    assert r.file_type == "image"
+
+
 def test_extract_unsupported():
     for name in ("old.doc", "mail.msg", "archive.pst", "weird.xyz", "noext"):
         r = extract(name, b"whatever")

@@ -7,6 +7,7 @@ import zipfile
 import fitz  # PyMuPDF
 
 from app.services import ingest_native as ingest_native_mod
+from app.services import ingest_pdf as pdf_mod
 from app.services import storage as storage_mod
 from app.services.ingest_native import build_zip_documents
 
@@ -300,9 +301,12 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
     """Finding 2(a): a PDF found inside a zip must go through the SAME
     page-render path as a top-level PDF (child doc with page_count set) and
     join the container's family."""
+    from app.services.ocr import PageOcr
+
     uploaded: list[str] = []
+    # Mock upload_bytes in pdf_mod since upload_page_assets uses it from there
     monkeypatch.setattr(
-        storage_mod,
+        pdf_mod,
         "upload_bytes",
         lambda data, remote, content_type=None: uploaded.append(remote) or remote,
     )
@@ -315,7 +319,7 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
         production_id=1,
         source_path="uploads/withpdf.zip",
         custodian="Alice",
-        ocr_fn=lambda jpeg_bytes: "",
+        ocr_fn=lambda jpeg_bytes: PageOcr(),
     )
 
     container = docs[0]
@@ -328,7 +332,9 @@ def test_pdf_entry_in_zip_renders_via_pdf_path_and_joins_container_family(monkey
     assert "hello from zip pdf" in (child.text_content or "")
     assert child.extraction_status == "ok"
     assert child.family_id == container.family_id == "PREFIX 000013"
-    assert len(uploaded) == 1
+    assert len(uploaded) == 2  # JPEG + sidecar
+    assert uploaded[0].endswith(".jpg")  # JPEG first
+    assert uploaded[1].endswith(".json")  # sidecar second
     assert container.extraction_status == "ok"
 
 

@@ -1,6 +1,7 @@
 import fitz  # PyMuPDF
 
 from app.services.ingest_pdf import derive_bates_prefix, iter_pdf_pages
+from app.services.ocr import PageOcr
 
 
 def test_prefix_uppercases_first_token():
@@ -61,34 +62,100 @@ def _blank_two_page_pdf() -> bytes:
 def test_born_digital_uses_embedded_text_and_skips_ocr():
     ocr_calls = []
 
-    def fake_ocr(jpeg_bytes: bytes) -> str:
+    def fake_ocr(jpeg_bytes: bytes) -> PageOcr:
         ocr_calls.append(jpeg_bytes)
-        return "SHOULD-NOT-BE-USED"
+        return PageOcr(text="SHOULD-NOT-BE-USED")
 
     pages = list(iter_pdf_pages(_born_digital_pdf("Hello discovery"), ocr_fn=fake_ocr))
 
     assert len(pages) == 1
-    page_num, jpeg, text = pages[0]
+    page_num, jpeg, page_ocr = pages[0]
     assert page_num == 1
     assert jpeg[:3] == b"\xff\xd8\xff"  # JPEG magic bytes
-    assert "Hello discovery" in text
+    assert "Hello discovery" in page_ocr.text
     assert ocr_calls == []  # OCR not invoked for born-digital text
 
 
+def test_born_digital_words_have_percent_boxes():
+    pages = list(iter_pdf_pages(_born_digital_pdf("Hello discovery"), ocr_fn=lambda b: PageOcr()))
+    page_ocr = pages[0][2]
+
+    assert page_ocr.width > 0 and page_ocr.height > 0
+    texts = [w["t"] for w in page_ocr.words]
+    assert texts == ["Hello", "discovery"]
+    for w in page_ocr.words:
+        assert 0.0 <= w["x"] <= 100.0 and 0.0 <= w["y"] <= 100.0
+        assert w["w"] > 0.0 and w["h"] > 0.0
+        assert w["x"] + w["w"] <= 100.0 and w["y"] + w["h"] <= 100.0
+        assert w["c"] == 1.0  # embedded text layer is exact
+
+
 def test_scanned_page_falls_back_to_ocr():
-    def fake_ocr(jpeg_bytes: bytes) -> str:
-        return "OCR-RECOVERED-TEXT"
+    def fake_ocr(jpeg_bytes: bytes) -> PageOcr:
+        return PageOcr(text="OCR-RECOVERED-TEXT")
 
     pages = list(iter_pdf_pages(_blank_two_page_pdf(), ocr_fn=fake_ocr))
 
     assert len(pages) == 2
-    combined = "\n\n".join(text for _, _, text in pages)
+    combined = "\n\n".join(p.text for _, _, p in pages)
     assert combined.count("OCR-RECOVERED-TEXT") == 2
 
 
 def test_pages_rendered_for_every_page():
-    pages = list(iter_pdf_pages(_blank_two_page_pdf(), ocr_fn=lambda b: ""))
+    pages = list(iter_pdf_pages(_blank_two_page_pdf(), ocr_fn=lambda b: PageOcr()))
     assert [p[0] for p in pages] == [1, 2]  # page numbers, every page yielded
+
+
+def test_pdf_words_pct_transforms_boxes_through_page_rotation():
+    """Regression (final review Finding 2): page.get_text("words") always
+    reports coordinates in the page's UNROTATED frame, even though
+    page.get_pixmap() renders the ROTATED view and page.rect reports the
+    rotated dims once /Rotate is set. _pdf_words_pct must transform each word
+    rect through page.rotation_matrix (identity when unrotated) before
+    converting to percent-of-page, or sidecar boxes land on the wrong
+    content.
+    """
+    unrotated_bytes = _born_digital_pdf("Hello discovery")
+
+    rotated_doc = fitz.open(stream=unrotated_bytes, filetype="pdf")
+    rotated_doc[0].set_rotation(90)
+    rotated_bytes = rotated_doc.tobytes()
+    rotated_doc.close()
+
+    unrotated_pages = list(iter_pdf_pages(unrotated_bytes, ocr_fn=lambda b: PageOcr()))
+    rotated_pages = list(iter_pdf_pages(rotated_bytes, ocr_fn=lambda b: PageOcr()))
+
+    unrotated_box = unrotated_pages[0][2].words[0]
+    rotated_words = rotated_pages[0][2].words
+    rotated_box = rotated_words[0]
+
+    # Same source text, but the rotated view must place the word box somewhere
+    # else entirely — proof the fix actually re-projects it.
+    assert (rotated_box["x"], rotated_box["y"]) != (unrotated_box["x"], unrotated_box["y"])
+
+    for w in rotated_words:
+        assert 0.0 <= w["x"]
+        assert 0.0 <= w["y"]
+        assert w["x"] + w["w"] <= 100.0
+        assert w["y"] + w["h"] <= 100.0
+
+    # Stronger check: the box's center must match an independent manual
+    # transform via page.rotation_matrix (the fix's exact mechanism),
+    # computed here rather than by calling _pdf_words_pct again.
+    check_doc = fitz.open(stream=rotated_bytes, filetype="pdf")
+    check_page = check_doc[0]
+    x0, y0, x1, y1, *_ = check_page.get_text("words")[0]
+    r = fitz.Rect(x0, y0, x1, y1) * check_page.rotation_matrix
+    r.normalize()
+    rect = check_page.rect
+    expected_cx = ((r.x0 + r.x1) / 2) / rect.width * 100
+    expected_cy = ((r.y0 + r.y1) / 2) / rect.height * 100
+    check_doc.close()
+
+    actual_cx = rotated_box["x"] + rotated_box["w"] / 2
+    actual_cy = rotated_box["y"] + rotated_box["h"] / 2
+    assert abs(actual_cx - expected_cx) < 0.5
+    assert abs(actual_cy - expected_cy) < 0.5
 
 
 from app.services import ingest_pdf as pdf_mod
@@ -150,8 +217,8 @@ def test_process_pdf_record_assembles_document(monkeypatch):
         "iter_pdf_pages",
         lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: iter(
             [
-                (1, b"\xff\xd8jpeg1", "extracted text"),
-                (2, b"\xff\xd8jpeg2", ""),
+                (1, b"\xff\xd8jpeg1", PageOcr(text="extracted text", words=[], width=100, height=200)),
+                (2, b"\xff\xd8jpeg2", PageOcr()),
             ]
         ),
     )
@@ -179,9 +246,82 @@ def test_process_pdf_record_assembles_document(monkeypatch):
     assert doc.metadata_["File Name"] == "first.pdf"
     assert doc.metadata_["Folder"] == "A"
     assert doc.native_path == "productions/7/raw/A/first.pdf"
-    assert len(doc.image_paths) == 2
-    assert len(uploaded) == 2
+    assert doc.image_paths == [
+        "productions/7/converted/SMITH_000001_0001.jpg",
+        "productions/7/converted/SMITH_000001_0002.jpg",
+    ]
+    # one sidecar per page, stem matches the page JPEG
+    assert doc.ocr_paths == [
+        "productions/7/ocr/SMITH_000001_0001.json",
+        "productions/7/ocr/SMITH_000001_0002.json",
+    ]
+    assert uploaded == [
+        "productions/7/converted/SMITH_000001_0001.jpg",
+        "productions/7/ocr/SMITH_000001_0001.json",
+        "productions/7/converted/SMITH_000001_0002.jpg",
+        "productions/7/ocr/SMITH_000001_0002.json",
+    ]
     assert errors == []
+
+
+def test_process_pdf_record_ocr_failure_marks_empty_ocr_path(monkeypatch):
+    """ocr_fn returned None (Vision failed): no sidecar, '' placeholder."""
+    item = {
+        "storage_path": "productions/7/raw/A/first.pdf",
+        "relative_path": "A/first.pdf",
+        "filename": "first.pdf",
+    }
+    monkeypatch.setattr(pdf_mod, "get_download_bytes", lambda path: b"%PDF-fake")
+    monkeypatch.setattr(
+        pdf_mod,
+        "iter_pdf_pages",
+        lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: iter([(1, b"\xff\xd8jpeg1", None)]),
+    )
+    monkeypatch.setattr(
+        pdf_mod, "upload_bytes", lambda data, remote, content_type=None: remote
+    )
+
+    errors: list[str] = []
+    doc = process_pdf_record(7, item, 0, "SMITH", errors)
+
+    assert doc.text_content is None
+    assert doc.ocr_paths == [""]
+
+
+def test_process_pdf_record_sidecar_upload_failure(monkeypatch):
+    """Sidecar upload fails (e.g., perms): page still builds, ocr_paths=[''], error logged."""
+    item = {
+        "storage_path": "productions/7/raw/A/first.pdf",
+        "relative_path": "A/first.pdf",
+        "filename": "first.pdf",
+    }
+    monkeypatch.setattr(pdf_mod, "get_download_bytes", lambda path: b"%PDF-fake")
+    monkeypatch.setattr(
+        pdf_mod,
+        "iter_pdf_pages",
+        lambda pdf_bytes, ocr_fn, dpi=pdf_mod.RENDER_DPI: iter(
+            [
+                (1, b"\xff\xd8jpeg1", PageOcr(text="extracted text", words=[], width=100, height=200)),
+            ]
+        ),
+    )
+    uploaded = []
+    def fake_upload(data, remote, content_type=None):
+        uploaded.append(remote)
+        if remote.endswith(".json"):
+            raise IOError("sidecar upload denied")
+        return remote
+    monkeypatch.setattr(pdf_mod, "upload_bytes", fake_upload)
+
+    errors: list[str] = []
+    doc = process_pdf_record(7, item, 0, "SMITH", errors)
+
+    assert doc is not None
+    assert doc.text_content == "extracted text"
+    assert doc.image_paths == ["productions/7/converted/SMITH_000001_0001.jpg"]
+    assert doc.ocr_paths == [""]
+    assert any("sidecar upload failed" in e for e in errors)
+    assert len(uploaded) == 2  # JPEG attempted, then sidecar attempted
 
 
 def test_inline_ingest_fails_job_when_no_sources_found(monkeypatch):
