@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { deleteEvent, getTimeline, listEntities, updateEvent } from '../api/client';
+import {
+  deleteEvent, getTimeline, getTimelineReviewStatus, listEntities, triggerTimelineReview, updateEvent,
+} from '../api/client';
 import type { DatePrecision, EntityListItem, TimelineEvent } from '../types';
 import EntityPanel from './EntityPanel';
 import { showToast } from './Toast';
@@ -134,6 +136,10 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
   const [editError, setEditError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
+
+  // ── AI review ──
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewMsg, setReviewMsg] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -311,6 +317,48 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
     setRetryTick(t => t + 1);
   };
 
+  const startReview = async () => {
+    if (!window.confirm(
+      'Run an AI review of this chronology? Cross-document duplicates will be '
+      + 'merged, irrelevant entries removed, and clear date errors corrected. '
+      + 'Every change is recorded in the audit log.')) return;
+    setReviewMsg(null);
+    try {
+      await triggerTimelineReview(productionId);
+      setReviewing(true);
+    } catch (e) {
+      setReviewMsg(errText(e));
+    }
+  };
+
+  // Poll while the background review runs; on completion reload page 1 the
+  // same way the retry path does, so merged/removed events disappear.
+  useEffect(() => {
+    if (!reviewing) return;
+    const timer = setInterval(async () => {
+      try {
+        const s = await getTimelineReviewStatus(productionId);
+        if (s.state === 'done') {
+          setReviewing(false);
+          const m = s.summary;
+          setReviewMsg(m
+            ? `Review complete — ${m.merged ?? 0} merged, ${m.deleted ?? 0} removed, ${m.edited ?? 0} corrected.`
+            : 'Review complete.');
+          setEvents([]);
+          setPage(1);
+          setSettledPage(0);
+          setRetryTick(t => t + 1);
+        } else if (s.state === 'failed') {
+          setReviewing(false);
+          setReviewMsg(s.error ? `Review failed: ${s.error}` : 'Review failed.');
+        }
+      } catch {
+        // transient poll failure — keep polling
+      }
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [reviewing, productionId]);
+
   const startEdit = (e: TimelineEvent) => {
     setEditingId(e.event_id);
     setConfirmingId(null);
@@ -487,6 +535,11 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
               All events
             </button>
           </div>
+          <button className="chrono-review" onClick={startReview} disabled={reviewing}
+                  title="AI review: merge duplicate events, drop irrelevant entries, fix clear date errors (manager only)">
+            {reviewing ? 'Reviewing…' : 'AI review'}
+          </button>
+          {reviewMsg && <span className="chrono-review-msg">{reviewMsg}</span>}
         </div>
 
         <div className="chrono-bar-row">

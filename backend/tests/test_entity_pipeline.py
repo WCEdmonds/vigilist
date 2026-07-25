@@ -30,7 +30,8 @@ class FakeDoc:
 
 
 def test_entities_stage_registered_between_summaries_and_brief():
-    assert pipeline.STAGES == ("clustering", "summaries", "entities", "brief")
+    assert pipeline.STAGES == ("clustering", "summaries", "entities",
+                               "timeline_review", "brief")
     assert "entities" in pipeline._STAGE_RUNNERS
 
 

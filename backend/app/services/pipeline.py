@@ -21,7 +21,7 @@ from app.services.clustering import cluster_production
 
 logger = logging.getLogger(__name__)
 
-STAGES = ("clustering", "summaries", "entities", "brief")
+STAGES = ("clustering", "summaries", "entities", "timeline_review", "brief")
 SUMMARY_BATCH_SIZE = 25
 ENTITY_BATCH_SIZE = 10
 
@@ -200,6 +200,26 @@ async def _run_entities(production_id: int) -> None:
             raise RuntimeError("entity extraction: entire batch failed (no API key or persistent errors)")
 
 
+async def _run_timeline_review(production_id: int) -> None:
+    """AI review of the extracted timeline (spec:
+    docs/superpowers/specs/2026-07-24-timeline-review-design.md). Runs after
+    entities so the review sees the full extraction, before brief so the
+    brief regenerates from the cleaned chronology."""
+    from app.services.audit import resolve_audit_actor
+    from app.services.timeline_review import run_timeline_review
+    async with async_session() as db:
+        prod = await db.get(Production, production_id)
+        if prod is None:
+            return
+        actor = await resolve_audit_actor(db, prod)
+        if actor is None:
+            logger.warning("Timeline review skipped for production %s: "
+                           "no owner to attribute audit rows to", production_id)
+            return
+        await run_timeline_review(db, production_id, actor)
+        await db.commit()
+
+
 async def _run_brief(production_id: int) -> None:
     async with async_session() as db:
         brief = await generate_brief(db, production_id)
@@ -228,6 +248,7 @@ _STAGE_RUNNERS = {
     "clustering": _run_clustering,
     "summaries": _run_summaries,
     "entities": _run_entities,
+    "timeline_review": _run_timeline_review,
     "brief": _run_brief,
 }
 
@@ -254,3 +275,18 @@ async def run_ambient_pipeline(production_id: int, force: bool = False) -> None:
             await _set_stage(production_id, stage, "failed", error=str(exc)[:300])
         else:
             await _set_stage(production_id, stage, "done")
+
+
+async def run_timeline_review_stage(production_id: int) -> None:
+    """Standalone timeline-review run for the manager endpoint — same
+    stage-status writes as the pipeline loop, so one status surface serves
+    both triggers. Never raises."""
+    await _set_stage(production_id, "timeline_review", "running")
+    try:
+        await _run_timeline_review(production_id)
+    except Exception as exc:
+        logger.exception("Timeline review failed for production %s", production_id)
+        await _set_stage(production_id, "timeline_review", "failed",
+                         error=str(exc)[:300])
+    else:
+        await _set_stage(production_id, "timeline_review", "done")

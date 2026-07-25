@@ -339,8 +339,8 @@ async def trigger_entity_extraction(
     /reset-entities endpoint was consolidated into it): the production's
     entire ontology (entities, mentions, events, participants, relationships,
     merge suggestions) is deleted, every document's extraction mark is
-    cleared, and the pipeline's entities/brief stage state is reset, so the
-    run re-reads the whole matter — the recovery path after
+    cleared, and the pipeline's entities/timeline_review/brief stage state is
+    reset, so the run re-reads the whole matter — the recovery path after
     extraction-quality changes.
     """
     from app.dependencies import (ROLE_RANK, get_accessible_production_ids,
@@ -380,15 +380,15 @@ async def trigger_entity_extraction(
         # stages_to_run() skips any stage marked "done", and an
         # already-processed matter has entities: "done" — leaving that in
         # place after wiping the ontology would strand the matter permanently
-        # empty. We drop just the entities + brief keys (the brief is derived
-        # from entities, so it must regenerate too) rather than enqueueing
-        # with force=True, which would needlessly re-run clustering and
-        # summaries whose outputs the rebuild leaves intact.
+        # empty. We drop the entities + timeline_review + brief keys (both
+        # are derived from entities, so both must regenerate too) rather than
+        # enqueueing with force=True, which would needlessly re-run
+        # clustering and summaries whose outputs the rebuild leaves intact.
         prod = await db.get(Production, production_id)
         if prod is not None:
             status = dict(prod.ai_pipeline_status or {})
             errors = dict(status.get("errors") or {})
-            for stage in ("entities", "brief"):
+            for stage in ("entities", "timeline_review", "brief"):
                 status.pop(stage, None)
                 errors.pop(stage, None)
             status["errors"] = errors
