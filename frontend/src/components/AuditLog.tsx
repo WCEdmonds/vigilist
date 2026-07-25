@@ -8,6 +8,78 @@ interface Props {
   onClose: () => void;
 }
 
+/** The slice of AI-review audit `details` the prose renderer reads. */
+interface ReviewSnapshot {
+  description?: string;
+  event_date?: string | null;
+  date_precision?: string;
+  event_type?: string;
+  significance?: number | null;
+}
+
+interface ReviewDetails {
+  actor?: string;
+  reason?: string;
+  confidence?: number;
+  snapshot?: ReviewSnapshot;
+  before?: ReviewSnapshot;
+  after?: ReviewSnapshot;
+  absorbed?: number[];
+  merged_into?: number;
+  merged?: number;
+  deleted?: number;
+  edited?: number;
+  rerated?: number;
+  skipped?: number;
+  event_count?: number;
+  model?: string;
+}
+
+const pct = (c?: number) => (c == null ? '' : ` · ${Math.round(c * 100)}% confident`);
+
+/** Field-level before → after description for review edits/rerates. */
+function diffLine(before?: ReviewSnapshot, after?: ReviewSnapshot): string {
+  if (!before || !after) return '';
+  const parts: string[] = [];
+  if (before.event_date !== after.event_date || before.date_precision !== after.date_precision) {
+    parts.push(`date ${before.event_date ?? 'unset'} → ${after.event_date ?? 'unset'}`);
+  }
+  if (before.event_type !== after.event_type) parts.push(`type ${before.event_type} → ${after.event_type}`);
+  if (before.description !== after.description) parts.push('description rewritten');
+  if (before.significance !== after.significance) {
+    parts.push(`significance ${before.significance ?? '—'} → ${after.significance ?? '—'}`);
+  }
+  return parts.join(', ');
+}
+
+/** Prose for the AI-review rows; null falls back to the raw-JSON cell. */
+function describeReview(action: string, d: ReviewDetails): string | null {
+  switch (action) {
+    case 'event_deleted_by_review': {
+      const what = d.snapshot?.description ?? 'event';
+      const when = d.snapshot?.event_date ?? 'undated';
+      const via = d.merged_into != null ? ` (duplicate of event ${d.merged_into})` : '';
+      return `Removed “${what}” (${when})${via} — ${d.reason ?? ''}${pct(d.confidence)}`;
+    }
+    case 'event_merged_by_review':
+      return `Absorbed ${d.absorbed?.length ?? 0} duplicate event(s) — ${d.reason ?? ''}${pct(d.confidence)}`;
+    case 'event_edited_by_review':
+      return `Corrected ${diffLine(d.before, d.after) || 'fields'} — ${d.reason ?? ''}${pct(d.confidence)}`;
+    case 'event_rerated_by_review':
+      return `Significance ${d.before?.significance ?? '—'} → ${d.after?.significance ?? '—'} — ${d.reason ?? ''}${pct(d.confidence)}`;
+    case 'timeline_review_completed': {
+      const rerated = d.rerated != null ? `, ${d.rerated} re-rated` : '';
+      return `Run finished: ${d.merged ?? 0} merged, ${d.deleted ?? 0} removed, `
+        + `${d.edited ?? 0} corrected${rerated}, ${d.skipped ?? 0} skipped `
+        + `(${d.event_count ?? '?'} events reviewed · ${d.model ?? 'AI'})`;
+    }
+    case 'timeline_review_triggered':
+      return 'AI review requested';
+    default:
+      return null;
+  }
+}
+
 export default function AuditLog({ productionId, onClose }: Props) {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [total, setTotal] = useState(0);
@@ -79,6 +151,11 @@ export default function AuditLog({ productionId, onClose }: Props) {
             <option value="ai_suggestion_overridden">AI Suggestion Overridden</option>
             <option value="ai_suggestions_bulk_accepted">Bulk Accept</option>
             <option value="pipeline_run_requested">Pipeline Run</option>
+            <option value="timeline_review_completed">AI Review Runs</option>
+            <option value="event_merged_by_review">AI Review: Merges</option>
+            <option value="event_deleted_by_review">AI Review: Removals</option>
+            <option value="event_edited_by_review">AI Review: Corrections</option>
+            <option value="event_rerated_by_review">AI Review: Re-ratings</option>
           </select>
           <button className="btn btn-secondary" onClick={handleExportCsv}>
             Export CSV
@@ -96,17 +173,33 @@ export default function AuditLog({ productionId, onClose }: Props) {
             </tr>
           </thead>
           <tbody>
-            {logs.map(log => (
-              <tr key={log.id}>
-                <td>{new Date(log.created_at).toLocaleString()}</td>
-                <td>{log.user_email}</td>
-                <td>{log.action.replace(/_/g, ' ')}</td>
-                <td>{log.resource_type}{log.resource_id ? `: ${log.resource_id.slice(0, 8)}...` : ''}</td>
-                <td style={{ fontSize: '0.8em', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {JSON.stringify(log.details)}
-                </td>
-              </tr>
-            ))}
+            {logs.map(log => {
+              const details = log.details as ReviewDetails;
+              const isAi = details?.actor === 'ai_timeline_review';
+              const prose = describeReview(log.action, details ?? {});
+              return (
+                <tr key={log.id}>
+                  <td>{new Date(log.created_at).toLocaleString()}</td>
+                  {/* Review actions are attributed to the owner for accountability,
+                      but the reader should see at a glance the AI made the change. */}
+                  <td title={isAi ? `on behalf of ${log.user_email}` : undefined}>
+                    {isAi ? 'AI review' : log.user_email}
+                  </td>
+                  <td>{log.action.replace(/_/g, ' ')}</td>
+                  <td>{log.resource_type}{log.resource_id ? `: ${log.resource_id.slice(0, 8)}...` : ''}</td>
+                  {prose !== null ? (
+                    <td style={{ fontSize: '0.8em', maxWidth: 380, whiteSpace: 'normal' }}
+                        title={JSON.stringify(log.details)}>
+                      {prose}
+                    </td>
+                  ) : (
+                    <td style={{ fontSize: '0.8em', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {JSON.stringify(log.details)}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
             {logs.length === 0 && (
               <tr><td colSpan={5} style={{ textAlign: 'center' }}>No audit logs found</td></tr>
             )}
