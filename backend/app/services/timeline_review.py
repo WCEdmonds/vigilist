@@ -378,7 +378,7 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
     events = [r[0] for r in rows]
     if not events:
         return {"status": "empty", "merged": 0, "deleted": 0, "edited": 0,
-                "skipped": 0, "skip_reasons": []}
+                "rerated": 0, "skipped": 0, "skip_reasons": []}
     bates = {r[0].id: r[1] for r in rows}
 
     name_rows = (await db.execute(

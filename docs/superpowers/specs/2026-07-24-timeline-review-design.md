@@ -67,6 +67,10 @@ overarching review pass by a smarter model that cleans all three up.
       "reason": "...", "confidence": 0.0
     },
     {
+      "kind": "rerate", "event_id": 6, "significance": 1,
+      "reason": "...", "confidence": 0.0
+    },
+    {
       "kind": "edit", "event_id": 5,
       "date": "YYYY-MM-DD or null", "precision": "...", "event_type": "...",
       "description": "...",

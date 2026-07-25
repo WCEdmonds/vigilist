@@ -196,10 +196,13 @@ def test_unknown_and_foreign_ids_skip_not_crash():
         _verdict(kind="merge", event_ids=[1], keep_id=1),        # group too small
         _verdict(kind="merge", event_ids=[1, 999], keep_id=999),  # keeper unknown
         _verdict(kind="edit", event_id=1, date="not-a-date", precision="day"),
+        _verdict(kind="rerate", event_id=999, significance=2),
+        _verdict(kind="rerate", event_id=1, significance=0),
         _verdict(kind="frobnicate", event_id=1),
     ])
-    assert summary["skipped"] == 6
+    assert summary["skipped"] == 8
     assert summary["merged"] == summary["deleted"] == summary["edited"] == 0
+    assert summary["rerated"] == 0
 
 
 def test_merge_with_duplicate_ids_applies_once_no_crash():
@@ -334,3 +337,12 @@ def test_schema_includes_rerate_kind_and_significance():
     assert "rerate" in item["properties"]["kind"]["enum"]
     assert "significance" in item["properties"]
     assert "significance" in item["required"]
+
+
+def test_rerate_confidence_gate_skips():
+    ev = _event(9, significance=3)
+    db = _dbase([ev])
+    summary = _run(db, [_verdict(kind="rerate", event_id=9, significance=1,
+                                 confidence=0.5)])
+    assert summary["rerated"] == 0 and summary["skipped"] == 1
+    assert ev.significance == 3
