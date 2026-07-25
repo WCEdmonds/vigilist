@@ -45,13 +45,24 @@ def _effective_mapping(record_keys, field_mapping: dict | None) -> dict:
     return match_aliases(list(record_keys))
 
 
-def _stamp_source(doc, job) -> None:
-    """Stamp job-level source designation; a load-file-mapped source_party wins."""
+def _source_stamp(job) -> dict:
+    """Snapshot the job's source designation into a plain dict.
+
+    Must be taken before the batch loop, while the session is clean: a
+    mid-batch rollback expires the job row, and reading job.field_mapping
+    afterwards triggers a sync lazy refresh that MissingGreenlets on the
+    async session — poisoning every later record in the slice.
+    """
     fm = job.field_mapping or {}
+    return {"source_party": fm.get("source_party"), "source_type": fm.get("source_type")}
+
+
+def _stamp_source(doc, stamp: dict) -> None:
+    """Stamp job-level source designation; a load-file-mapped source_party wins."""
     if getattr(doc, "source_party", None) is None:
-        doc.source_party = fm.get("source_party")
+        doc.source_party = stamp.get("source_party")
     if getattr(doc, "source_type", None) is None:
-        doc.source_type = fm.get("source_type")
+        doc.source_type = stamp.get("source_type")
 
 
 def _apply_metadata(doc, record: dict, field_mapping: dict | None) -> None:
@@ -624,6 +635,7 @@ async def ingest_batch(
         return
 
     field_mapping: dict | None = job.field_mapping or None
+    stamp = _source_stamp(job)
 
     records, opt_pages = bootstrap_ingest_source(
         production_id, (job.field_mapping or {}).get("load_prefix"))
@@ -672,7 +684,7 @@ async def ingest_batch(
                 if doc is None:
                     await _incr_skipped(db, job_id, f"bates:{bates_begin}")
                     continue
-                _stamp_source(doc, job)
+                _stamp_source(doc, stamp)
                 await _persist_document(db, job_id, doc)
             except Exception as e:
                 logger.exception("Failed to process record %s", bates_begin)
@@ -719,6 +731,7 @@ async def ingest_pdf_batch(
     prefix = derive_bates_prefix(production.name if production else "")
 
     fm = job.field_mapping or {}
+    stamp = _source_stamp(job)
     load_prefix = fm.get("load_prefix")
     offset = int(fm.get("control_offset") or 0)
     items = list_pdf_sources(production_id, load_prefix)
@@ -755,7 +768,7 @@ async def ingest_pdf_batch(
             if doc is None:
                 await _incr_skipped(db, job_id, f"pdf:{item['storage_path']}")
                 continue
-            _stamp_source(doc, job)
+            _stamp_source(doc, stamp)
             await _persist_document(db, job_id, doc)
         except Exception as e:
             logger.exception("Failed to process PDF %s", item.get("relative_path"))

@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 import app.routers.ingest as ri
-from app.services.ingest import _stamp_source
+from app.services.ingest import _source_stamp, _stamp_source
 from tests.fakes import FakeSession, FakeUser, _fill_timestamps
 
 
@@ -24,21 +24,23 @@ class FakeJob:
 
 def test_stamp_source_fills_from_job():
     doc = FakeDocLike()
-    _stamp_source(doc, FakeJob({"source_party": "ABC Corp", "source_type": "received"}))
+    stamp = _source_stamp(FakeJob({"source_party": "ABC Corp", "source_type": "received"}))
+    _stamp_source(doc, stamp)
     assert doc.source_party == "ABC Corp"
     assert doc.source_type == "received"
 
 
 def test_stamp_source_never_overwrites_mapped_value():
     doc = FakeDocLike(source_party="From DAT Column")
-    _stamp_source(doc, FakeJob({"source_party": "Job Level", "source_type": "collection"}))
+    stamp = _source_stamp(FakeJob({"source_party": "Job Level", "source_type": "collection"}))
+    _stamp_source(doc, stamp)
     assert doc.source_party == "From DAT Column"
     assert doc.source_type == "collection"
 
 
 def test_stamp_source_handles_missing_mapping():
     doc = FakeDocLike()
-    _stamp_source(doc, FakeJob(None))
+    _stamp_source(doc, _source_stamp(FakeJob(None)))
     assert doc.source_party is None
     assert doc.source_type is None
 
