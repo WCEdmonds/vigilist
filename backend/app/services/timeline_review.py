@@ -58,6 +58,7 @@ def serialize_timeline(events: list, bates: dict, participants: dict) -> str:
             "date": e.event_date.isoformat() if e.event_date else None,
             "precision": e.date_precision,
             "type": e.event_type,
+            "sig": e.significance,
             "desc": e.description,
             "quote": e.date_source_text,
             "bates": bates.get(e.id),
@@ -72,8 +73,9 @@ Return verdicts ONLY where you are confident. Silence means keep: any event you 
 
 Verdict kinds:
 - "merge": two or more entries describe the SAME real-world occurrence (same happening, same or compatible dates — one may be less precise). Recurring similar events (e.g. weekly meetings) are NOT duplicates. Set event_ids to the full group, keep_id to the best-evidenced entry (prefer day-precision dates and the richest description). Optionally supply a corrected description/date/precision for the keeper.
-- "delete": the entry is irrelevant to the dispute (litigation-process machinery like court reporting or filing logistics, pure pleasantries) or is extraction garbage (garbled, meaningless).
+- "delete": the entry is irrelevant to the dispute (litigation-process machinery like court reporting or filing logistics, pure pleasantries) or is extraction garbage (garbled, meaningless). Biographical or CV background is NOT deletion-worthy — rerate it down instead.
 - "edit": the entry's date, precision, type, or description is contradicted by its own quote or is impossible within the surrounding chronology. Only with clear evidence; cite it in reason.
+- "rerate": the entry's significance ("sig", 1-5) misfits the case. Most commonly: biographical or CV background rated 3 or higher — certifications, degrees, licenses, employment history recited from a resume, report, or transcript — should drop to 1-2 so it leaves the default reading view; a credential is background about a person, not an event of the dispute, unless that person's qualifications are themselves contested in the matter. Raise a rating only when an entry is plainly a pivotal case event rated too low. Set significance to the corrected value.
 
 Every verdict carries a one-sentence reason and a confidence from 0 to 1. Confidence below 0.8 will not be applied, so do not pad the list with low-confidence guesses."""
 
@@ -103,7 +105,7 @@ REVIEW_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["merge", "delete", "edit"]},
+                    "kind": {"type": "string", "enum": ["merge", "delete", "edit", "rerate"]},
                     "event_id": _NULL_INT,
                     "event_ids": {"anyOf": [{"type": "array", "items": {"type": "integer"}},
                                             {"type": "null"}]},
@@ -114,12 +116,13 @@ REVIEW_SCHEMA = {
                                             {"type": "null"}]},
                     "event_type": _NULL_STR,
                     "description": _NULL_STR,
+                    "significance": _NULL_INT,
                     "reason": {"type": "string"},
                     "confidence": {"type": "number"},
                 },
                 "required": ["kind", "event_id", "event_ids", "keep_id", "date",
-                             "precision", "event_type", "description", "reason",
-                             "confidence"],
+                             "precision", "event_type", "description",
+                             "significance", "reason", "confidence"],
                 "additionalProperties": False,
             },
         },
@@ -183,8 +186,8 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
     for ev_id, ent_id in part_rows:
         parts_by_event.setdefault(ev_id, set()).add(ent_id)
 
-    summary = {"merged": 0, "deleted": 0, "edited": 0, "skipped": 0,
-               "skip_reasons": []}
+    summary = {"merged": 0, "deleted": 0, "edited": 0, "rerated": 0,
+               "skipped": 0, "skip_reasons": []}
 
     def skip(msg: str) -> None:
         summary["skipped"] += 1
@@ -290,6 +293,26 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
                                      "after": _snapshot(ev)})
             summary["edited"] += 1
 
+        elif kind == "rerate":
+            ev = events.get(v.get("event_id"))
+            if ev is None:
+                skip(f"rerate: unknown event {v.get('event_id')}")
+                continue
+            if ev.id in human_edited:
+                skip(f"rerate: event {ev.id} was human-edited")
+                continue
+            new_sig = v.get("significance")
+            if not isinstance(new_sig, int) or not 1 <= new_sig <= 5:
+                skip(f"rerate: bad significance {new_sig!r}")
+                continue
+            before = _snapshot(ev)
+            ev.significance = new_sig
+            await log_action(db, actor, "event_rerated_by_review", "ontology_event",
+                            str(ev.id), production_id=production_id,
+                            details={**details_for(v), "before": before,
+                                     "after": _snapshot(ev)})
+            summary["rerated"] += 1
+
         else:
             skip(f"unknown verdict kind {kind!r}")
 
@@ -355,7 +378,7 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
     events = [r[0] for r in rows]
     if not events:
         return {"status": "empty", "merged": 0, "deleted": 0, "edited": 0,
-                "skipped": 0, "skip_reasons": []}
+                "rerated": 0, "skipped": 0, "skip_reasons": []}
     bates = {r[0].id: r[1] for r in rows}
 
     name_rows = (await db.execute(
@@ -391,5 +414,6 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
                               "verdict_count": len(verdicts),
                               "skip_reasons": summary["skip_reasons"],
                               **{k: summary[k] for k in
-                                 ("merged", "deleted", "edited", "skipped")}})
+                                 ("merged", "deleted", "edited", "rerated",
+                                  "skipped")}})
     return summary
