@@ -1868,7 +1868,11 @@ mark {
 }
 .brief-cast-links button:hover { box-shadow: inset 0 -0.45em 0 var(--color-marker); }
 .brief-cast-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.cast-card {
+/* Brief cast chips. These names are prefixed because styles/cast.css owns
+   the unprefixed `.cast-*` namespace for the dramatis personae cards; an
+   unprefixed name here lands on those cards too and only the properties
+   cast.css also declares get overridden — the rest leak. */
+.brief-cast-card {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1880,13 +1884,13 @@ mark {
   font-size: var(--text-sm);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
-.cast-card:hover {
+.brief-cast-card:hover {
   border-color: var(--color-ink);
   box-shadow: var(--shadow-sm);
 }
-.cast-name { font-weight: var(--font-semibold); color: var(--color-ink); }
-.cast-key { color: #9a7b00; font-size: var(--text-xs); }
-.cast-count {
+.brief-cast-name { font-weight: var(--font-semibold); color: var(--color-ink); }
+.brief-cast-key { color: #9a7b00; font-size: var(--text-xs); }
+.brief-cast-count {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--color-neutral-500);
