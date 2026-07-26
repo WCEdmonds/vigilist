@@ -224,12 +224,12 @@ export default function ProductionBrief({ production, onViewDocument, onPipeline
       </div>
       <div className="brief-cast-row">
         {cast.map(m => (
-          <button key={m.id} type="button" className="cast-card" onClick={() => onOpenEntity?.(m.id)}
+          <button key={m.id} type="button" className="brief-cast-card" onClick={() => onOpenEntity?.(m.id)}
                   title={m.isKeyPlayer ? 'Named a key player in the brief' : undefined}>
             <span className={`entity-dot entity-${m.entityType}`}>●</span>
-            <span className="cast-name">{m.name}</span>
-            {m.isKeyPlayer && <span className="cast-key" aria-label="key player">✦</span>}
-            {m.mentionCount !== null && <span className="cast-count">{m.mentionCount.toLocaleString()}</span>}
+            <span className="brief-cast-name">{m.name}</span>
+            {m.isKeyPlayer && <span className="brief-cast-key" aria-label="key player">✦</span>}
+            {m.mentionCount !== null && <span className="brief-cast-count">{m.mentionCount.toLocaleString()}</span>}
           </button>
         ))}
       </div>
