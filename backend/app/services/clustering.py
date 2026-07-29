@@ -167,7 +167,7 @@ async def _generate_cluster_label(titles: list[str], sample_lines: list[str]) ->
 
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-haiku-4-5",
             max_tokens=30,
             messages=[{"role": "user", "content": content}],
         )

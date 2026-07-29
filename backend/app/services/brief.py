@@ -19,7 +19,7 @@ from app.models import Document, DocumentCluster, DocumentClusterAssignment, Pro
 
 logger = logging.getLogger(__name__)
 
-BRIEF_MODEL = "claude-sonnet-4-6"
+BRIEF_MODEL = "claude-sonnet-5"
 SAMPLES_PER_THEME = 2
 SNIPPET_CHARS = 400
 
@@ -170,12 +170,17 @@ async def generate_brief(db: AsyncSession, production_id: int) -> dict | None:
 
     prompt = build_brief_prompt(prod.case_context, doc_count, date_hint, themes, samples)
     try:
+        # Sonnet 5 thinks by default and max_tokens covers thinking + prose,
+        # so 1200 (sized for a thinking-off model) would truncate the brief.
+        # One call per production — the headroom costs nothing when unused.
         response = await client.messages.create(
             model=BRIEF_MODEL,
-            max_tokens=1200,
+            max_tokens=8000,
+            thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text if response.content else ""
+        # Select by type: with thinking on, content[0] is a thinking block.
+        raw = next((b.text for b in response.content if b.type == "text"), "")
     except Exception:
         logger.exception("Brief model call failed for production %s", production_id)
         return None

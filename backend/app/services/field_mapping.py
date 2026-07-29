@@ -68,7 +68,7 @@ def match_aliases(headers: list[str]) -> dict[str, str]:
 
 logger = logging.getLogger(__name__)
 
-_AI_MODEL = "claude-opus-4-8"
+_AI_MODEL = "claude-opus-5"
 _MAX_SAMPLES = 3
 
 
@@ -103,11 +103,17 @@ def propose_ai_mapping(columns: list[dict], client=None) -> dict[str, str]:
         'Respond with ONLY a JSON object {"<column name>": "<canonical field or null>"}.'
     )
     try:
+        # Opus 5 thinks by default, and max_tokens bounds thinking + answer
+        # together — 1024 was sized for a thinking-off model and would now
+        # truncate the JSON. Runs once per ingest, so the headroom is cheap.
         msg = client.messages.create(
-            model=_AI_MODEL, max_tokens=1024,
+            model=_AI_MODEL, max_tokens=8000,
+            thinking={"type": "adaptive"},
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = msg.content[0].text.strip()
+        # Select the text block by type — with thinking on, content[0] is a
+        # thinking block and indexing blindly would raise.
+        raw = next((b.text for b in msg.content if b.type == "text"), "").strip()
         if raw.startswith("```"):
             raw = raw.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0]
         parsed = json.loads(raw)

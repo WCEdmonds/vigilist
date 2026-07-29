@@ -1,5 +1,9 @@
 import json
-from app.services.ai_review import parse_classification_response, build_classification_prompt
+from app.services.ai_review import (
+    DEFAULT_CATEGORIES,
+    parse_classification_response,
+    build_classification_prompt,
+)
 
 
 def test_build_classification_prompt():
@@ -9,7 +13,12 @@ def test_build_classification_prompt():
     )
     assert "use of force" in prompt
     assert "Officer used a taser" in prompt
-    assert "responsive" in prompt.lower()
+    # The prompt must enumerate the categories the model may choose from.
+    # Derived from DEFAULT_CATEGORIES rather than hardcoded: this assertion
+    # previously looked for "responsive", a word this service has never used,
+    # and sat red instead of guarding anything.
+    for category in DEFAULT_CATEGORIES:
+        assert category["name"] in prompt
 
 
 def test_parse_valid_response():

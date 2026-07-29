@@ -47,6 +47,10 @@ def test_propose_ai_mapping_uses_client(monkeypatch):
     captured = {}
 
     class _FakeContent:
+        # Real content blocks carry a discriminating `type`; the production
+        # code selects the text block by it rather than indexing blindly.
+        type = "text"
+
         def __init__(self, data):
             self.text = data
 
@@ -85,6 +89,10 @@ def test_propose_ai_mapping_filters_invalid_targets():
     import json
 
     class _FakeContent:
+        # Real content blocks carry a discriminating `type`; the production
+        # code selects the text block by it rather than indexing blindly.
+        type = "text"
+
         def __init__(self, txt):
             self.text = txt
 
@@ -117,6 +125,10 @@ def test_build_proposed_mapping_ai_path(monkeypatch):
     import json
 
     class _FakeContent:
+        # Real content blocks carry a discriminating `type`; the production
+        # code selects the text block by it rather than indexing blindly.
+        type = "text"
+
         def __init__(self, txt):
             self.text = txt
 
