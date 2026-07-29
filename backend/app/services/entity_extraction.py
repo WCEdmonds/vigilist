@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from datetime import date
+from functools import lru_cache
 from email.utils import getaddresses
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,42 @@ def is_process_noise(name: str) -> bool:
     return any(p.search(name) for p in _PROCESS_NOISE_PATTERNS)
 
 
+# Tokens the extractor sometimes hands back as a name or, worse, as a surface
+# form. A pronoun stored as an alias is not merely untidy: locate_mentions
+# searches for aliases verbatim, so "She" on an entity claims every "She" in
+# the corpus as a mention of that person.
+_NON_NAME_TOKENS = frozenset({
+    "he", "him", "his", "she", "her", "hers",
+    "they", "them", "their", "theirs", "it", "its",
+    "i", "me", "my", "mine", "we", "us", "our", "ours",
+    "you", "your", "yours",
+    "himself", "herself", "themselves", "myself", "itself", "ourselves",
+    "this", "that", "these", "those",
+    "who", "whom", "whose", "someone", "anyone", "everyone", "nobody",
+    "the", "a", "an", "unknown", "n/a", "none", "various", "other", "others",
+})
+
+
+def is_usable_name(value: str) -> bool:
+    """True when `value` can stand as an entity name or alias.
+
+    Guards two failure modes seen in production:
+
+    - single initials ("C.") becoming entities in their own right;
+    - pronouns accepted as aliases, which then match corpus-wide.
+
+    The two-alphanumeric floor is deliberately low: it rejects "C." and "J."
+    while keeping genuinely short surnames ("Li", "Wu", "Ng") and initialisms
+    ("J.B."), which are real entities users care about.
+    """
+    cleaned = value.strip()
+    if not cleaned:
+        return False
+    if sum(ch.isalnum() for ch in cleaned) < 2:
+        return False
+    return cleaned.strip(".,'\"“”‘’ ").lower() not in _NON_NAME_TOKENS
+
+
 def _clean_str(v, limit: int = 500) -> str:
     return str(v).strip()[:limit] if isinstance(v, (str, int, float)) else ""
 
@@ -146,9 +183,15 @@ def parse_extraction_response(raw: str) -> dict:
             continue
         name = _clean_str(ent.get("name"))
         etype = _clean_str(ent.get("type"), 10)
-        if not name or etype not in ENTITY_TYPES or is_process_noise(name):
+        if not is_usable_name(name) or etype not in ENTITY_TYPES or is_process_noise(name):
             continue
-        forms = [_clean_str(f) for f in _as_list(ent.get("surface_forms")) if _clean_str(f)]
+        # Surface forms are filtered on the same rule as the name: every form
+        # here becomes a literal search string in locate_mentions, so an
+        # unusable one does corpus-wide damage rather than local.
+        forms = [
+            f for f in (_clean_str(x) for x in _as_list(ent.get("surface_forms")))
+            if is_usable_name(f)
+        ]
         entities.append({
             "name": name,
             "type": etype,
@@ -207,19 +250,36 @@ def slice_text(text: str, window: int = 140_000, overlap: int = 2_000) -> list[s
     return slices
 
 
+@lru_cache(maxsize=4096)
+def _boundary_pattern(form: str) -> re.Pattern:
+    """Compile `form` so it only matches as a whole token.
+
+    `\\b` is appended only where the form's own edge character is
+    alphanumeric. A trailing `\\b` after "J.B." would require a word character
+    after the final period and so would never match "J.B. testified".
+
+    Without this, matching was plain substring search: "Li" hit inside
+    "Lieutenant" and "Her" inside "Hernandez".
+    """
+    prefix = r"\b" if form[:1].isalnum() else ""
+    suffix = r"\b" if form[-1:].isalnum() else ""
+    return re.compile(prefix + re.escape(form) + suffix)
+
+
 def locate_mentions(text: str, surface_forms: list[str], max_per_form: int = 200) -> list[dict]:
-    """Find every occurrence of each surface form, longest-first so a short
-    form ('Rivera') never double-claims the middle of a long one
+    """Find every whole-token occurrence of each surface form, longest-first so
+    a short form ('Rivera') never double-claims the middle of a long one
     ('Jorge Rivera'). Returns offset-sorted mention dicts."""
     claimed: list[tuple[int, int]] = []
     out: list[dict] = []
     for form in sorted(set(f for f in surface_forms if f), key=len, reverse=True):
+        pattern = _boundary_pattern(form)
         pos, found = 0, 0
         while found < max_per_form:
-            idx = text.find(form, pos)
-            if idx == -1:
+            match = pattern.search(text, pos)
+            if match is None:
                 break
-            end = idx + len(form)
+            idx, end = match.start(), match.end()
             pos = idx + 1
             if any(s < end and idx < e for s, e in claimed):
                 continue
