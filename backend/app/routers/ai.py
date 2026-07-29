@@ -1,5 +1,6 @@
 """AI-powered endpoints: summarize, NL search, find similar, chat."""
 
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,10 +22,16 @@ from app.services.ai import (
 from app.services.ai_chat import stream_chat_events
 from app.services.ai_tools import TOOLS, run_tool, tool_use_summary
 from app.services.audit import log_action
+from app.services.chat_history import finish_turn, start_turn
 from app.services.search import search_documents
 from app.services.semantic_search import top_chunks_for_query
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+
+def _sse_frame(obj: dict) -> str:
+    """One SSE frame, matching the envelope stream_chat_events emits."""
+    return f"data: {json.dumps(obj)}\n\n"
 
 # Cap how many documents can be attached to a single chat request, so a user
 # can't blow up the context window (and cost) by selecting an entire production.
@@ -211,7 +218,14 @@ async def chat(
 
     # Log + commit before streaming starts: the request's db session is torn
     # down once the StreamingResponse takes over the connection, so anything
-    # not committed by then never persists.
+    # not committed by then never persists. The user's turn is saved here for
+    # exactly the same reason — see services/chat_history.py.
+    conversation_id = await start_turn(
+        db, user, production_id,
+        conversation_id=body.get("conversation_id"),
+        content=messages[-1]["content"],
+        attachments=[str(d.id) for d in documents],
+    )
     await log_action(
         db, user, "ai_chat_started", "production",
         resource_id=production_id, production_id=production_id,
@@ -226,13 +240,38 @@ async def chat(
     async def _run(name: str, tool_input: dict):
         return await run_tool(db, user, accessible, name, tool_input)
 
+    events = stream_chat_events(
+        client, system, messages,
+        describe_call=tool_use_summary,
+        run_tool=_run,
+        tools=TOOLS,
+    )
+
+    async def _with_history():
+        """Relay frames, naming the thread and saving the reply when it ends.
+
+        The save sits in `finally` so a reader who closes the tab mid-answer
+        still keeps whatever was generated.
+        """
+        if conversation_id is not None:
+            yield _sse_frame({"type": "conversation", "id": str(conversation_id)})
+        parts: list[str] = []
+        try:
+            async for frame in events:
+                if frame.startswith("data: "):
+                    try:
+                        obj = json.loads(frame[len("data: "):])
+                    except ValueError:
+                        obj = {}
+                    if obj.get("type") == "delta":
+                        parts.append(obj.get("text", ""))
+                yield frame
+        finally:
+            if conversation_id is not None:
+                await finish_turn(conversation_id, "".join(parts).strip())
+
     return StreamingResponse(
-        stream_chat_events(
-            client, system, messages,
-            describe_call=tool_use_summary,
-            run_tool=_run,
-            tools=TOOLS,
-        ),
+        _with_history(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

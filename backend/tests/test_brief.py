@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.brief import build_brief_prompt, generate_brief, parse_brief_response
+from app.services.brief import BRIEF_MODEL, build_brief_prompt, generate_brief, parse_brief_response
 
 
 def test_prompt_includes_case_context_themes_and_samples():
@@ -91,6 +91,7 @@ def test_generate_brief_returns_none_on_unparseable_model_output():
 
 def test_generate_brief_stamps_metadata_on_success():
     block = MagicMock()
+    block.type = "text"  # real blocks discriminate on type; a bare MagicMock does not
     block.text = '{"overview": "O.", "key_players": [], "date_range": null, "notable_documents": []}'
     response = MagicMock()
     response.content = [block]
@@ -117,5 +118,7 @@ def test_generate_brief_stamps_metadata_on_success():
         out = asyncio.run(generate_brief(db, 1))
     assert out is not None
     assert out["overview"] == "O."
-    assert out["model"] == "claude-sonnet-4-6"
+    # Pin to the constant, not a literal — this asserts the stamp records
+    # whichever model actually ran, and survives future model bumps.
+    assert out["model"] == BRIEF_MODEL
     assert "generated_at" in out

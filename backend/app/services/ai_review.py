@@ -47,7 +47,7 @@ _CLASSIFY_MAX_ATTEMPTS = 3
 # saves cost, never lets the cheap model be the last word on a document that
 # might matter.
 SCREEN_MODEL = "claude-haiku-4-5"
-CONFIRM_MODEL = "claude-sonnet-4-6"
+CONFIRM_MODEL = "claude-sonnet-5"
 SCREEN_OUT_DECISIONS = {"not_relevant"}
 SCREEN_CONFIDENCE_THRESHOLD = 80
 
@@ -130,7 +130,7 @@ async def classify_document(
     review_criteria: str,
     document_text: str,
     categories: list[dict] | None = None,
-    model: str = "claude-sonnet-4-6",
+    model: str = "claude-sonnet-5",
 ) -> tuple[dict, int]:
     if not settings.anthropic_api_key:
         return parse_classification_response("{}"), 0
@@ -149,9 +149,14 @@ async def classify_document(
     # unchanged either way.
     for attempt in range(_CLASSIFY_MAX_ATTEMPTS):
         try:
+            # Thinking pinned off, not left to the default: Sonnet 5 thinks by
+            # default, and this runs once per document under review. Keeping it
+            # off holds the per-document cost and latency where they were on
+            # Sonnet 4.6 and leaves max_tokens=1000 entirely for the answer.
             response = await client.messages.create(
                 model=model,
                 max_tokens=1000,
+                thinking={"type": "disabled"},
                 system=build_system_prompt(cats),
                 messages=[{"role": "user", "content": prompt}],
             )

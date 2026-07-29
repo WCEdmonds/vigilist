@@ -55,6 +55,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [searchQuery, setSearchQuery] = useState(initialUrl.q ?? '');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
+  // A query shaped like a document number resolves to a direct hit, offered
+  // above the results rather than navigated to. The same string is often a
+  // legitimate full-text query too, so the jump stays the user's choice.
+  const [batesHit, setBatesHit] = useState<{ id: string; bates: string; title: string | null } | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [docTotal, setDocTotal] = useState(0);
   const [docPage, setDocPage] = useState(1);
@@ -194,24 +198,32 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [lastMetadata, setLastMetadata] = useState<Record<string, string> | undefined>(undefined);
 
   const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => {
-    // A query that looks like a Bates number jumps straight to that document
-    // (tolerant matching server-side); anything unresolved falls through to a
-    // normal search.
     const trimmed = query.trim();
-    if (!metadata && /^[A-Za-z]{2,}[\s\-_.]*\d{3,}$/.test(trimmed)) {
-      try {
-        const { getByBates } = await import('./api/client');
-        const found = await getByBates(trimmed, production.id);
-        setViewDocId(found.id);
-        return;
-      } catch { /* not a Bates number in this production — search normally */ }
-    }
 
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
     setLastMetadata(metadata);
+    setBatesHit(null);
+
+    // Resolve a document-number-shaped query alongside the search rather than
+    // ahead of it: bare digits ("000123") or digits behind a Bates prefix
+    // ("SCHLEGEL 000068", "BOE Docs 1234"). Matching is tolerant server-side.
+    // Deliberately not awaited — the search runs at full speed and the offer
+    // appears above the results whenever the lookup lands.
+    if (!metadata && /^(?:[A-Za-z][A-Za-z\s\-_.]{0,30})?\d{3,}$/.test(trimmed)) {
+      import('./api/client')
+        .then(({ getByBates }) => getByBates(trimmed, production.id))
+        .then(found => setBatesHit({ id: found.id, bates: found.bates_begin, title: found.title }))
+        .catch(e => {
+          // A miss is the normal case — the query simply isn't a document
+          // number in this production. Anything else is a real failure and
+          // should not be swallowed the way the old bare catch swallowed it.
+          const msg = e instanceof Error ? e.message : '';
+          if (!/404|not found/i.test(msg)) console.warn('Document-number lookup failed:', e);
+        });
+    }
 
     const mode = forceMode ?? detectSearchMode(query);
     setLastSearchMode(mode);
@@ -280,6 +292,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setHasSearched(false);
     setSearchQuery('');
     setSearchResults([]);
+    setBatesHit(null);
     setSelectedIds(new Set());
     loadDocuments();
   };
@@ -659,6 +672,45 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 </button>
               </div>
             </div>
+            {batesHit && (
+              <button
+                type="button"
+                onClick={() => setViewDocId(batesHit.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
+                  width: '100%', textAlign: 'left', cursor: 'pointer', font: 'inherit',
+                  marginBottom: 'var(--space-3)', padding: 'var(--space-3) var(--space-4)',
+                  background: 'rgba(44,62,107,0.04)',
+                  border: '1px solid rgba(44,62,107,0.25)',
+                  borderRadius: 'var(--radius-md)', color: 'inherit',
+                }}
+              >
+                <span style={{ fontSize: 20, color: 'var(--color-primary-600)', flexShrink: 0 }}>↳</span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
+                    Exact document number
+                  </span>
+                  <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                    {batesHit.bates}
+                  </span>
+                  {batesHit.title && (
+                    <span style={{
+                      display: 'block', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {batesHit.title}
+                    </span>
+                  )}
+                </span>
+                <span style={{
+                  marginLeft: 'auto', flexShrink: 0, fontWeight: 600,
+                  fontSize: 'var(--text-xs)', color: 'var(--color-primary-600)',
+                }}>
+                  Open →
+                </span>
+              </button>
+            )}
+
             <div className="card">
               <SearchResults
                 results={searchResults}

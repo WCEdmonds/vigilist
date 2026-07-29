@@ -775,3 +775,76 @@ class EntityMerge(Base):
     undone = Column(Boolean, nullable=False, default=False)
     merged_by = Column(String(128), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class ChatConversation(Base):
+    """A saved AI chat thread belonging to a production, shared by its team.
+
+    Chat is already grounded per-production (`useChat(production.id)`), so
+    history lives beside the matter it is about. Visibility follows production
+    access — anyone who can open the matter can read its chat history, and
+    losing production access closes the history with it. `created_by` records
+    the author for attribution and to gate deletion; it does not restrict who
+    can read.
+    """
+
+    __tablename__ = "chat_conversations"
+    __table_args__ = (
+        # The only listing query is "conversations in this matter, newest
+        # first"; this index serves it directly.
+        Index(
+            "ix_chat_conversations_production_updated",
+            "production_id", "updated_at",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    production_id = Column(
+        Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by = Column(String(128), ForeignKey("users.id"), nullable=False)
+    # Derived from the opening user message; nullable so a conversation that
+    # dies before its first turn persists doesn't violate the schema.
+    title = Column(String(200), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    messages = relationship(
+        "ChatMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    """One turn of a saved conversation.
+
+    Deletion is real, not a soft flag: the user asked for history they can
+    clear, and a privileged-document chat log that only pretends to delete is
+    worse than no delete at all. The CASCADE below is what makes that true.
+    """
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_conversation", "conversation_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role = Column(String(16), nullable=False)  # 'user' | 'assistant'
+    # Who asked. Null on assistant turns. A shared thread is only readable as
+    # a record if each question carries its author — "who asked this" is not
+    # recoverable from the conversation's creator once a second person joins.
+    user_id = Column(String(128), ForeignKey("users.id"), nullable=True)
+    content = Column(Text, nullable=False)
+    # Document ids attached to a user turn, so a reloaded conversation still
+    # shows what it was grounded in. Empty list on assistant turns.
+    attachments = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    conversation = relationship("ChatConversation", back_populates="messages")

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { streamChat, type ChatMessage } from '../api/client';
+import { getConversation, streamChat, type ChatMessage } from '../api/client';
 import type { AttachedDoc } from '../types';
 import { showToast } from '../components/Toast';
 
@@ -21,6 +21,11 @@ export interface ChatState {
   stop: () => void;
   clear: () => void;
   transcriptText: () => string;
+  /** Saved thread this conversation belongs to; null until the first turn
+   *  is persisted, or after `clear()` starts a fresh one. */
+  conversationId: string | null;
+  loadConversation: (id: string) => Promise<void>;
+  loadingConversation: boolean;
 }
 
 function formatTranscript(messages: ChatMessage[]): string {
@@ -40,11 +45,17 @@ export function useChat(productionId?: number): ChatState {
   const [streamingText, setStreamingText] = useState('');
   const [activity, setActivity] = useState<ChatActivity[]>([]);
   const [attachedDocs, setAttachedDocs] = useState<AttachedDoc[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [loadingConversation, setLoadingConversation] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   // Mirrors the accumulated streamed text so `stop()` can commit synchronously
   // without waiting on the aborted fetch to settle — the same synchronous-commit
   // behavior the retired AIAgent overlay relied on.
   const accRef = useRef('');
+  // Mirrors conversationId so a second send fired before React re-renders
+  // still carries the thread id, instead of silently opening a duplicate
+  // conversation server-side.
+  const convoRef = useRef<string | null>(null);
 
   const attachDocs = useCallback((docs: AttachedDoc[]) => {
     setAttachedDocs(prev => {
@@ -87,9 +98,11 @@ export function useChat(productionId?: number): ChatState {
           }
           return next;
         }),
+        onConversation: id => { convoRef.current = id; setConversationId(id); },
       },
       controller.signal,
       productionId,
+      convoRef.current ?? undefined,
     ).then(() => {
       if (controller.signal.aborted) { setStreaming(false); setStreamingText(''); return; }
       abortRef.current = null;
@@ -133,6 +146,10 @@ export function useChat(productionId?: number): ChatState {
     abortRef.current?.abort();
     abortRef.current = null;
     accRef.current = '';
+    // Detach from the saved thread — clearing starts a new conversation
+    // rather than wiping the one already on the server.
+    convoRef.current = null;
+    setConversationId(null);
     setMessages([]);
     setStreaming(false);
     setStreamingText('');
@@ -140,10 +157,35 @@ export function useChat(productionId?: number): ChatState {
     setAttachedDocs([]);
   }, []);
 
+  /** Replace the live conversation with a saved one. */
+  const loadConversation = useCallback(async (id: string) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    accRef.current = '';
+    setLoadingConversation(true);
+    try {
+      const convo = await getConversation(id);
+      convoRef.current = convo.id;
+      setConversationId(convo.id);
+      setMessages(convo.messages.map(m => ({ role: m.role, content: m.content })));
+      setStreaming(false);
+      setStreamingText('');
+      setActivity([]);
+      // Attachments are recorded per turn for provenance, but re-attaching
+      // them would silently re-ground the next question in documents the user
+      // didn't pick this session. Start clean.
+      setAttachedDocs([]);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not open that conversation', 'error');
+    } finally {
+      setLoadingConversation(false);
+    }
+  }, []);
+
   const transcriptText = useCallback(() => formatTranscript(messages), [messages]);
 
   return useMemo(
-    () => ({ messages, streaming, streamingText, activity, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText }),
-    [messages, streaming, streamingText, activity, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText],
+    () => ({ messages, streaming, streamingText, activity, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText, conversationId, loadConversation, loadingConversation }),
+    [messages, streaming, streamingText, activity, attachedDocs, attachDocs, removeDoc, send, stop, clear, transcriptText, conversationId, loadConversation, loadingConversation],
   );
 }
