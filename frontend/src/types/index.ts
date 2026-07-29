@@ -452,7 +452,19 @@ export interface EntityListItem {
   last_seen?: string | null;
   /** attributes.role surfaced for cast cards; absent/null when unset. */
   role?: string | null;
+  /** Standing in THIS matter — declared, not inferred. Promotes the entity to
+   *  the principal tier ahead of mention frequency. Absent/null when unset. */
+  case_role?: CaseRole | null;
 }
+
+/** Declared standing in the matter. Persisted in entities.attributes.case_role;
+ *  these strings must stay in sync with models.CASE_ROLES on the backend. */
+export type CaseRole =
+  | 'plaintiff'
+  | 'defendant'
+  | 'plaintiff_counsel'
+  | 'defense_counsel'
+  | 'witness';
 
 export interface EntityListPage {
   entities: EntityListItem[];

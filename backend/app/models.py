@@ -633,6 +633,26 @@ class DocumentClusterAssignment(Base):
 # are computed live from entity_mentions.
 
 
+# A case role is an assertion about a person's standing in THIS matter, which
+# is deliberately NOT derivable from the documents: a civil matter built from a
+# criminal case file mentions the criminal parties constantly and the civil
+# plaintiffs barely, so frequency can never surface the right people. Stored in
+# Entity.attributes["case_role"].
+#
+# Counsel is side-specific on purpose — "the defendant and his attorneys"
+# occupying the principal tier is the reported symptom, and a flat "counsel"
+# could not later be told apart from plaintiff's counsel.
+#
+# These strings are persisted. Changing one means migrating stored data.
+CASE_ROLES = (
+    "plaintiff",
+    "defendant",
+    "plaintiff_counsel",
+    "defense_counsel",
+    "witness",
+)
+
+
 class Entity(Base):
     __tablename__ = "entities"
     __table_args__ = (
