@@ -375,7 +375,11 @@
 
 .cast-supporting {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  /* One column, full width. Two 430px columns left a supporting row sharing
+     its width with five fixed-width siblings (chip, stats, date span, hover
+     verbs), which is what clipped the names. Full width also lets the
+     metadata line up down the right edge, so the list scans as a table. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px var(--space-4);
 }
 
@@ -392,24 +396,32 @@
 .cast-row:hover { background: var(--color-card); box-shadow: var(--shadow-xs); }
 
 .cast-row-main {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  /* A floor, not zero. Every other element in the row is fixed-width, so a
+     min-width of 0 meant the name — the one thing anyone reads — absorbed
+     all the squeeze and clipped to a few characters. */
+  min-width: 14ch;
   display: flex;
   align-items: baseline;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
 }
 
 .cast-row-name {
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
   color: var(--color-ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wrap rather than clip: a name on two lines is readable, a name cut to
+     "Deputy Sher…" is not. `break-word` only splits a word that cannot fit
+     on a line by itself, so ordinary names break between words. */
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .cast-row-role {
-  flex: none;
+  /* Yields before the name does — the role is context, the name is content. */
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 18ch;
   font-size: var(--text-xs);
   color: var(--color-neutral-400);
@@ -457,13 +469,14 @@
 .cast-line:hover { background: var(--color-card); }
 
 .cast-line-name {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  /* Same reasoning as .cast-row-main: a floor so the count and hover verbs
+     can't crush the name out of legibility. */
+  min-width: 12ch;
   font-size: var(--text-sm);
   color: var(--color-neutral-700);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .cast-line-count {
@@ -758,7 +771,7 @@
 
 @media (max-width: 900px) {
   .cast-principals { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-  .cast-supporting { grid-template-columns: minmax(0, 1fr); }
+  /* .cast-supporting is single-column at every width now — no override needed. */
   .cast-row-span { display: none; }
 }
 
