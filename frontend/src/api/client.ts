@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
+  AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
   DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
@@ -262,6 +262,17 @@ export interface ChatMessage {
   content: string;
 }
 
+// ── Saved chat history (shared per matter) ──
+
+export const listConversations = (productionId: number) =>
+  request<ConversationSummary[]>(`/api/conversations?production_id=${productionId}`);
+
+export const getConversation = (id: string) =>
+  request<ConversationDetail>(`/api/conversations/${id}`);
+
+export const deleteConversation = (id: string) =>
+  request<{ ok: boolean }>(`/api/conversations/${id}`, { method: 'DELETE' });
+
 /**
  * Stream a chat response from the AI agent. Calls `onDelta` for each streamed
  * text chunk and `onError` with a message on failure. Resolves when the stream
@@ -275,9 +286,14 @@ export async function streamChat(
     onError: (message: string) => void;
     onToolUse?: (evt: { name: string; summary: string }) => void;
     onToolResult?: (evt: { name: string; ok: boolean; summary: string }) => void;
+    /** Fires once with the thread this turn was saved to. A new conversation
+     *  is created server-side when `conversationId` is omitted, so this is how
+     *  the client learns the id to continue with. */
+    onConversation?: (id: string) => void;
   },
   signal?: AbortSignal,
   productionId?: number,
+  conversationId?: string,
 ): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const currentUser = auth.currentUser;
@@ -291,7 +307,10 @@ export async function streamChat(
     res = await fetch(`${CHAT_STREAM_BASE}/api/ai/chat`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ messages, doc_ids: docIds, production_id: productionId }),
+      body: JSON.stringify({
+        messages, doc_ids: docIds, production_id: productionId,
+        conversation_id: conversationId,
+      }),
       signal,
     });
   } catch (e: unknown) {
@@ -334,6 +353,7 @@ export async function streamChat(
         try {
           const evt = JSON.parse(payload);
           if (evt.type === 'delta' && typeof evt.text === 'string') handlers.onDelta(evt.text);
+          else if (evt.type === 'conversation' && typeof evt.id === 'string') handlers.onConversation?.(evt.id);
           else if (evt.type === 'tool_use') handlers.onToolUse?.({ name: evt.name, summary: evt.summary });
           else if (evt.type === 'tool_result') handlers.onToolResult?.({ name: evt.name, ok: !!evt.ok, summary: evt.summary });
           else if (evt.type === 'error') handlers.onError(evt.message || 'The AI service failed to respond.');

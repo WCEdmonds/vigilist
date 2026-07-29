@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ChatPanel from './ChatPanel';
-import { findSimilar, getDocument, getPipeline, summarizeDocument } from '../api/client';
+import { deleteConversation, findSimilar, getDocument, getPipeline, listConversations, summarizeDocument } from '../api/client';
 import { showToast } from './Toast';
 import type { ChatState } from '../hooks/useChat';
-import type { AttachedDoc, DocumentSummary, ProductionInfo, SearchResult } from '../types';
+import type { AttachedDoc, ConversationSummary, DocumentSummary, ProductionInfo, SearchResult } from '../types';
 
 interface ContextRailProps {
   production: ProductionInfo;
@@ -50,6 +50,45 @@ export default function ContextRail({
   const [contextLine, setContextLine] = useState<string | null>(null);
   const [docSummaries, setDocSummaries] = useState<Record<string, string | null>>({});
   const [summarizing, setSummarizing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Fetched when the panel opens rather than on mount — history is a
+  // deliberate detour and most sessions never ask for it.
+  const refreshHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      setConversations(await listConversations(production.id));
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not load chat history', 'error');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [production.id]);
+
+  const toggleHistory = useCallback(() => {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (next) void refreshHistory();
+  }, [historyOpen, refreshHistory]);
+
+  const openConversation = useCallback(async (id: string) => {
+    await chat.loadConversation(id);
+    setHistoryOpen(false);
+  }, [chat]);
+
+  const removeConversation = useCallback(async (id: string) => {
+    try {
+      await deleteConversation(id);
+      setConversations(prev => prev.filter(c => c.id !== id));
+      // If the open thread is the one just deleted, detach: the next question
+      // should start a new conversation, not write into a dead id.
+      if (chat.conversationId === id) chat.clear();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not delete conversation', 'error');
+    }
+  }, [chat]);
   const [findingSimilar, setFindingSimilar] = useState(false);
   const fetchedDocIds = useRef(new Set<string>());
 
@@ -194,6 +233,16 @@ export default function ContextRail({
         <button
           type="button"
           className="btn-icon"
+          onClick={toggleHistory}
+          aria-label="Chat history"
+          aria-expanded={historyOpen}
+          title="Chat history for this matter"
+        >
+          ⟲
+        </button>
+        <button
+          type="button"
+          className="btn-icon"
           onClick={onToggleCollapsed}
           aria-label="Collapse intelligence rail"
           aria-expanded={true}
@@ -201,6 +250,61 @@ export default function ContextRail({
           ▸
         </button>
       </div>
+
+      {historyOpen && (
+        <div style={{
+          borderBottom: '1px solid var(--color-neutral-200)',
+          maxHeight: 280, overflowY: 'auto', padding: 'var(--space-2)',
+        }}>
+          {historyLoading && (
+            <div style={{ padding: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
+              Loading history…
+            </div>
+          )}
+          {!historyLoading && conversations.length === 0 && (
+            <div style={{ padding: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
+              No saved conversations in this matter yet.
+            </div>
+          )}
+          {conversations.map(c => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                type="button"
+                onClick={() => void openConversation(c.id)}
+                style={{
+                  flex: 1, minWidth: 0, textAlign: 'left', cursor: 'pointer',
+                  background: c.id === chat.conversationId ? 'rgba(44,62,107,0.06)' : 'transparent',
+                  border: 'none', font: 'inherit', color: 'inherit',
+                  padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)',
+                }}
+              >
+                <span style={{
+                  display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {c.title || 'Untitled conversation'}
+                </span>
+                <span style={{ display: 'block', fontSize: 11, color: 'var(--color-neutral-500)' }}>
+                  {c.message_count} message{c.message_count === 1 ? '' : 's'}
+                  {c.created_by_email ? ` · ${c.created_by_email}` : ''}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void removeConversation(c.id)}
+                aria-label={`Delete conversation ${c.title || ''}`}
+                title="Delete conversation"
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--color-neutral-400)', fontSize: 16, padding: '0 6px',
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {selectedCount === 0 && contextLine && (
         <div className="rail-context-line">{contextLine}</div>

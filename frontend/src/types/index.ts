@@ -551,3 +551,30 @@ export interface ChipEntity {
   canonical_name: string;
   entity_type: 'person' | 'org';
 }
+
+/** Saved AI chat history. Conversations belong to a matter and are shared by
+ *  its team, so every turn carries its author for attribution. */
+export interface ConversationSummary {
+  id: string;
+  production_id: number;
+  title: string | null;
+  created_by: string;
+  created_by_email: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  user_id: string | null;
+  user_email: string | null;
+  attachments: string[];
+  created_at: string;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: ConversationMessage[];
+}

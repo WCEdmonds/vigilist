@@ -966,3 +966,34 @@ class SearchTermReportOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ChatMessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    # Who asked; null on assistant turns. Email is resolved for display so a
+    # shared thread reads as a record rather than a wall of opaque UIDs.
+    user_id: str | None = None
+    user_email: str | None = None
+    attachments: list[str] = []
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationSummary(BaseModel):
+    id: UUID
+    production_id: int
+    title: str | None = None
+    created_by: str
+    created_by_email: str | None = None
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationDetail(ConversationSummary):
+    messages: list[ChatMessageOut] = []
