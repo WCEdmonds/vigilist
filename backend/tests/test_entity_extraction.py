@@ -249,3 +249,70 @@ def test_parse_keeps_real_actors_with_courtlike_substrings():
     raw = _entity_json("Courtney Smith", "Harcourt Industries", "Dana Wu")
     out = parse_extraction_response(raw)
     assert [e["name"] for e in out["entities"]] == ["Courtney Smith", "Harcourt Industries", "Dana Wu"]
+
+
+# ── Name validation and whole-token matching ──
+#
+# Three defects, observed together in production: "C." became an entity;
+# "She"/"Her" were stored as aliases; and locate_mentions matched by raw
+# substring, so those aliases claimed every "Sheriff" and "Hernandez" in the
+# corpus as mentions of one person.
+
+def test_is_usable_name_rejects_single_initials():
+    from app.services.entity_extraction import is_usable_name
+    assert not is_usable_name("C.")
+    assert not is_usable_name("J")
+    assert not is_usable_name(" . ")
+
+
+def test_is_usable_name_rejects_pronouns_and_articles():
+    from app.services.entity_extraction import is_usable_name
+    for token in ("She", "her", "HIM", "they", "Their", "herself", "the", "unknown"):
+        assert not is_usable_name(token), token
+
+
+def test_is_usable_name_keeps_short_real_names_and_initialisms():
+    from app.services.entity_extraction import is_usable_name
+    for name in ("Li", "Wu", "Ng", "J.B.", "Jorge Rivera", "A-1 Holdings"):
+        assert is_usable_name(name), name
+
+
+def test_parse_drops_one_letter_entities_and_pronoun_surface_forms():
+    raw = json.dumps({
+        "entities": [
+            {"name": "C.", "type": "person", "surface_forms": ["C."]},
+            {"name": "J.B.", "type": "person",
+             "surface_forms": ["J.B.", "She", "Her", "Jane Boyd"]},
+        ],
+    })
+    parsed = parse_extraction_response(raw)
+
+    names = [e["name"] for e in parsed["entities"]]
+    assert names == ["J.B."]                      # "C." dropped entirely
+
+    forms = parsed["entities"][0]["surface_forms"]
+    assert "She" not in forms and "Her" not in forms
+    assert forms == ["J.B.", "Jane Boyd"]
+
+
+def test_locate_mentions_does_not_match_inside_longer_words():
+    # The exact production symptom: "She" as an alias claimed "Sheriff".
+    text = "The Sheriff spoke. She testified. Hernandez and Herman were present."
+    hits = locate_mentions(text, ["She"])
+    assert len(hits) == 1
+    assert text[hits[0]["start_offset"]:hits[0]["end_offset"]] == "She"
+
+    assert locate_mentions(text, ["Her"]) == []   # not Hernandez, not Herman
+
+
+def test_locate_mentions_still_matches_short_names_as_whole_tokens():
+    text = "Lieutenant Li met Ng near England."
+    assert len(locate_mentions(text, ["Li"])) == 1   # not inside "Lieutenant"
+    assert len(locate_mentions(text, ["Ng"])) == 1   # not inside "England"
+
+
+def test_locate_mentions_handles_trailing_punctuation_in_a_form():
+    # A trailing \b after "J.B." would require a word char after the period
+    # and never match — the boundary is only applied at alphanumeric edges.
+    text = "J.B. testified that J.B. was present."
+    assert len(locate_mentions(text, ["J.B."])) == 2
