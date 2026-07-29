@@ -29,9 +29,12 @@ def _extract_text(response) -> str | None:
 
 # ── Interactive Chat (AI Agent) ──
 
-# A capable model for open-ended analysis over selected documents. Chat is
-# interactive, so thinking is left off (omitted) to keep first-token latency low.
-CHAT_MODEL = "claude-opus-4-8"
+# A capable model for open-ended analysis over selected documents.
+# Thinking is set explicitly in ai_chat.py, NOT left to the default. Omitting
+# it does not mean "no reasoning" — it means the reasoning is written into the
+# visible reply instead of into thinking blocks, which is what surfaced chain
+# of thought to users.
+CHAT_MODEL = "claude-opus-5"
 
 CHAT_SYSTEM_PROMPT = """You are an AI review assistant inside Vigilist, a self-hosted e-discovery review platform used by legal teams.
 

@@ -13,7 +13,17 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 8
 
-_MAX_TOKENS = 4096
+# max_tokens bounds thinking AND response text together, so it needs real
+# headroom now that thinking is on. At 4096 the model spent the budget
+# reasoning and the answer was cut off mid-sentence. Nothing is billed for
+# headroom the model doesn't use.
+_MAX_TOKENS = 32000
+
+# Omitting `thinking` on Opus 4.8 means thinking is OFF — and with it off the
+# model writes its reasoning into the visible response, which is how chain of
+# thought was reaching users. Adaptive thinking moves that reasoning into
+# thinking blocks, which `stream.text_stream` does not yield.
+_THINKING = {"type": "adaptive"}
 
 
 def _sse(obj: dict) -> str:
@@ -45,7 +55,7 @@ async def stream_chat_events(
             final = await _stream_text(
                 client.messages.stream(
                     model=model, max_tokens=_MAX_TOKENS, system=system,
-                    tools=tools, messages=convo,
+                    thinking=_THINKING, tools=tools, messages=convo,
                 ),
                 deltas.append,
             )
@@ -86,7 +96,8 @@ async def stream_chat_events(
     try:
         final = await _stream_text(
             client.messages.stream(
-                model=model, max_tokens=_MAX_TOKENS, system=system, messages=convo,
+                model=model, max_tokens=_MAX_TOKENS, system=system,
+                thinking=_THINKING, messages=convo,
             ),
             deltas.append,
         )
