@@ -12,6 +12,7 @@ the feature exists to make.
 """
 
 import asyncio
+import json as _json
 import uuid
 
 import pytest
@@ -390,3 +391,100 @@ def test_a_plain_pipeline_enqueue_carries_no_job():
         tasks.is_configured = original_configured
 
     assert "job" not in captured["body"]
+
+
+# ── batching ─────────────────────────────────────────────────────────────
+# The docket does not fit in one response. 300 pairs in a single call ran to
+# the output cap, raised, and discarded every verdict in it — the run reported
+# "failed" having applied nothing. These pin the batching that replaced it.
+
+
+class BatchSession:
+    """Fake session that records commits and rollbacks."""
+
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+
+    async def commit(self):
+        self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+
+def _batching_harness(monkeypatch, pair_count, truncate_batches=()):
+    """run_merge_review over `pair_count` pairs, failing the named batches."""
+    evidence = [{"suggestion_id": i} for i in range(pair_count)]
+    seen_batch_sizes = []
+
+    async def fake_gather(db, production_id):
+        return evidence
+
+    async def fake_call(user_content):
+        n = len(_json.loads(user_content.split("\n\n")[-1]))
+        seen_batch_sizes.append(n)
+        if len(seen_batch_sizes) in truncate_batches:
+            return "", "max_tokens", {}
+        verdicts = [{"suggestion_id": 1, "verdict": "merge",
+                     "confidence": 0.99, "reason": "ocr", "keep_id": "x"}]
+        return (_json.dumps({"verdicts": verdicts}), "end_turn",
+                {"input_tokens": 100, "output_tokens": 50})
+
+    async def fake_apply(db, production_id, verdicts, actor):
+        return {"merged": 1, "dismissed": 0, "annotated": 0,
+                "renamed": 0, "skipped": 0, "skip_reasons": []}
+
+    monkeypatch.setattr(mr, "gather_pair_evidence", fake_gather)
+    monkeypatch.setattr(mr, "_call_model", fake_call)
+    monkeypatch.setattr(mr, "apply_verdicts", fake_apply)
+    return BatchSession(), seen_batch_sizes
+
+
+def test_the_docket_is_split_into_batches_not_sent_in_one_call(monkeypatch):
+    db, sizes = _batching_harness(monkeypatch, 60)
+    result = asyncio.run(mr.run_merge_review(db, 1, FakeUser()))
+
+    assert sizes == [25, 25, 10], "batches must be capped at _BATCH_PAIRS"
+    assert result["batches"] == 3
+    assert result["pairs_reviewed"] == 60
+
+
+def test_one_truncated_batch_does_not_discard_the_others(monkeypatch):
+    """The bug this replaced: a single over-cap response lost the whole run."""
+    db, sizes = _batching_harness(monkeypatch, 60, truncate_batches=(2,))
+    result = asyncio.run(mr.run_merge_review(db, 1, FakeUser()))
+
+    assert result["status"] == "ok"
+    assert result["batches_failed"] == 1
+    assert result["merged"] == 2, "batches 1 and 3 still applied"
+    assert result["pairs_reviewed"] == 35, "25 + 10, excluding the failed batch"
+    assert any("truncated" in f for f in result["failures"])
+    assert db.rollbacks == 1, "the failed batch is rolled back, not left dirty"
+
+
+def test_each_successful_batch_is_committed_so_progress_survives(monkeypatch):
+    db, _ = _batching_harness(monkeypatch, 60)
+    asyncio.run(mr.run_merge_review(db, 1, FakeUser()))
+    # One commit releasing the read txn, then one per applied batch.
+    assert db.commits == 4
+
+
+def test_failing_every_batch_raises_rather_than_reporting_success(monkeypatch):
+    db, _ = _batching_harness(monkeypatch, 60, truncate_batches=(1, 2, 3))
+    with pytest.raises(mr.MergeReviewError, match="every batch"):
+        asyncio.run(mr.run_merge_review(db, 1, FakeUser()))
+
+
+def test_an_empty_docket_reports_empty_without_calling_the_model(monkeypatch):
+    async def fake_gather(db, production_id):
+        return []
+
+    async def boom(user_content):
+        raise AssertionError("the model must not be called for an empty docket")
+
+    monkeypatch.setattr(mr, "gather_pair_evidence", fake_gather)
+    monkeypatch.setattr(mr, "_call_model", boom)
+    result = asyncio.run(mr.run_merge_review(BatchSession(), 1, FakeUser()))
+    assert result["status"] == "empty"
+    assert result["pairs_reviewed"] == 0

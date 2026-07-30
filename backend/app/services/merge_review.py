@@ -36,7 +36,12 @@ logger = logging.getLogger(__name__)
 CONFIDENCE_GATE = 0.85
 
 _MAX_ATTEMPTS = 3
-_MAX_PAIRS = 300          # one call's worth; the docket is reviewed in passes
+_MAX_PAIRS = 300          # one run's worth; the docket is reviewed in passes
+# Pairs per model call. Bounded by output, not prompt: each pair returns a
+# verdict with a reason, and thinking shares the same max_tokens. 300 in one
+# call hit the cap and lost every verdict; 25 is the size validated by the
+# dry run against this production.
+_BATCH_PAIRS = 25
 _SNIPPETS_PER_ENTITY = 2
 
 
@@ -430,30 +435,86 @@ async def _call_model(user_content: str) -> tuple[str, str, dict]:
     raise MergeReviewError(f"Merge review failed after {_MAX_ATTEMPTS} attempts: {last_err}")
 
 
-async def run_merge_review(db, production_id: int, actor) -> dict:
-    """Review the pending merge docket in one call and apply the verdicts."""
-    evidence = await gather_pair_evidence(db, production_id)
-    if not evidence:
-        return {"status": "empty", "merged": 0, "dismissed": 0, "annotated": 0,
-                "renamed": 0, "skipped": 0, "skip_reasons": []}
+async def _review_batch(db, production_id: int, actor, batch: list[dict]) -> tuple[dict, dict]:
+    """One model call over one batch, applied and committed.
 
-    # The call takes minutes. End the read transaction so the connection goes
-    # back to the pool — held across the call it sits idle past Neon's kill
-    # window and dies (#87, #88). expire_on_commit=False keeps rows usable.
-    await db.commit()
-
-    raw, stop_reason, usage = await _call_model(build_user_content(evidence))
+    Raises MergeReviewError without applying anything if this batch's response
+    is unusable; the caller decides whether that's fatal for the whole run.
+    """
+    raw, stop_reason, usage = await _call_model(build_user_content(batch))
     if stop_reason == "max_tokens":
-        raise MergeReviewError("Merge review response truncated — nothing applied")
+        raise MergeReviewError("response truncated")
     if stop_reason == "refusal":
-        raise MergeReviewError("Merge review refused by the model — nothing applied")
+        raise MergeReviewError("refused by the model")
 
     verdicts = parse_verdicts(raw)
     if not verdicts:
-        raise MergeReviewError("Merge review returned no usable verdicts")
+        raise MergeReviewError("no usable verdicts")
 
     result = await apply_verdicts(db, production_id, verdicts, actor)
-    result["status"] = "ok"
-    result["pairs_reviewed"] = len(evidence)
-    result["usage"] = usage
-    return result
+    # Commit per batch so a later batch failing cannot discard earlier work,
+    # and so the connection is not held across the next multi-minute call.
+    await db.commit()
+    return result, usage
+
+
+async def run_merge_review(db, production_id: int, actor) -> dict:
+    """Review the pending merge docket in batches and apply the verdicts.
+
+    Batched rather than one call because the whole docket does not fit in one
+    response: 300 pairs ran to the output cap and raised, discarding every
+    verdict in it. Batch size is bounded by the OUTPUT the pairs produce (a
+    verdict with a reason each, plus thinking, all drawn from the same
+    max_tokens), not by what fits in the prompt.
+
+    A batch that comes back unusable is recorded and skipped rather than
+    failing the run, so one bad response costs 25 pairs instead of all of them.
+    """
+    evidence = await gather_pair_evidence(db, production_id)
+    if not evidence:
+        return {"status": "empty", "merged": 0, "dismissed": 0, "annotated": 0,
+                "renamed": 0, "skipped": 0, "skip_reasons": [], "pairs_reviewed": 0}
+
+    # The calls take minutes. End the read transaction so the connection goes
+    # back to the pool — held across a call it sits idle past Neon's kill
+    # window and dies (#87, #88). expire_on_commit=False keeps rows usable.
+    await db.commit()
+
+    batches = [evidence[i:i + _BATCH_PAIRS]
+               for i in range(0, len(evidence), _BATCH_PAIRS)]
+    totals = {"merged": 0, "dismissed": 0, "annotated": 0,
+              "renamed": 0, "skipped": 0}
+    usage_total = {"input_tokens": 0, "output_tokens": 0}
+    reasons: list[str] = []
+    failures: list[str] = []
+    reviewed = 0
+
+    for n, batch in enumerate(batches, 1):
+        try:
+            result, usage = await _review_batch(db, production_id, actor, batch)
+        except MergeReviewError as e:
+            # Roll back this batch's partial writes; earlier batches are
+            # already committed and stay.
+            await db.rollback()
+            failures.append(f"batch {n}/{len(batches)}: {e}")
+            logger.warning("Merge review batch %d/%d failed: %s", n, len(batches), e)
+            continue
+
+        for key in totals:
+            totals[key] += result[key]
+        reasons.extend(result["skip_reasons"])
+        for key in usage_total:
+            usage_total[key] += usage.get(key, 0)
+        reviewed += len(batch)
+        logger.info("Merge review batch %d/%d: %d merged, %d dismissed, %d annotated",
+                    n, len(batches), result["merged"], result["dismissed"],
+                    result["annotated"])
+
+    if reviewed == 0:
+        raise MergeReviewError(
+            f"Merge review failed on every batch — nothing applied: {'; '.join(failures)}")
+
+    return {**totals, "status": "ok", "pairs_reviewed": reviewed,
+            "batches": len(batches), "batches_failed": len(failures),
+            "skip_reasons": reasons[:20], "failures": failures,
+            "usage": usage_total}
