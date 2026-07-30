@@ -89,6 +89,13 @@ class FakeSession:
         self.redactions = redactions or []
         self.annotations = annotations or []
         self.executed = []
+        self.commits = 0
+
+    async def commit(self):
+        # get_image commits to hand its pooled connection back before the GCS
+        # download and PIL resize — holding it across that work is what
+        # exhausted the pool. Counted so a test can assert it still happens.
+        self.commits += 1
 
     async def get(self, model, key):
         if model.__name__ == "Document":
@@ -348,3 +355,53 @@ def test_doc_detail_includes_redaction_count(monkeypatch):
                      redactions=[FakeRedaction(), FakeRedaction(page_num=2)])
     detail = asyncio.run(dd._doc_detail(doc, db))
     assert detail.redaction_count == 2
+
+
+# ── Connection release (pool exhaustion, 2026-07-30) ──────────────────────
+#
+# Opening a long document fired one image request per page at once. Each held
+# its pooled connection across a synchronous GCS download and a LANCZOS
+# resize, so the pool ran dry and requests died at the 30s checkout timeout:
+#   QueuePool limit of size 5 overflow 10 reached, connection timed out
+# Same shape as #87 and #88 — a pooled connection must not be held across long
+# non-DB work.
+
+def test_image_releases_its_connection_before_rendering(monkeypatch, tmp_path):
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+
+    asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=True,
+                             db=db, user=FakeUser()))
+
+    assert db.commits == 1, "get_image must hand its connection back before rendering"
+
+
+def test_image_releases_the_connection_even_with_no_redactions(monkeypatch, tmp_path):
+    # The unredacted path is the hot one — it is what the viewer fires per page.
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
+    db = FakeSession(docs={doc_id: doc})
+
+    asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=False,
+                             db=db, user=FakeUser()))
+
+    assert db.commits == 1
+
+
+def test_image_does_not_release_the_connection_before_access_is_checked(monkeypatch, tmp_path):
+    # Ordering guard: the commit must come after the scope check, or an
+    # unauthorized caller would still cost a round trip and the 403 path would
+    # be committing someone else's transaction.
+    _patch_access(monkeypatch, accessible=(999,))
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, [_page_jpeg(tmp_path)])
+    db = FakeSession(docs={doc_id: doc})
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dd.get_image(doc_id=doc_id, page_num=1, w=None, redacted=False,
+                                 db=db, user=FakeUser()))
+    assert exc.value.status_code == 403
+    assert db.commits == 0

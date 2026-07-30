@@ -1,5 +1,7 @@
+import asyncio
 import os
 from pathlib import Path
+from typing import NamedTuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -523,6 +525,68 @@ async def update_title(
     return {"ok": True, "title": doc.title}
 
 
+class _FlatRect(NamedTuple):
+    """A redaction rect detached from the ORM, safe to hand to a worker thread."""
+    x_pct: float
+    y_pct: float
+    w_pct: float
+    h_pct: float
+    reason_code: str
+
+
+def _fetch_page_image(raw_path: str, width: int | None,
+                      rects: list[_FlatRect]) -> bytes:
+    """Download and transform one page image. Pure I/O + CPU, no DB.
+
+    Runs in a worker thread. Raises FileNotFoundError when the object is
+    missing and ValueError when the bytes aren't a readable image, so the
+    caller can map both to 404 without catching bare Exception.
+    """
+    import io
+    from PIL import Image as PILImage, UnidentifiedImageError
+    from app.services.storage import get_download_bytes
+
+    try:
+        data = get_download_bytes(raw_path)
+    except Exception as exc:
+        raise FileNotFoundError(raw_path) from exc
+
+    if not (width or rects):
+        return data
+
+    try:
+        img = PILImage.open(io.BytesIO(data))
+        img.load()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("unreadable image") from exc
+
+    if rects:
+        img = burn_page(img, rects)
+    if width:
+        ratio = width / img.width
+        img = img.resize((width, int(img.height * ratio)), PILImage.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=75)
+    return buf.getvalue()
+
+
+def _burn_local_page(path: str, rects: list[_FlatRect]) -> bytes:
+    """Burn redactions into a local-disk page image. Worker-thread safe."""
+    import io
+    from PIL import Image as PILImage, UnidentifiedImageError
+
+    try:
+        img = PILImage.open(path)
+        img.load()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("unreadable image") from exc
+
+    buf = io.BytesIO()
+    burn_page(img, rects).save(buf, "JPEG", quality=90)
+    return buf.getvalue()
+
+
 @router.get("/{doc_id}/image/{page_num}")
 async def get_image(
     doc_id: UUID,
@@ -553,47 +617,44 @@ async def get_image(
         )
         rects = list(result.scalars().all())
 
+    # Snapshot the rects as plain values before leaving async context. burn_page
+    # reads scalar columns only, but these are about to cross a thread boundary
+    # where a lazy load would raise MissingGreenlet with no async context at all
+    # to recover in — a miserable failure to diagnose. Copying costs nothing.
+    flat_rects = [_FlatRect(r.x_pct, r.y_pct, r.w_pct, r.h_pct, r.reason_code)
+                  for r in rects]
+
+    # Release the pooled connection before any of the work below. Nothing after
+    # this point touches the session, and holding it across a synchronous GCS
+    # download plus a LANCZOS resize is exactly what exhausted the pool when the
+    # viewer requested every page of a long document at once:
+    #   QueuePool limit of size 5 overflow 10 reached, connection timed out
+    # Same lesson as #87 and #88 — a pooled connection must not be held across
+    # long non-DB work. expire_on_commit=False keeps `doc` usable afterwards.
+    await db.commit()
+
     if raw_path.startswith("productions/"):
-        from app.services.storage import get_download_bytes
         try:
-            data = get_download_bytes(raw_path)
-        except Exception:
+            # to_thread because both the download and the PIL work are
+            # synchronous: called inline from an async def they block the event
+            # loop, so one slow page stalls every other request on the worker.
+            data = await asyncio.to_thread(_fetch_page_image, raw_path, w, flat_rects)
+        except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Image file not found in storage")
-        if w or rects:
-            import io
-            from PIL import Image as PILImage, UnidentifiedImageError
-            try:
-                img = PILImage.open(io.BytesIO(data))
-                img.load()
-            except (UnidentifiedImageError, OSError):
-                raise HTTPException(status_code=404, detail="Image file unreadable")
-            if rects:
-                img = burn_page(img, rects)
-            if w:
-                ratio = w / img.width
-                new_h = int(img.height * ratio)
-                img = img.resize((w, new_h), PILImage.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=75)
-            data = buf.getvalue()
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Image file unreadable")
         return Response(content=data, media_type="image/jpeg")
-    else:
-        path = Path(raw_path.replace("\\", "/")).resolve()
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Image file not found")
-        if rects:
-            import io
-            from PIL import Image as PILImage, UnidentifiedImageError
-            try:
-                img = PILImage.open(str(path))
-                img.load()
-            except (UnidentifiedImageError, OSError):
-                raise HTTPException(status_code=404, detail="Image file unreadable")
-            img = burn_page(img, rects)
-            buf = io.BytesIO()
-            img.save(buf, "JPEG", quality=90)
-            return Response(content=buf.getvalue(), media_type="image/jpeg")
-        return FileResponse(str(path), media_type="image/jpeg")
+
+    path = Path(raw_path.replace("\\", "/")).resolve()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found")
+    if flat_rects:
+        try:
+            data = await asyncio.to_thread(_burn_local_page, str(path), flat_rects)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Image file unreadable")
+        return Response(content=data, media_type="image/jpeg")
+    return FileResponse(str(path), media_type="image/jpeg")
 
 
 @router.get("/{doc_id}/pdf")

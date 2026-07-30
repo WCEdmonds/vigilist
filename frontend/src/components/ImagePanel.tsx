@@ -25,15 +25,33 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
     setBlobUrls({});
     viewportRef.current?.scrollTo(0, 0);
 
-    // Fetch all page images as authenticated blobs (request at 1200px width for performance)
+    // Fetch page images as authenticated blobs, at 1200px, a few at a time.
+    //
+    // This used to fire one request per page simultaneously. On a long
+    // document that meant ~120 concurrent requests, each holding a pooled DB
+    // connection on the server while it downloaded and resized — which drained
+    // the pool and failed the tail of them outright:
+    //   QueuePool limit of size 5 overflow 10 reached, connection timed out
+    // The server no longer holds a connection across that work, but there is
+    // still no reason to ask for page 118 while the reader is on page 1.
+    // Workers pull from a shared cursor, so pages arrive roughly top-down.
     let cancelled = false;
-    for (let p = 1; p <= pageCount; p++) {
-      fetchImageBlob(docId, p, 1200).then(url => {
-        if (!cancelled) setBlobUrls(prev => ({ ...prev, [p]: url }));
-      }).catch(e => {
-        if (!cancelled) console.warn(`fetchImageBlob page ${p} failed:`, e);
-      });
-    }
+    const CONCURRENCY = 4;
+    let nextPage = 1;
+
+    const worker = async () => {
+      for (;;) {
+        const p = nextPage++;
+        if (cancelled || p > pageCount) return;
+        try {
+          const url = await fetchImageBlob(docId, p, 1200);
+          if (!cancelled) setBlobUrls(prev => ({ ...prev, [p]: url }));
+        } catch (e) {
+          if (!cancelled) console.warn(`fetchImageBlob page ${p} failed:`, e);
+        }
+      }
+    };
+    for (let i = 0; i < Math.min(CONCURRENCY, pageCount); i++) void worker();
     return () => {
       cancelled = true;
       // Revoke old blob URLs
