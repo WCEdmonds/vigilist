@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   acceptMergeSuggestion, autoResolveTypos, deleteEntity, getEntityConnections, getEntityMentions,
   listEntities, listMergeSuggestions, mergeEntities, rejectMergeSuggestion, renameEntity,
+  runMergeReview,
   setEntityCaseRole,
   triggerEntityExtraction,
 } from '../api/client';
@@ -514,6 +515,20 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     }
   };
 
+  const runDocketReview = async () => {
+    setBulkBusy(true);
+    setResolveError(null);
+    setTypoMsg(null);
+    try {
+      await runMergeReview(productionId);
+      setTypoMsg('AI review queued — it runs in the background and can take a few minutes. Reopen this view to see the results.');
+    } catch (e) {
+      setResolveError(errText(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const runAutoTypos = async () => {
     setBulkBusy(true);
     setResolveError(null);
@@ -912,6 +927,18 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
                   title="Auto-merge pairs that differ by a single-character typo (safe class only)"
                 >
                   Auto-merge obvious typos
+                </button>
+                {/* The deterministic pass above only takes single-character
+                    indels. This one judges the rest on document evidence —
+                    OCR plausibility, mention counts, emails — which is what
+                    separates "Tate Streling" from "Elie Richards". */}
+                <button
+                  className="btn btn-ghost btn-xs"
+                  disabled={bulkBusy}
+                  onClick={runDocketReview}
+                  title="Have the AI judge the remaining pairs on document evidence: obvious duplicates merge, clear non-matches are dismissed, the rest come back annotated"
+                >
+                  ✦ AI review the docket
                 </button>
               </div>
               {typoMsg && <div className="docket-msg">{typoMsg}</div>}

@@ -892,6 +892,63 @@ async def delete_event(
     return {"ok": True}
 
 
+@router.post("/productions/{production_id}/merge-review")
+async def trigger_merge_review(
+    production_id: int,
+    background_tasks: BackgroundTasks,
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """AI review of the pending merge docket. Manager or admin only.
+
+    String similarity cannot separate an OCR corruption from two people —
+    "Tate Streling"/"Tate Sterling" and "Elie Richards"/"Leslie Richards"
+    score identically. This pass gathers the evidence a reviewer would gather
+    by hand and returns merge / distinct / unclear per pair, applying only
+    merges above the confidence gate. See services/merge_review.py.
+
+    409 while one is queued or running, for the same reason as the timeline
+    review: concurrent runs apply non-deterministic destructive verdicts, and
+    two runs can merge the same pair with different keepers. `force` is the
+    escape hatch for a crashed run. Dispatch mirrors it too — Cloud Tasks in
+    production, an in-process background task for local dev, because a
+    multi-minute model call must not run inline on Cloud Run.
+    """
+    import app.dependencies as deps
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    role = await deps.get_user_role_for_production(db, user, production_id)
+    if deps.ROLE_RANK.get(role, 0) < deps.ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    prod = await db.get(Production, production_id)
+    status = dict((prod.ai_pipeline_status if prod else None) or {})
+    if status.get("merge_review") in ("queued", "running") and not force:
+        raise HTTPException(status_code=409,
+                            detail="A merge review is already queued or running; "
+                                   "retry with force=true if it appears stuck")
+
+    await log_action(db, user, "merge_review_triggered", "production",
+                     str(production_id), production_id=production_id)
+
+    from app.services import tasks as task_service
+    if task_service.is_configured():
+        if prod is not None:
+            # Reassign rather than mutate: in-place mutation of a JSONB dict is
+            # invisible to the ORM and silently fails to persist.
+            prod.ai_pipeline_status = {**status, "merge_review": "queued"}
+        await db.commit()
+        task_service.enqueue_pipeline(production_id)
+        return {"status": "enqueued"}
+
+    await db.commit()
+    from app.services.pipeline import run_merge_review_stage
+    background_tasks.add_task(run_merge_review_stage, production_id)
+    return {"status": "started"}
+
+
 @router.post("/productions/{production_id}/timeline-review")
 async def trigger_timeline_review(
     production_id: int,

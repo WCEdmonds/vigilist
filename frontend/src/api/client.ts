@@ -910,6 +910,14 @@ export const renameEntity = (entityId: string, canonicalName: string) =>
 export const deleteEntity = (entityId: string) =>
   request<{ ok: boolean }>(`/api/entities/${entityId}`, { method: 'DELETE' });
 
+/** AI review of the pending merge docket. Long-running: dispatched to a
+ *  worker, so this returns as soon as it is queued. */
+export const runMergeReview = (productionId: number, force = false) =>
+  request<{ status: string }>(
+    `/api/productions/${productionId}/merge-review${force ? '?force=true' : ''}`,
+    { method: 'POST' },
+  );
+
 export const autoResolveTypos = (productionId: number) =>
   request<{ merged: number }>(`/api/productions/${productionId}/merge-suggestions/auto-resolve-typos`, { method: 'POST' });
 

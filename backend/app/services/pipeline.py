@@ -220,6 +220,42 @@ async def _run_timeline_review(production_id: int) -> None:
         await db.commit()
 
 
+async def _run_merge_review(production_id: int) -> None:
+    """AI review of the entity merge docket (spec:
+    docs/superpowers/specs/2026-07-30-ai-merge-assistant-design.md).
+
+    On-demand only — it is not a pipeline stage, because unlike the timeline
+    review there is nothing downstream waiting on it and a merge is a
+    judgement the reviewer may want to make themselves.
+    """
+    from app.services.audit import resolve_audit_actor
+    from app.services.merge_review import run_merge_review
+    async with async_session() as db:
+        prod = await db.get(Production, production_id)
+        if prod is None:
+            return
+        actor = await resolve_audit_actor(db, prod)
+        if actor is None:
+            logger.warning("Merge review skipped for production %s: "
+                           "no owner to attribute audit rows to", production_id)
+            return
+        await run_merge_review(db, production_id, actor)
+        await db.commit()
+
+
+async def run_merge_review_stage(production_id: int) -> None:
+    """Standalone merge-review run for the manager endpoint — same stage-status
+    writes as the pipeline loop so one status surface serves both. Never raises."""
+    await _set_stage(production_id, "merge_review", "running")
+    try:
+        await _run_merge_review(production_id)
+    except Exception as exc:
+        logger.exception("Merge review failed for production %s", production_id)
+        await _set_stage(production_id, "merge_review", "failed", error=str(exc)[:300])
+    else:
+        await _set_stage(production_id, "merge_review", "done")
+
+
 async def _run_brief(production_id: int) -> None:
     async with async_session() as db:
         brief = await generate_brief(db, production_id)
