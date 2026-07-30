@@ -19,11 +19,13 @@ confidence gate, audit snapshots, connection released before the model call.
 import asyncio as _asyncio
 import json
 import logging
+import uuid as _uuid
 
 from sqlalchemy import func, select
 
 from app.config import settings
 from app.models import Document, Entity, EntityMention, EntityMergeSuggestion
+from app.services.audit import log_action
 from app.services.entity_merge import merge_entities
 from app.services.timeline_review import REVIEW_MODEL, _retryable_errors
 
@@ -67,7 +69,13 @@ Return one verdict per pair:
 - "distinct" — different entities. The suggestion is dismissed.
 - "unclear" — you cannot tell from this evidence. Say what you would need. A human will decide.
 
-Every verdict carries a one-sentence reason and a confidence from 0 to 1. Only "merge" verdicts at confidence 0.85 or above are applied, so do not pad with low-confidence guesses — "unclear" is a useful answer, not a failure."""
+Every verdict carries a one-sentence reason and a confidence from 0 to 1. Only "merge" verdicts at confidence 0.85 or above are applied, so do not pad with low-confidence guesses — "unclear" is a useful answer, not a failure.
+
+NAME CORRECTIONS. Separately from the verdict, you may correct a record whose stored name is itself a corruption, by adding entries to `corrections`. This is independent of the verdict: two records can be genuinely distinct and one still be misnamed, and two records can merge while the survivor still carries a mangled name.
+
+The corrected name MUST appear verbatim in that record's snippets. A correction whose name does not occur in the snippets is discarded — so read the name out of the document text rather than reconstructing what you think it should be. If the snippets show "BEFORE THE HONORABLE PAMELA K. ALBAN", "Pamela K. Alban" is a valid correction; if they only show "Pamela Neill", it is not, however confident you are about the real name.
+
+Do not correct casing or punctuation alone. Correct a name only when the stored one is wrong — clipped, transposed, misread, or a different person's name entirely."""
 
 
 MERGE_REVIEW_SCHEMA = {
@@ -83,6 +91,23 @@ MERGE_REVIEW_SCHEMA = {
                     "keep_id": {"type": "string"},
                     "reason": {"type": "string"},
                     "confidence": {"type": "number"},
+                    # Optional name corrections, independent of the verdict:
+                    # two records can be distinct and one still be misnamed.
+                    "corrections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entity_id": {"type": "string"},
+                                "corrected_name": {"type": "string"},
+                                "reason": {"type": "string"},
+                                "confidence": {"type": "number"},
+                            },
+                            "required": ["entity_id", "corrected_name", "reason",
+                                         "confidence"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
                 "required": ["suggestion_id", "verdict", "reason", "confidence"],
                 "additionalProperties": False,
@@ -201,14 +226,60 @@ def parse_verdicts(raw: str) -> list[dict]:
             conf = float(v["confidence"])
         except (KeyError, TypeError, ValueError):
             continue
+        corrections = []
+        for c in v.get("corrections") or []:
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("corrected_name") or "").strip()
+            ent_id = str(c.get("entity_id") or "").strip()
+            if not name or not ent_id or len(name) > 500:
+                continue
+            try:
+                c_conf = float(c["confidence"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            corrections.append({
+                "entity_id": ent_id,
+                "corrected_name": name,
+                "reason": str(c.get("reason") or "")[:500],
+                "confidence": c_conf,
+            })
+
         out.append({
             "suggestion_id": sid,
             "verdict": v["verdict"],
             "keep_id": str(v.get("keep_id") or "") or None,
             "reason": str(v.get("reason") or "")[:1000],
             "confidence": conf,
+            "corrections": corrections,
         })
     return out
+
+
+def _normalize_for_grounding(text: str) -> str:
+    """Case- and whitespace-insensitive form for the attestation check."""
+    return " ".join((text or "").split()).casefold()
+
+
+async def is_name_attested(db, entity_id, name: str) -> bool:
+    """True when `name` occurs verbatim in one of the entity's snippets.
+
+    The guard that separates OCR *correction* from name *invention*. A model
+    can be confident about a real-world fact — that a judge is called Alban —
+    without that name existing anywhere in this matter's documents. Applying
+    such a name would relabel a person across the record on the strength of
+    outside knowledge. So a correction must be attested in the text.
+    """
+    target = _normalize_for_grounding(name)
+    if not target:
+        return False
+    rows = (await db.execute(
+        select(EntityMention.context_snippet)
+        .where(EntityMention.entity_id == entity_id,
+               EntityMention.context_snippet.isnot(None))
+        .limit(500)
+    )).scalars().all()
+    return any(target in _normalize_for_grounding(s) for s in rows)
 
 
 async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) -> dict:
@@ -218,8 +289,46 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
     draft blocked merging co-occurring entities as a safety measure, which
     would have rejected exactly the OCR duplicates this exists to resolve.
     """
-    merged = dismissed = annotated = skipped = 0
+    merged = dismissed = annotated = skipped = renamed = 0
     reasons: list[str] = []
+
+    async def apply_corrections(v) -> None:
+        """Rename entities the model found misnamed. Independent of the
+        verdict — a distinct pair can still contain a mangled name."""
+        nonlocal renamed
+        for c in v.get("corrections") or []:
+            if c["confidence"] < CONFIDENCE_GATE:
+                reasons.append(f"rename {c['corrected_name']!r}: below gate")
+                continue
+            try:
+                ent = await db.get(Entity, _uuid.UUID(c["entity_id"]))
+            except (ValueError, AttributeError):
+                ent = None
+            if ent is None or ent.production_id != production_id:
+                continue
+            new_name = c["corrected_name"].strip()
+            if not new_name or new_name == ent.canonical_name:
+                continue
+            if not await is_name_attested(db, ent.id, new_name):
+                # Never apply a name the documents do not contain.
+                reasons.append(f"rename {new_name!r}: not attested in snippets")
+                continue
+
+            old = ent.canonical_name
+            # Keep the old spelling as an alias, matching the manual rename
+            # endpoint: it stays searchable and matchable instead of vanishing.
+            aliases = list(ent.aliases or [])
+            if old and old not in aliases:
+                aliases.append(old)
+            ent.aliases = aliases
+            ent.canonical_name = new_name
+            await log_action(
+                db, actor, "entity_renamed", "entity", str(ent.id),
+                production_id=production_id,
+                details={"old_name": old, "new_name": new_name,
+                         "source": "ai_merge_review", "reason": c["reason"]},
+            )
+            renamed += 1
 
     for v in verdicts:
         s = await db.get(EntityMergeSuggestion, v["suggestion_id"])
@@ -233,6 +342,11 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
 
         s.score = max(0.0, min(1.0, v["confidence"]))
         s.rationale = f"AI review: {v['reason']}"
+
+        # Before the verdict: a correction on the losing side would be lost
+        # once that entity is merged away, and merge_entities carries aliases
+        # (including the old spelling) onto the survivor anyway.
+        await apply_corrections(v)
 
         if v["verdict"] == "distinct":
             s.status = "rejected"
@@ -273,7 +387,7 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
         merged += 1
 
     return {"merged": merged, "dismissed": dismissed, "annotated": annotated,
-            "skipped": skipped, "skip_reasons": reasons[:20]}
+            "renamed": renamed, "skipped": skipped, "skip_reasons": reasons[:20]}
 
 
 async def _call_model(user_content: str) -> tuple[str, str, dict]:
@@ -320,8 +434,8 @@ async def run_merge_review(db, production_id: int, actor) -> dict:
     """Review the pending merge docket in one call and apply the verdicts."""
     evidence = await gather_pair_evidence(db, production_id)
     if not evidence:
-        return {"status": "empty", "merged": 0, "dismissed": 0,
-                "annotated": 0, "skipped": 0, "skip_reasons": []}
+        return {"status": "empty", "merged": 0, "dismissed": 0, "annotated": 0,
+                "renamed": 0, "skipped": 0, "skip_reasons": []}
 
     # The call takes minutes. End the read transaction so the connection goes
     # back to the pool — held across the call it sits idle past Neon's kill

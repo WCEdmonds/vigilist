@@ -214,3 +214,111 @@ def test_a_rejected_merge_is_counted_not_raised(monkeypatch):
 
     assert out["merged"] == 0 and out["skipped"] == 1
     assert any("different types" in r for r in out["skip_reasons"])
+
+
+# ── Name corrections ─────────────────────────────────────────────────────
+#
+# The model may also fix a record whose stored name is itself a corruption.
+# The guard that makes this safe is attestation: a corrected name must occur
+# verbatim in that entity's snippets, so the system can FIND a name in the
+# documents but never INVENT one. A model can be confident a judge is called
+# "Alban" from world knowledge; applying that without it appearing in the
+# record would relabel a person across the matter on outside information.
+
+def _with_attestation(monkeypatch, attested: bool):
+    async def fake(db, entity_id, name):
+        return attested
+    monkeypatch.setattr(mr, "is_name_attested", fake)
+
+    async def fake_log(*a, **k):
+        return None
+    monkeypatch.setattr(mr, "log_action", fake_log)
+
+
+def _correction(entity, name, confidence):
+    return {"entity_id": str(entity.id), "corrected_name": name,
+            "reason": "transcript header", "confidence": confidence}
+
+
+def test_attested_correction_is_applied_and_keeps_the_old_name_as_an_alias(monkeypatch):
+    db, s, a, b, calls = _setup(monkeypatch)
+    _with_attestation(monkeypatch, True)
+    monkeypatch.setattr(mr, "_uuid", __import__("uuid"))
+
+    out = asyncio.run(apply_verdicts(db, 1, [{
+        "suggestion_id": 1, "verdict": "distinct", "reason": "different people",
+        "confidence": 0.9,
+        "corrections": [_correction(a, "Pamela K. Alban", 0.92)],
+    }], FakeUser()))
+
+    assert out["renamed"] == 1
+    assert a.canonical_name == "Pamela K. Alban"
+    assert "Tate Sterling" in a.aliases      # old spelling stays searchable
+
+
+def test_unattested_correction_is_refused(monkeypatch):
+    # The load-bearing guard: high confidence must not be enough on its own.
+    db, s, a, b, calls = _setup(monkeypatch)
+    _with_attestation(monkeypatch, False)
+    original = a.canonical_name
+
+    out = asyncio.run(apply_verdicts(db, 1, [{
+        "suggestion_id": 1, "verdict": "distinct", "reason": "different people",
+        "confidence": 0.9,
+        "corrections": [_correction(a, "Pamela K. Alban", 0.99)],
+    }], FakeUser()))
+
+    assert out["renamed"] == 0
+    assert a.canonical_name == original
+    assert any("not attested" in r for r in out["skip_reasons"])
+
+
+def test_correction_below_the_gate_is_not_applied(monkeypatch):
+    db, s, a, b, calls = _setup(monkeypatch)
+    _with_attestation(monkeypatch, True)
+    original = a.canonical_name
+
+    out = asyncio.run(apply_verdicts(db, 1, [{
+        "suggestion_id": 1, "verdict": "distinct", "reason": "x", "confidence": 0.9,
+        "corrections": [_correction(a, "Pamela K. Alban", CONFIDENCE_GATE - 0.01)],
+    }], FakeUser()))
+
+    assert out["renamed"] == 0
+    assert a.canonical_name == original
+
+
+def test_a_correction_applies_alongside_a_merge(monkeypatch):
+    # Verdict and correction are independent: a pair can merge while the
+    # survivor still carries a mangled name.
+    db, s, a, b, calls = _setup(monkeypatch)
+    _with_attestation(monkeypatch, True)
+    monkeypatch.setattr(mr, "_uuid", __import__("uuid"))
+
+    out = asyncio.run(apply_verdicts(db, 1, [{
+        "suggestion_id": 1, "verdict": "merge", "keep_id": str(a.id),
+        "reason": "OCR variant", "confidence": 0.95,
+        "corrections": [_correction(a, "Tate Sterling Jr.", 0.9)],
+    }], FakeUser()))
+
+    assert out["merged"] == 1 and out["renamed"] == 1
+    assert a.canonical_name == "Tate Sterling Jr."
+
+
+def test_a_correction_that_changes_nothing_is_ignored(monkeypatch):
+    db, s, a, b, calls = _setup(monkeypatch)
+    _with_attestation(monkeypatch, True)
+    out = asyncio.run(apply_verdicts(db, 1, [{
+        "suggestion_id": 1, "verdict": "distinct", "reason": "x", "confidence": 0.9,
+        "corrections": [_correction(a, a.canonical_name, 0.99)],
+    }], FakeUser()))
+    assert out["renamed"] == 0
+
+
+def test_parse_keeps_well_formed_corrections_and_drops_the_rest():
+    raw = ('{"verdicts": [{"suggestion_id": 1, "verdict": "distinct", "reason": "r",'
+           ' "confidence": 0.9, "corrections": ['
+           '{"entity_id": "e1", "corrected_name": "Good Name", "reason": "r", "confidence": 0.9},'
+           '{"entity_id": "e2", "corrected_name": "", "reason": "r", "confidence": 0.9},'
+           '{"entity_id": "e3", "corrected_name": "No Confidence", "reason": "r"}]}]}')
+    out = parse_verdicts(raw)
+    assert [c["corrected_name"] for c in out[0]["corrections"]] == ["Good Name"]
