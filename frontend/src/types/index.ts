@@ -457,6 +457,21 @@ export interface EntityListItem {
   case_role?: CaseRole | null;
 }
 
+/** A jump target for a partially-typed document number. Light on purpose —
+ *  this is navigation, not a document payload. */
+export interface BatesCandidate {
+  id: string;
+  bates_begin: string;
+  bates_end: string;
+  title: string | null;
+  page_count: number;
+}
+
+export interface BatesCandidates {
+  candidates: BatesCandidate[];
+  truncated: boolean;
+}
+
 /** Declared standing in the matter. Persisted in entities.attributes.case_role;
  *  these strings must stay in sync with models.CASE_ROLES on the backend. */
 export type CaseRole =

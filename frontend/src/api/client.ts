@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, CaseRole, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
+  AIReviewResult, Annotation, BatchDocument, BatesCandidates, CaseRole, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
   DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
@@ -90,6 +90,16 @@ export const getDocumentNav = (id: string, productionId?: number) =>
   request<{ prev_id: string | null; next_id: string | null }>(
     `/api/documents/${id}/nav${productionId ? `?production_id=${productionId}` : ''}`
   );
+
+/** Jump targets for a typed document number. Unlike getByBates (which
+ *  resolves a complete Bates for an AI citation and must stay exact), this
+ *  matches the trailing number too, and returns every candidate rather than
+ *  silently picking one. */
+export function getBatesCandidates(q: string, productionId?: number) {
+  const params = new URLSearchParams({ q });
+  if (productionId) params.set('production_id', String(productionId));
+  return request<BatesCandidates>(`/api/documents/bates-candidates?${params}`);
+}
 
 export function getByBates(bates: string, productionId?: number) {
   const params = new URLSearchParams({ bates });

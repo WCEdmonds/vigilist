@@ -981,6 +981,26 @@ class SearchTermReportOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class BatesCandidateOut(BaseModel):
+    """A jump target for a partially-typed document number.
+
+    Deliberately light — no text_content, no tags. This is a navigation
+    affordance, and every column here crosses a cloud boundary.
+    """
+    id: UUID
+    bates_begin: str
+    bates_end: str
+    title: str | None = None
+    page_count: int
+
+
+class BatesCandidatesOut(BaseModel):
+    candidates: list[BatesCandidateOut] = []
+    # True when the cap truncated the list, so the UI can say so rather than
+    # implying these are all of them.
+    truncated: bool = False
+
+
 class ChatMessageOut(BaseModel):
     id: int
     role: str
