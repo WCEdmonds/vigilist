@@ -1513,6 +1513,27 @@ mark {
   flex: 1;
 }
 
+/* Word, not just a glyph: the bare "⟲" gave no clue it opened saved
+   conversations. .rail-title takes the flex space, so this stays compact. */
+.rail-history-btn {
+  flex: none;
+  border: 0;
+  background: transparent;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rail-history-btn:hover,
+.rail-history-btn[aria-expanded='true'] {
+  background: var(--color-neutral-100);
+  color: var(--color-primary-900);
+}
+
 .rail-context-line {
   font-size: var(--text-xs);
   color: var(--color-neutral-500);
