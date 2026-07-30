@@ -853,6 +853,55 @@ mark {
   color: #fff;
   border-bottom-right-radius: var(--radius-sm);
 }
+
+/* ── Markdown inside an assistant reply ──
+   The user's own message is plain text and keeps pre-wrap. An assistant reply
+   is parsed markdown, where preserving newlines would double the spacing the
+   block elements already provide. */
+.ai-agent-msg-assistant .ai-agent-msg-content { white-space: normal; }
+
+.ai-agent-msg-content > :first-child { margin-top: 0; }
+.ai-agent-msg-content > :last-child { margin-bottom: 0; }
+.ai-agent-msg-content p { margin: 0 0 var(--space-2); }
+.ai-agent-msg-content ul,
+.ai-agent-msg-content ol { margin: 0 0 var(--space-2); padding-left: 1.25em; }
+.ai-agent-msg-content li { margin: 2px 0; }
+
+/* Chat headings are section labels in a small bubble, not page titles — the
+   browser defaults would dwarf the prose around them. */
+.ai-agent-msg-content h1,
+.ai-agent-msg-content h2,
+.ai-agent-msg-content h3,
+.ai-agent-msg-content h4 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  line-height: 1.3;
+}
+
+.chat-md-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 var(--space-2);
+}
+
+.chat-md-table-wrap table {
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.chat-md-table-wrap th,
+.chat-md-table-wrap td {
+  border: 1px solid var(--color-neutral-200);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.chat-md-table-wrap th {
+  background: var(--color-neutral-100);
+  font-weight: var(--font-semibold);
+}
 .ai-agent-msg-assistant .ai-agent-msg-content {
   background: var(--color-neutral-50);
   color: var(--color-ink);

@@ -248,6 +248,11 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
+  /* Wrap so the hover verbs drop to their own line rather than crushing the
+     name. .cast-acts is opacity:0 at rest but still occupies width, and once
+     the case-role select joined it that footprint was wide enough to break
+     names character by character inside a 320px card. */
+  flex-wrap: wrap;
 }
 
 /* Monogram tile: cut square, like a letterpress initial block. Person =
@@ -283,7 +288,9 @@
   border: 1.5px solid var(--color-brass);
 }
 
-.cast-card-id { flex: 1; min-width: 0; }
+/* A floor, not zero: at min-width 0 this yielded all its width to the hover
+   verbs beside it, and the name was what paid. Below this the verbs wrap. */
+.cast-card-id { flex: 1 1 auto; min-width: 14ch; }
 
 .cast-name {
   display: block;
@@ -298,7 +305,10 @@
   line-height: var(--leading-tight);
   color: var(--color-ink);
   cursor: pointer;
-  overflow-wrap: anywhere;
+  /* break-word, never `anywhere`: a person's name split mid-syllable
+     ("Matth / ew Scott Banks Schle / gel") is unreadable and looks broken.
+     This only splits a word that cannot fit a line by itself. */
+  overflow-wrap: break-word;
 }
 
 .cast-name:hover { color: var(--color-stamp); }

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { getByBates } from '../api/client';
 import type { ChatState } from '../hooks/useChat';
 import { showToast } from './Toast';
-import { renderChatMarkdown } from '../utils/chatMarkdown';
+import { ChatMarkdown } from '../utils/chatMarkdown';
 
 interface Props {
   chat: ChatState;
@@ -129,7 +129,7 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDoc
           <div key={i} className={`ai-agent-msg ai-agent-msg-${m.role === 'user' ? 'user' : 'assistant'}`}>
             <div className="ai-agent-msg-role">{m.role === 'user' ? 'You' : '✦ AI'}</div>
             <div className="ai-agent-msg-content">
-              {m.role === 'user' ? m.content : renderChatMarkdown(m.content)}
+              {m.role === 'user' ? m.content : <ChatMarkdown text={m.content} />}
             </div>
           </div>
         ))}
@@ -147,7 +147,7 @@ export default function ChatPanel({ chat, placeholder, autoFocusToken, onOpenDoc
               </div>
             )}
             <div className="ai-agent-msg-content">
-              {chat.streamingText ? renderChatMarkdown(chat.streamingText) : (
+              {chat.streamingText ? <ChatMarkdown text={chat.streamingText} /> : (
                 <span className="ai-agent-typing"><span /><span /><span /></span>
               )}
             </div>
