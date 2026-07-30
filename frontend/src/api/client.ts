@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
+  AIReviewResult, Annotation, BatchDocument, CaseRole, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
   DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
@@ -877,6 +877,14 @@ export const mergeEntities = (winnerId: string, loserId: string) =>
  * (403 if read-only). The previous canonical_name is preserved server-side
  * as an alias.
  */
+/** Declare (or clear, with null) an entity's standing in this matter. */
+export const setEntityCaseRole = (entityId: string, caseRole: CaseRole | null) =>
+  request<{ id: string; case_role: CaseRole | null }>(`/api/entities/${entityId}/case-role`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ case_role: caseRole }),
+  });
+
 export const renameEntity = (entityId: string, canonicalName: string) =>
   request<EntityRenameResult>(`/api/entities/${entityId}`, {
     method: 'PATCH',

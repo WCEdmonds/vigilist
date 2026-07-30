@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   acceptMergeSuggestion, autoResolveTypos, deleteEntity, getEntityConnections, getEntityMentions,
   listEntities, listMergeSuggestions, mergeEntities, rejectMergeSuggestion, renameEntity,
+  setEntityCaseRole,
   triggerEntityExtraction,
 } from '../api/client';
 import { entityDisplayName } from '../utils/entityDisplay';
-import type { EntityConnections, EntityListItem, MergeSuggestion } from '../types';
+import { CASE_ROLE_LABELS, CASE_ROLE_ORDER, caseRoleRank } from '../utils/caseRoles';
+import type { CaseRole, EntityConnections, EntityListItem, MergeSuggestion } from '../types';
 import EntityPanel from './EntityPanel';
 import { showToast } from './Toast';
 
@@ -27,6 +29,11 @@ type Tier = 'principal' | 'supporting' | 'mentioned';
  * "principal" on four mentions unless they lead the record), the relative
  * term keeps large ones honest (3% of the lead's mentions is not a lead). */
 function tierOf(e: EntityListItem, topMentions: number): Tier {
+  // A declared party leads regardless of how often the evidence names them.
+  // Frequency measures what the documents are *about* — on a civil matter
+  // built from a criminal case file that is a different proceeding, so the
+  // plaintiffs can be barely mentioned and still be the point.
+  if (e.case_role) return 'principal';
   if (e.mention_count >= Math.max(6, topMentions * 0.3) && e.document_count >= 2) return 'principal';
   if (e.mention_count >= 3) return 'supporting';
   return 'mentioned';
@@ -205,6 +212,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
   const [draftName, setDraftName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [roleBusyId, setRoleBusyId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
 
@@ -315,12 +323,21 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     const supporting: EntityListItem[] = [];
     const mentioned: EntityListItem[] = [];
     const top = entities[0]?.mention_count ?? 0;
+    // The cap exists to stop frequency noise flooding the tier, not to limit
+    // deliberate designations — so it counts only frequency-derived cards.
+    // Nine declared parties should yield nine.
+    let byFrequency = 0;
     for (const e of entities) {
       const t = tierOf(e, top);
-      if (t === 'principal' && principals.length < PRINCIPAL_CAP) principals.push(e);
-      else if (t === 'mentioned') mentioned.push(e);
+      if (t === 'principal') {
+        if (e.case_role) principals.push(e);
+        else if (byFrequency < PRINCIPAL_CAP) { principals.push(e); byFrequency += 1; }
+        else supporting.push(e);
+      } else if (t === 'mentioned') mentioned.push(e);
       else supporting.push(e);
     }
+    principals.sort((a, b) =>
+      caseRoleRank(a.case_role) - caseRoleRank(b.case_role) || b.mention_count - a.mention_count);
     return { principals, supporting, mentioned };
   }, [entities]);
 
@@ -538,6 +555,24 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
     if (openEntityId === id) openEntity(null);
   };
 
+  /** Declare or clear an entity's standing in the matter. Optimistic: the tier
+   *  recomputes immediately so the card moves under the cursor, and reverts if
+   *  the write fails. */
+  const applyCaseRole = async (e: EntityListItem, next: CaseRole | null) => {
+    const previous = e.case_role ?? null;
+    if (previous === next) return;
+    setRoleBusyId(e.id);
+    setEntities(prev => prev.map(x => (x.id === e.id ? { ...x, case_role: next } : x)));
+    try {
+      await setEntityCaseRole(e.id, next);
+    } catch (err) {
+      setEntities(prev => prev.map(x => (x.id === e.id ? { ...x, case_role: previous } : x)));
+      showToast(err instanceof Error ? err.message : 'Could not set the case role', 'error');
+    } finally {
+      setRoleBusyId(null);
+    }
+  };
+
   const startRename = (e: EntityListItem) => {
     setEditingId(e.id);
     setConfirmingId(null);
@@ -647,6 +682,22 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
       </span>
     ) : (
       <span className="cast-acts" onClick={ev => ev.stopPropagation()}>
+        <label className="visually-hidden" htmlFor={`case-role-${e.id}`}>
+          Case role for {e.canonical_name}
+        </label>
+        <select
+          id={`case-role-${e.id}`}
+          className="cast-role-select"
+          value={e.case_role ?? ''}
+          disabled={roleBusyId === e.id}
+          title="Standing in this matter — declared parties lead the cast regardless of mention count"
+          onChange={ev => applyCaseRole(e, ev.target.value === '' ? null : ev.target.value as CaseRole)}
+        >
+          <option value="">No role</option>
+          {CASE_ROLE_ORDER.map(r => (
+            <option key={r} value={r}>{CASE_ROLE_LABELS[r]}</option>
+          ))}
+        </select>
         <button className="cast-act" onClick={() => startRename(e)}>Rename</button>
         <button className="cast-act is-danger" onClick={() => setConfirmingId(e.id)}>Delete</button>
       </span>
@@ -692,6 +743,11 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
               <button className="cast-name" onClick={ev => { ev.stopPropagation(); openEntity(e.id); }}>
                 {name}
               </button>
+            )}
+            {/* A declared role leads the line: standing in the matter outranks
+                what the documents happen to call someone. */}
+            {e.case_role && (
+              <div className="cast-case-role">{CASE_ROLE_LABELS[e.case_role]}</div>
             )}
             <div className="cast-kind">
               {e.entity_type === 'person' ? 'Person' : 'Organization'}

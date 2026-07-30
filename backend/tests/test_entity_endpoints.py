@@ -548,3 +548,93 @@ def test_delete_entity_audit_log_includes_snapshot(monkeypatch):
     assert details["entity_type"] == "person"
     assert details["mention_count"] == 100
     assert details["aliases"] == ["J. Rivera"]
+
+
+# ── PATCH /api/entities/{entity_id}/case-role ─────────────────────────────
+#
+# A case role is an assertion the documents do not contain: on a civil matter
+# built from a criminal case file, frequency surfaces the criminal parties and
+# buries the civil plaintiffs. Declaring the role promotes an entity to the
+# principal tier regardless of mention count.
+
+def _case_role_req(value):
+    from app.schemas import EntityCaseRoleRequest
+    return EntityCaseRoleRequest(case_role=value)
+
+
+def test_set_case_role_persists_into_attributes(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    out = asyncio.run(er.set_entity_case_role(
+        entity_id=ENT_ID, body=_case_role_req("plaintiff"),
+        db=_entity_db(ent), user=FakeUser()))
+    assert ent.attributes["case_role"] == "plaintiff"
+    assert out.case_role == "plaintiff"
+
+
+def test_set_case_role_reassigns_attributes_rather_than_mutating(monkeypatch):
+    # SQLAlchemy does not track in-place mutation of a JSONB dict, so mutating
+    # the existing dict would leave the write unpersisted. The handler must
+    # hand back a NEW object.
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    original = ent.attributes
+    asyncio.run(er.set_entity_case_role(
+        entity_id=ENT_ID, body=_case_role_req("defendant"),
+        db=_entity_db(ent), user=FakeUser()))
+    assert ent.attributes is not original
+
+
+def test_set_case_role_preserves_other_attributes(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    ent.attributes = {"role": "Lieutenant", "emails": ["a@b.com"]}
+    asyncio.run(er.set_entity_case_role(
+        entity_id=ENT_ID, body=_case_role_req("witness"),
+        db=_entity_db(ent), user=FakeUser()))
+    assert ent.attributes["role"] == "Lieutenant"       # extracted role untouched
+    assert ent.attributes["emails"] == ["a@b.com"]
+    assert ent.attributes["case_role"] == "witness"
+
+
+def test_set_case_role_null_clears_the_key(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    ent.attributes = {"case_role": "plaintiff", "role": "Lieutenant"}
+    out = asyncio.run(er.set_entity_case_role(
+        entity_id=ENT_ID, body=_case_role_req(None),
+        db=_entity_db(ent), user=FakeUser()))
+    assert "case_role" not in ent.attributes   # removed, not set to None
+    assert ent.attributes["role"] == "Lieutenant"
+    assert out.case_role is None
+
+
+def test_set_case_role_rejects_a_value_outside_the_vocabulary(monkeypatch):
+    _patch_writer(monkeypatch)
+    ent = _entity()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.set_entity_case_role(
+            entity_id=ENT_ID, body=_case_role_req("co-conspirator"),
+            db=_entity_db(ent), user=FakeUser()))
+    assert exc.value.status_code == 422
+    assert "case_role" not in ent.attributes
+
+
+def test_set_case_role_blocked_for_readonly(monkeypatch):
+    _patch_writer(monkeypatch, role="readonly")
+    ent = _entity()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.set_entity_case_role(
+            entity_id=ENT_ID, body=_case_role_req("plaintiff"),
+            db=_entity_db(ent), user=FakeUser()))
+    assert exc.value.status_code == 403
+
+
+def test_set_case_role_denies_out_of_scope_production(monkeypatch):
+    _patch_writer(monkeypatch, accessible=(2,))
+    ent = _entity(production_id=1)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.set_entity_case_role(
+            entity_id=ENT_ID, body=_case_role_req("plaintiff"),
+            db=_entity_db(ent), user=FakeUser()))
+    assert exc.value.status_code == 404

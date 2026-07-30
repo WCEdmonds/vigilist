@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.models import (
+    CASE_ROLES,
     AuditLog, Document, Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
     EntityRelationship, EventParticipant, OntologyEvent, Production, User,
 )
@@ -17,6 +18,7 @@ from app.routers.auth import get_current_user
 from app.schemas import (
     ChipEntityOut, DocEntityOut, DocumentEntitiesOut, EntityConnectionOut, EntityConnectionsOut,
     EntityDocMentionOut, EntityDocumentMentionsOut, EntitiesSummaryOut, EntityListItemOut,
+    EntityCaseRoleOut, EntityCaseRoleRequest,
     EntityListPageOut, EntityMentionsPageOut, EntityProfileOut, EntityRenameOut, EntityRenameRequest,
     EventEditRequest, MentionSpanOut,
     MergeRequest, MergeResultOut, MergeSuggestionOut, SharedEventOut,
@@ -341,13 +343,16 @@ async def list_production_entities(
     out = []
     for e in rows:
         first_seen, last_seen = spans.get(e.id, (None, None))
-        role = (e.attributes or {}).get("role") if isinstance(e.attributes, dict) else None
+        attrs = e.attributes if isinstance(e.attributes, dict) else {}
+        role = attrs.get("role")
+        case_role = attrs.get("case_role")
         out.append(EntityListItemOut(id=e.id, entity_type=e.entity_type,
                                      canonical_name=e.canonical_name,
                                      mention_count=e.mention_count,
                                      document_count=doc_counts.get(e.id, 0),
                                      first_seen=first_seen, last_seen=last_seen,
-                                     role=role if isinstance(role, str) and role.strip() else None))
+                                     role=role if isinstance(role, str) and role.strip() else None,
+                                     case_role=case_role if case_role in CASE_ROLES else None))
     return EntityListPageOut(entities=out, total=total)
 
 
@@ -406,6 +411,52 @@ async def rename_entity(
     await db.commit()
     return EntityRenameOut(id=entity.id, canonical_name=entity.canonical_name,
                            aliases=list(entity.aliases or []))
+
+
+@router.patch("/entities/{entity_id}/case-role", response_model=EntityCaseRoleOut)
+async def set_entity_case_role(
+    entity_id: UUID,
+    body: EntityCaseRoleRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Declare an entity's standing in this matter.
+
+    Frequency alone cannot identify the parties: a civil matter built from a
+    criminal case file mentions the criminal defendant constantly and the civil
+    plaintiffs barely. A case role is an assertion the record does not contain,
+    so it is stated rather than inferred, and it promotes the entity to the
+    principal tier ahead of any mention count.
+
+    Passing null clears the role and returns the entity to frequency tiering.
+    Any writer role (not readonly), scoped to an accessible production.
+    """
+    entity = await _get_scoped_entity(db, user, entity_id)
+    await _require_writer(db, user, entity.production_id)
+
+    case_role = body.case_role
+    if case_role is not None and case_role not in CASE_ROLES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"case_role must be one of {', '.join(CASE_ROLES)}, or null",
+        )
+
+    attrs = dict(entity.attributes or {})
+    previous = attrs.get("case_role")
+    if case_role is None:
+        attrs.pop("case_role", None)
+    else:
+        attrs["case_role"] = case_role
+    # Reassign rather than mutate in place: SQLAlchemy does not track in-place
+    # mutation of a JSONB dict, so mutating would silently not persist.
+    entity.attributes = attrs
+
+    await log_action(db, user, "entity_case_role_set", "entity", str(entity_id),
+                     production_id=entity.production_id,
+                     details={"old_case_role": previous, "new_case_role": case_role,
+                              "entity_name": entity.canonical_name})
+    await db.commit()
+    return EntityCaseRoleOut(id=entity.id, case_role=case_role)
 
 
 @router.delete("/entities/{entity_id}")

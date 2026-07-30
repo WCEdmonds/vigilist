@@ -747,6 +747,9 @@ class EntityListItemOut(BaseModel):
     last_seen: date | None = None
     # attributes["role"] surfaced for list cards; None when unset.
     role: str | None = None
+    # attributes["case_role"] — standing in THIS matter (see models.CASE_ROLES).
+    # Drives the principal tier ahead of mention frequency; None when unset.
+    case_role: str | None = None
 
 
 class EntityListPageOut(BaseModel):
@@ -781,6 +784,16 @@ class EntityRenameOut(BaseModel):
     id: UUID4
     canonical_name: str
     aliases: list[str]
+
+
+class EntityCaseRoleRequest(BaseModel):
+    # None clears the role, returning the entity to frequency-based tiering.
+    case_role: str | None = None
+
+
+class EntityCaseRoleOut(BaseModel):
+    id: UUID4
+    case_role: str | None = None
 
 
 class GraphNodeOut(BaseModel):

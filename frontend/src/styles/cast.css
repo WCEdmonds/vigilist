@@ -303,6 +303,18 @@
 
 .cast-name:hover { color: var(--color-stamp); }
 
+/* Declared standing in the matter. Stamp-coloured and lettered because it is
+   a case fact the user asserted, not an AI-extracted descriptor like
+   .cast-kind below it. */
+.cast-case-role {
+  margin-top: 3px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-stamp);
+}
+
 .cast-kind {
   margin-top: 2px;
   font-size: var(--text-xs);
@@ -553,6 +565,24 @@
 
 .cast-act:hover { background: var(--color-brand-100); color: var(--color-ink); }
 .cast-act.is-danger:hover { background: var(--color-danger-100); color: var(--color-danger-600); }
+
+/* Sits among the hover verbs and reads as one of them until touched. Carries
+   real weight once set, because a declared role is a case fact, not a filter. */
+.cast-role-select {
+  max-width: 15ch;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--color-neutral-400);
+  cursor: pointer;
+}
+
+.cast-role-select:hover,
+.cast-role-select:focus-visible { background: var(--color-brand-100); color: var(--color-ink); }
+.cast-role-select:disabled { opacity: 0.5; cursor: progress; }
 
 .cast-confirm {
   display: flex;
