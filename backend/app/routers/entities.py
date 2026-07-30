@@ -940,7 +940,9 @@ async def trigger_merge_review(
             # invisible to the ORM and silently fails to persist.
             prod.ai_pipeline_status = {**status, "merge_review": "queued"}
         await db.commit()
-        task_service.enqueue_pipeline(production_id)
+        # `job` is required: without it the handler walks STAGES, and
+        # merge_review is deliberately not one.
+        task_service.enqueue_pipeline(production_id, job="merge_review")
         return {"status": "enqueued"}
 
     await db.commit()

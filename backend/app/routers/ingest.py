@@ -317,8 +317,19 @@ async def run_pipeline_handler(
     if not production_id:
         raise HTTPException(status_code=400, detail="production_id required")
     force = bool(body.get("force"))
-    from app.services.pipeline import run_ambient_pipeline
 
+    # A named job runs on its own instead of walking STAGES. Standalone work
+    # (the merge review) is not a pipeline stage — it must not run on every
+    # upload — so without this branch it would be enqueued and never executed.
+    job = body.get("job")
+    if job == "merge_review":
+        from app.services.pipeline import run_merge_review_stage
+        await run_merge_review_stage(int(production_id))
+        return {"ok": True, "job": job}
+    if job:
+        raise HTTPException(status_code=400, detail=f"Unknown job {job!r}")
+
+    from app.services.pipeline import run_ambient_pipeline
     await run_ambient_pipeline(int(production_id), force)
     return {"ok": True}
 

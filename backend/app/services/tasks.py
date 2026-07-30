@@ -73,8 +73,15 @@ def enqueue_ingest_batch(
     )
 
 
-def enqueue_pipeline(production_id: int, force: bool = False) -> None:
-    """Enqueue one ambient-pipeline run (clustering -> summaries -> brief) for a production."""
+def enqueue_pipeline(production_id: int, force: bool = False,
+                     job: str | None = None) -> None:
+    """Enqueue one ambient-pipeline run (clustering -> summaries -> brief).
+
+    `job` names a standalone run instead of the stage sequence. Without it the
+    handler walks STAGES, so anything not in STAGES silently never executes —
+    which is exactly how the merge review shipped enqueuing work that had no
+    stage to run it, returned 200, and did nothing.
+    """
     if not is_configured():
         raise RuntimeError("Cloud Tasks not configured")
 
@@ -86,7 +93,10 @@ def enqueue_pipeline(production_id: int, force: bool = False) -> None:
     )
 
     handler_url = f"{settings.cloud_run_service_url}/api/ingest/run-pipeline"
-    payload = json.dumps({"production_id": production_id, "force": force}).encode()
+    body = {"production_id": production_id, "force": force}
+    if job:
+        body["job"] = job
+    payload = json.dumps(body).encode()
 
     task = tasks_v2.Task(
         http_request=tasks_v2.HttpRequest(

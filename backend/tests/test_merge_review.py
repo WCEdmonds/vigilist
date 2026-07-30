@@ -322,3 +322,71 @@ def test_parse_keeps_well_formed_corrections_and_drops_the_rest():
            '{"entity_id": "e3", "corrected_name": "No Confidence", "reason": "r"}]}]}')
     out = parse_verdicts(raw)
     assert [c["corrected_name"] for c in out[0]["corrections"]] == ["Good Name"]
+
+
+# ── Dispatch ─────────────────────────────────────────────────────────────
+#
+# The merge review shipped enqueuing work that had nothing to run it: the
+# handler walks pipeline.STAGES, and merge_review is deliberately not a stage
+# (it must not run on every upload). The endpoint returned 200, the task
+# fired, nothing happened, and the status sat on "queued" forever. Nothing
+# failed loudly enough to notice.
+
+def test_merge_review_is_not_a_pipeline_stage():
+    # If it ever becomes one it would run on every upload and spend money
+    # unasked — so this is the invariant, not an incidental fact.
+    from app.services.pipeline import STAGES
+    assert "merge_review" not in STAGES
+
+
+def test_enqueue_carries_the_job_name_so_the_handler_can_route_it():
+    # Regression guard: without `job` in the payload the handler walks STAGES
+    # and the review silently never runs.
+    import json as _json
+    import app.services.tasks as tasks
+
+    captured = {}
+
+    class FakeClient:
+        def queue_path(self, *a):
+            return "q"
+
+        def create_task(self, parent, task):
+            captured["body"] = _json.loads(task.http_request.body)
+
+    original_client, original_configured = tasks.tasks_v2.CloudTasksClient, tasks.is_configured
+    tasks.tasks_v2.CloudTasksClient = lambda: FakeClient()
+    tasks.is_configured = lambda: True
+    try:
+        tasks.enqueue_pipeline(7, job="merge_review")
+    finally:
+        tasks.tasks_v2.CloudTasksClient = original_client
+        tasks.is_configured = original_configured
+
+    assert captured["body"]["job"] == "merge_review"
+    assert captured["body"]["production_id"] == 7
+
+
+def test_a_plain_pipeline_enqueue_carries_no_job():
+    import json as _json
+    import app.services.tasks as tasks
+
+    captured = {}
+
+    class FakeClient:
+        def queue_path(self, *a):
+            return "q"
+
+        def create_task(self, parent, task):
+            captured["body"] = _json.loads(task.http_request.body)
+
+    original_client, original_configured = tasks.tasks_v2.CloudTasksClient, tasks.is_configured
+    tasks.tasks_v2.CloudTasksClient = lambda: FakeClient()
+    tasks.is_configured = lambda: True
+    try:
+        tasks.enqueue_pipeline(7)
+    finally:
+        tasks.tasks_v2.CloudTasksClient = original_client
+        tasks.is_configured = original_configured
+
+    assert "job" not in captured["body"]
