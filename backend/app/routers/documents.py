@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import String, func, select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,7 +24,10 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
-from app.schemas import DocumentDetail, DocumentSummary, DocumentTagOut, PaginatedDocuments, TagOut, get_file_type
+from app.schemas import (
+    BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
+    DocumentTagOut, PaginatedDocuments, TagOut, get_file_type,
+)
 from app.services.redaction_render import burn_page
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -338,6 +341,82 @@ async def list_source_parties(
                Document.source_type.is_(None))
     )).scalar() or 0
     return {"source_parties": [r[0] for r in rows], "undesignated": undesignated}
+
+
+def _numeric_tail_pattern(digits: str) -> str:
+    """Postgres regex matching a Bates whose trailing number equals `digits`.
+
+    Reviewers type the number alone — every document in a production shares
+    the same prefix, so typing "SCHLEGELPROD " each time is noise. This finds
+    "SCHLEGELPROD 000009" from "9", "00009", or "000009".
+
+    The leading `(^|[^0-9])` is what stops "9" from matching "1000009": the
+    character before the zero-run must not itself be a digit. `digits` is
+    validated all-numeric by the caller, so it cannot inject regex syntax.
+    """
+    significant = digits.lstrip("0") or "0"
+    return f"(^|[^0-9])0*{significant}$"
+
+
+@router.get("/bates-candidates", response_model=BatesCandidatesOut)
+async def get_bates_candidates(
+    q: str,
+    production_id: int | None = None,
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Jump targets for a typed document number.
+
+    Distinct from /by-bates, which resolves a *complete* Bates for an AI
+    citation and must stay exact. This one serves a human typing into search,
+    who reasonably enters only the digits — so it adds a numeric-tail match,
+    and returns every candidate rather than silently picking one. Two
+    documents can share a number across prefixes ("PLTF 000009",
+    "DEF 000009"); choosing between them is the reader's call, not ours.
+    """
+    typed = (q or "").strip()
+    if not typed:
+        return BatesCandidatesOut()
+
+    accessible = await get_accessible_production_ids(db, user)
+
+    def _scoped(stmt):
+        if production_id:
+            return stmt.where(Document.production_id == production_id)
+        return stmt.where(Document.production_id.in_(accessible))
+
+    # Explicit columns, not select(Document): a navigation lookup has no use
+    # for text_content, and it would cross a cloud boundary to be discarded.
+    cols = (Document.id, Document.bates_begin, Document.bates_end,
+            Document.title, Document.page_count)
+
+    normalized = "".join(c for c in typed if c.isalnum()).upper()
+    predicates = [Document.bates_begin == typed]
+    if normalized:
+        predicates.append(
+            func.upper(func.regexp_replace(
+                Document.bates_begin, "[^A-Za-z0-9]", "", "g")) == normalized
+        )
+    # Digits alone: match the trailing number of any prefix in this production.
+    if normalized.isdigit():
+        predicates.append(Document.bates_begin.op("~")(_numeric_tail_pattern(normalized)))
+
+    rows = (await db.execute(
+        _scoped(select(*cols).where(or_(*predicates)))
+        .order_by(Document.bates_begin)
+        .limit(limit + 1)  # one extra reveals truncation without a count query
+    )).all()
+
+    truncated = len(rows) > limit
+    return BatesCandidatesOut(
+        candidates=[
+            BatesCandidateOut(id=r.id, bates_begin=r.bates_begin, bates_end=r.bates_end,
+                              title=r.title, page_count=r.page_count)
+            for r in rows[:limit]
+        ],
+        truncated=truncated,
+    )
 
 
 @router.get("/by-bates")

@@ -230,15 +230,16 @@ export default function ContextRail({
     <aside className={`context-rail${!collapsed ? ' is-drawer-open' : ''}`}>
       <div className="rail-header">
         <span className="rail-title">✦ Intelligence</span>
+        {/* Labelled, not a bare glyph: "⟲" gave no clue this opened saved
+            conversations, and the rail has room for a word. */}
         <button
           type="button"
-          className="btn-icon"
+          className="rail-history-btn"
           onClick={toggleHistory}
-          aria-label="Chat history"
           aria-expanded={historyOpen}
-          title="Chat history for this matter"
+          title="Past AI conversations in this matter"
         >
-          ⟲
+          ⟲ History
         </button>
         <button
           type="button"

@@ -31,7 +31,7 @@ import { useOnboarding } from './hooks/useOnboarding';
 import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
-import type { ChipEntity, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
+import type { BatesCandidate, ChipEntity, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -55,10 +55,12 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [searchQuery, setSearchQuery] = useState(initialUrl.q ?? '');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
-  // A query shaped like a document number resolves to a direct hit, offered
+  // A query shaped like a document number resolves to jump targets, offered
   // above the results rather than navigated to. The same string is often a
-  // legitimate full-text query too, so the jump stays the user's choice.
-  const [batesHit, setBatesHit] = useState<{ id: string; bates: string; title: string | null } | null>(null);
+  // legitimate full-text query too, so the jump stays the user's choice — and
+  // a bare number can legitimately match several documents across prefixes,
+  // so this is a list rather than one hit.
+  const [batesHits, setBatesHits] = useState<BatesCandidate[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [docTotal, setDocTotal] = useState(0);
   const [docPage, setDocPage] = useState(1);
@@ -205,24 +207,20 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setHasSearched(true);
     setSelectedIds(new Set());
     setLastMetadata(metadata);
-    setBatesHit(null);
+    setBatesHits([]);
 
     // Resolve a document-number-shaped query alongside the search rather than
     // ahead of it: bare digits ("000123") or digits behind a Bates prefix
-    // ("SCHLEGEL 000068", "BOE Docs 1234"). Matching is tolerant server-side.
-    // Deliberately not awaited — the search runs at full speed and the offer
+    // ("SCHLEGEL 000068", "BOE Docs 1234"). The server matches the trailing
+    // number too, so typing the digits alone finds "SCHLEGELPROD 000009" —
+    // every document in a matter shares its prefix, so typing it is noise.
+    // Deliberately not awaited: the search runs at full speed and the offer
     // appears above the results whenever the lookup lands.
-    if (!metadata && /^(?:[A-Za-z][A-Za-z\s\-_.]{0,30})?\d{3,}$/.test(trimmed)) {
+    if (!metadata && /^(?:[A-Za-z][A-Za-z\s\-_.]{0,30})?\d{1,}$/.test(trimmed)) {
       import('./api/client')
-        .then(({ getByBates }) => getByBates(trimmed, production.id))
-        .then(found => setBatesHit({ id: found.id, bates: found.bates_begin, title: found.title }))
-        .catch(e => {
-          // A miss is the normal case — the query simply isn't a document
-          // number in this production. Anything else is a real failure and
-          // should not be swallowed the way the old bare catch swallowed it.
-          const msg = e instanceof Error ? e.message : '';
-          if (!/404|not found/i.test(msg)) console.warn('Document-number lookup failed:', e);
-        });
+        .then(({ getBatesCandidates }) => getBatesCandidates(trimmed, production.id))
+        .then(r => setBatesHits(r.candidates))
+        .catch(e => console.warn('Document-number lookup failed:', e));
     }
 
     const mode = forceMode ?? detectSearchMode(query);
@@ -292,7 +290,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setHasSearched(false);
     setSearchQuery('');
     setSearchResults([]);
-    setBatesHit(null);
+    setBatesHits([]);
     setSelectedIds(new Set());
     loadDocuments();
   };
@@ -672,43 +670,62 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 </button>
               </div>
             </div>
-            {batesHit && (
-              <button
-                type="button"
-                onClick={() => setViewDocId(batesHit.id)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
-                  width: '100%', textAlign: 'left', cursor: 'pointer', font: 'inherit',
-                  marginBottom: 'var(--space-3)', padding: 'var(--space-3) var(--space-4)',
-                  background: 'rgba(44,62,107,0.04)',
-                  border: '1px solid rgba(44,62,107,0.25)',
-                  borderRadius: 'var(--radius-md)', color: 'inherit',
-                }}
-              >
-                <span style={{ fontSize: 20, color: 'var(--color-primary-600)', flexShrink: 0 }}>↳</span>
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
-                    Exact document number
-                  </span>
-                  <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                    {batesHit.bates}
-                  </span>
-                  {batesHit.title && (
-                    <span style={{
-                      display: 'block', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {batesHit.title}
-                    </span>
-                  )}
-                </span>
-                <span style={{
-                  marginLeft: 'auto', flexShrink: 0, fontWeight: 600,
-                  fontSize: 'var(--text-xs)', color: 'var(--color-primary-600)',
+            {batesHits.length > 0 && (
+              <div style={{
+                marginBottom: 'var(--space-3)',
+                background: 'rgba(44,62,107,0.04)',
+                border: '1px solid rgba(44,62,107,0.25)',
+                borderRadius: 'var(--radius-md)', overflow: 'hidden',
+              }}>
+                <div style={{
+                  padding: 'var(--space-2) var(--space-4)',
+                  fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)',
+                  borderBottom: '1px solid rgba(44,62,107,0.12)',
                 }}>
-                  Open →
-                </span>
-              </button>
+                  {batesHits.length === 1
+                    ? 'Document number match'
+                    : `${batesHits.length} documents carry this number`}
+                </div>
+                {batesHits.map(hit => (
+                  <button
+                    key={hit.id}
+                    type="button"
+                    onClick={() => setViewDocId(hit.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
+                      width: '100%', textAlign: 'left', cursor: 'pointer', font: 'inherit',
+                      padding: 'var(--space-3) var(--space-4)',
+                      background: 'transparent', border: 0, color: 'inherit',
+                    }}
+                  >
+                    <span style={{ fontSize: 18, color: 'var(--color-primary-600)', flexShrink: 0 }}>↳</span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                        {hit.bates_begin}
+                        {hit.bates_end !== hit.bates_begin && (
+                          <span style={{ fontWeight: 400, color: 'var(--color-neutral-400)' }}>
+                            {' – '}{hit.bates_end}
+                          </span>
+                        )}
+                      </span>
+                      {hit.title && (
+                        <span style={{
+                          display: 'block', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {hit.title}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{
+                      marginLeft: 'auto', flexShrink: 0, fontWeight: 600,
+                      fontSize: 'var(--text-xs)', color: 'var(--color-primary-600)',
+                    }}>
+                      Open →
+                    </span>
+                  </button>
+                ))}
+              </div>
             )}
 
             <div className="card">
