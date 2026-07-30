@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase, deferred, relationship
 from sqlalchemy.types import UserDefinedType
 
 
@@ -115,7 +115,18 @@ class Document(Base):
     title = Column(String(200), nullable=True)
     summary = Column(Text, nullable=True)
     text_content = Column(Text, nullable=True)
-    text_search_vector = Column(TSVector, nullable=True)
+    # Deferred: nothing reads this as a Python value — every use is either a
+    # raw SQL UPDATE that rebuilds it or a SQL expression on the column object
+    # (`Document.text_search_vector.op("@@")`, `func.ts_rank(...)`), both of
+    # which are unaffected by deferral. Loading it was pure waste: it is ~8.5MB
+    # across the corpus, fetched from Neon on every `select(Document)` and
+    # discarded at serialization. Deferring here fixes all 14 call sites at
+    # once and any future one.
+    #
+    # text_content is NOT deferred alongside it: 45 places read that attribute,
+    # and a lazy load in async context raises MissingGreenlet (the failure mode
+    # behind #86). It has to be excluded per-query with load_only() instead.
+    text_search_vector = deferred(Column(TSVector, nullable=True))
     native_path = Column(String(500), nullable=True)
     image_paths = Column(JSONB, nullable=False, default=list)
     raw_image_paths = Column(JSONB, nullable=False, default=list)
