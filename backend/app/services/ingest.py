@@ -357,6 +357,21 @@ def ocr_pages_with_sidecars(
     return page_texts, ocr_paths
 
 
+def document_ocr_complete(doc) -> bool:
+    """True when every page image already has a successful OCR sidecar.
+
+    Re-OCR uses this to skip documents that are already fully processed, so
+    their pages aren't billed to Cloud Vision a second time. A document with
+    no images, a sidecar count that doesn't match its pages, or any failed
+    page ("" entry) is not complete and will be (re-)OCR'd.
+    """
+    image_paths = doc.image_paths or []
+    ocr_paths = doc.ocr_paths or []
+    if not image_paths or len(ocr_paths) != len(image_paths):
+        return False
+    return all(bool(p) for p in ocr_paths)
+
+
 def process_ingest_record(
     production_id: int,
     record: dict,
