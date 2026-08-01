@@ -123,6 +123,7 @@ def enqueue_reocr_batch(
     production_id: int,
     offset: int,
     limit: int,
+    force: bool = False,
 ) -> None:
     """Enqueue a Cloud Task to re-OCR a batch of documents."""
     if not is_configured():
@@ -140,6 +141,7 @@ def enqueue_reocr_batch(
         "production_id": production_id,
         "offset": offset,
         "limit": limit,
+        "force": force,
     }).encode()
 
     task = tasks_v2.Task(

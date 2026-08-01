@@ -454,10 +454,15 @@ async def get_ingest_status(
 async def reocr_production(
     production_id: int,
     background_tasks: BackgroundTasks,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Re-run Cloud Vision OCR on all documents in a production.
+    """Re-run Cloud Vision OCR on documents in a production.
+
+    Documents that are already fully OCR'd are skipped so their pages aren't
+    billed to Cloud Vision again; pass ``force=true`` to re-OCR everything
+    (e.g. after an OCR-pipeline change).
 
     Enqueues one Cloud Task per batch so the work survives container
     scale-down. Falls back to inline BackgroundTask if Cloud Tasks
@@ -480,11 +485,11 @@ async def reocr_production(
         batch_size = 25
         enqueued = 0
         for offset in range(0, doc_count, batch_size):
-            task_service.enqueue_reocr_batch(production_id, offset, batch_size)
+            task_service.enqueue_reocr_batch(production_id, offset, batch_size, force=force)
             enqueued += 1
         return {"message": f"Re-OCR enqueued {enqueued} batches for {doc_count} documents", "production_id": production_id}
 
-    background_tasks.add_task(run_reocr, production_id=production_id)
+    background_tasks.add_task(run_reocr, production_id=production_id, force=force)
 
     return {"message": f"Re-OCR started for {doc_count} documents", "production_id": production_id}
 
@@ -501,6 +506,7 @@ async def reocr_batch_handler(
     production_id = body.get("production_id")
     offset = body.get("offset", 0)
     limit = body.get("limit", 25)
+    force = bool(body.get("force", False))
 
     result = await db.execute(
         select(Document)
@@ -512,9 +518,14 @@ async def reocr_batch_handler(
     docs = list(result.scalars().all())
     logger.info("Re-OCR batch: production %d, offset %d, %d docs", production_id, offset, len(docs))
 
+    reocred = 0
+    skipped = 0
     for doc in docs:
         try:
             if not doc.image_paths:
+                continue
+            if not force and ingest_service.document_ocr_complete(doc):
+                skipped += 1
                 continue
             page_errors: list[str] = []
             text_parts, ocr_paths = ingest_service.ocr_pages_with_sidecars(
@@ -533,15 +544,20 @@ async def reocr_batch_handler(
                     ),
                     {"txt": doc.text_content, "id": doc.id},
                 )
+            reocred += 1
             await db.commit()
         except Exception:
             logger.exception("Re-OCR failed for doc %s", doc.bates_begin)
             await db.rollback()
 
-    return {"ok": True, "processed": len(docs)}
+    logger.info(
+        "Re-OCR batch done: production %d, offset %d — %d re-OCR'd, %d already processed",
+        production_id, offset, reocred, skipped,
+    )
+    return {"ok": True, "processed": reocred, "skipped": skipped}
 
 
-async def run_reocr(production_id: int):
+async def run_reocr(production_id: int, force: bool = False):
     """Background task fallback: re-OCR all documents in a production using Cloud Vision."""
     from app.database import async_session_factory
     from app.services import ingest as ingest_service
@@ -553,9 +569,13 @@ async def run_reocr(production_id: int):
         docs = list(result.scalars().all())
         logger.info("Re-OCR: processing %d documents for production %d", len(docs), production_id)
 
+        skipped = 0
         for i, doc in enumerate(docs):
             try:
                 if not doc.image_paths:
+                    continue
+                if not force and ingest_service.document_ocr_complete(doc):
+                    skipped += 1
                     continue
                 page_errors: list[str] = []
                 text_parts, ocr_paths = ingest_service.ocr_pages_with_sidecars(
@@ -581,7 +601,10 @@ async def run_reocr(production_id: int):
                 logger.exception("Re-OCR failed for doc %s", doc.bates_begin)
                 await db.rollback()
 
-        logger.info("Re-OCR complete for production %d", production_id)
+        logger.info(
+            "Re-OCR complete for production %d — %d already processed and skipped",
+            production_id, skipped,
+        )
 
 
 async def run_ingest_job(job_id: str, production_id: int, production_name: str):
