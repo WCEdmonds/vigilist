@@ -6,10 +6,23 @@ import logging
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, DocumentChunk, DocumentTag
+from app.models import Document, DocumentChunk, DocumentTag, ProductionSetItem
 from app.services.embeddings import embed_query
 
 logger = logging.getLogger(__name__)
+
+
+def production_set_member_ids(production_set_id: int):
+    """A SELECT of the document ids belonging to a production set.
+
+    Returned as a subquery rather than a materialized id list on purpose: a
+    set can hold tens of thousands of documents, and pushing the membership
+    test into the same statement lets Postgres use
+    ix_prodset_items_set_id instead of shipping every id to Python and back.
+    """
+    return select(ProductionSetItem.document_id).where(
+        ProductionSetItem.production_set_id == production_set_id
+    )
 
 
 async def top_chunks_for_query(
@@ -17,6 +30,7 @@ async def top_chunks_for_query(
     production_id: int,
     query: str,
     limit: int = 8,
+    production_set_id: int | None = None,
 ) -> list[dict]:
     """Retrieve the closest chunks in a production for grounding AI chat.
 
@@ -37,9 +51,12 @@ async def top_chunks_for_query(
         select(Document.bates_begin, Document.title, DocumentChunk.content)
         .join(Document, Document.id == DocumentChunk.document_id)
         .where(Document.production_id == production_id)
-        .order_by(distance)
-        .limit(limit)
     )
+    if production_set_id is not None:
+        chunk_q = chunk_q.where(
+            Document.id.in_(production_set_member_ids(production_set_id))
+        )
+    chunk_q = chunk_q.order_by(distance).limit(limit)
     try:
         rows = (await db.execute(chunk_q)).all()
     except Exception:
@@ -62,11 +79,16 @@ async def semantic_search(
     page: int = 1,
     per_page: int = 50,
     accessible_production_ids: list[int] | None = None,
+    production_set_id: int | None = None,
 ) -> tuple[list[dict], int]:
     """Search documents by semantic similarity.
 
     Embeds the query, finds nearest-neighbor chunks via pgvector,
     groups by document, returns ranked results.
+
+    `production_set_id` narrows the search to the members of one production
+    set (a deliverable volume), which is a subset of a production, not a
+    production itself.
     """
     # embed_query makes a blocking HTTP call to Voyage — run it off the loop.
     query_embedding = await asyncio.to_thread(embed_query, query)
@@ -90,6 +112,10 @@ async def semantic_search(
         chunk_q = chunk_q.where(Document.production_id.in_(accessible_production_ids))
     if production_id is not None:
         chunk_q = chunk_q.where(Document.production_id == production_id)
+    if production_set_id is not None:
+        chunk_q = chunk_q.where(
+            Document.id.in_(production_set_member_ids(production_set_id))
+        )
     if tag_ids:
         chunk_q = chunk_q.where(
             Document.id.in_(

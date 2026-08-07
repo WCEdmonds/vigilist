@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import ai, annotations, audit, auth, batches, conversations, dashboard, defensibility, documents, entities, export, ingest, intelligence, notes, privilege, production_sets, productions, qc, queues, redactions, review, sampling, saved_searches, search, search_terms, tags, tar
+from app.routers import agent, agent_keys, ai, annotations, audit, auth, batches, conversations, dashboard, defensibility, documents, entities, export, ingest, intelligence, notes, privilege, production_sets, productions, qc, queues, redactions, review, sampling, saved_searches, search, search_terms, tags, tar
 
 # Force root logger to DEBUG regardless of uvicorn's setup
 logging.basicConfig(
@@ -59,6 +59,8 @@ app.include_router(dashboard.router)
 app.include_router(review.router)
 app.include_router(intelligence.router)
 app.include_router(entities.router)
+app.include_router(agent.router)
+app.include_router(agent_keys.router)
 
 
 @app.get("/api/health")

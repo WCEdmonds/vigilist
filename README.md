@@ -10,6 +10,7 @@ Vigilist ingests standard Relativity-format productions (DAT/OPT load files, nat
 - **Search** — Full-text and semantic (vector) search, plus saved searches.
 - **Review workflows** — Tagging, notes, annotations, review queues, batching, and QC.
 - **AI-assisted review** — Classification suggestions, near-duplicate detection, clustering, and corpus analysis.
+- **Agent API** — Scoped, read-only API keys that let an autonomous agent search and reason over one production set. See [`docs/agent-api.md`](docs/agent-api.md).
 - **Exports & audit** — Produce review output and track activity with a full audit trail.
 
 ## Tech stack

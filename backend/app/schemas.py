@@ -1030,3 +1030,31 @@ class ConversationSummary(BaseModel):
 
 class ConversationDetail(ConversationSummary):
     messages: list[ChatMessageOut] = []
+
+
+class AgentApiKeyCreate(BaseModel):
+    name: str
+    # NULL = the whole matter. Set = the key sees only this volume's members.
+    production_set_id: int | None = None
+    expires_in_days: int | None = None
+
+
+class AgentApiKeyOut(BaseModel):
+    id: int
+    name: str
+    key_prefix: str
+    production_id: int
+    production_set_id: int | None
+    role: str
+    created_by: str
+    created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class AgentApiKeyCreated(AgentApiKeyOut):
+    # The only time the token is ever returned. It is not recoverable later.
+    token: str

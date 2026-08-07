@@ -5,7 +5,7 @@ import re
 from sqlalchemy import func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document
+from app.models import Document, ProductionSetItem
 
 
 # Characters allowed inside a tsquery lexeme. Everything else (quotes,
@@ -112,13 +112,20 @@ async def search_documents(
     file_type: str | None = None,
     source_party: str | None = None,
     source_type: str | None = None,
+    production_set_id: int | None = None,
 ) -> tuple[list[dict], int]:
-    """Execute a full-text search and return results with snippets."""
+    """Execute a full-text search and return results with snippets.
+
+    `production_set_id` narrows the search to the members of one production
+    set. Unlike the other filters it is also a valid search on its own: a
+    set-scoped call with an empty query lists the set's contents.
+    """
     tsquery_str = build_tsquery(query) if query else ""
     has_text_query = bool(tsquery_str)
 
     if (not has_text_query and not metadata_filters and not file_type
-            and not source_party and not source_type):
+            and not source_party and not source_type
+            and production_set_id is None):
         return [], 0
 
     conditions = []
@@ -126,6 +133,14 @@ async def search_documents(
         conditions.append(Document.production_id.in_(accessible_production_ids))
     if production_id is not None:
         conditions.append(Document.production_id == production_id)
+    if production_set_id is not None:
+        conditions.append(
+            Document.id.in_(
+                select(ProductionSetItem.document_id).where(
+                    ProductionSetItem.production_set_id == production_set_id
+                )
+            )
+        )
     if has_text_query:
         # Bound parameter — build_tsquery sanitizes lexemes, but the value must
         # still never be interpolated into the SQL text itself.

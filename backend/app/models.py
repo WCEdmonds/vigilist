@@ -879,3 +879,51 @@ class ChatMessage(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     conversation = relationship("ChatConversation", back_populates="messages")
+
+
+# ── Agent API keys ──────────────────────────────────────────────────────────
+# Machine credentials for autonomous agents. Deliberately NOT a User row: an
+# agent is not a person, has no Firebase identity, and must be revocable
+# without touching anyone's login. Scope is a hard property of the key rather
+# than something the caller asks for, so a leaked key can only ever reach the
+# one production (or the one production set) it was minted for.
+
+
+class AgentApiKey(Base):
+    __tablename__ = "agent_api_keys"
+    __table_args__ = (
+        Index("ix_agent_api_keys_prefix", "key_prefix"),
+        Index("ix_agent_api_keys_production_id", "production_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    # First segment of the token, stored in the clear so a key can be looked
+    # up (and shown in the UI) without ever holding the secret. Not unique by
+    # itself — the SHA-256 comparison below is what authenticates.
+    key_prefix = Column(String(24), nullable=False)
+    # SHA-256 hex of the full token. The token is shown exactly once, at
+    # creation, and is unrecoverable afterwards.
+    key_hash = Column(String(64), nullable=False, unique=True)
+
+    production_id = Column(
+        Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL = the whole matter. Set = the key can only see documents that are
+    # members of this production set.
+    production_set_id = Column(
+        Integer, ForeignKey("production_sets.id", ondelete="CASCADE"), nullable=True
+    )
+    # Caps what the key can do. Read-only surfaces are all this API exposes
+    # today, so anything above 'readonly' is forward-looking, not a grant.
+    role = Column(String(20), nullable=False, default="readonly")
+
+    created_by = Column(String(128), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    expires_at = Column(DateTime, nullable=True)   # NULL = no expiry
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(String(128), ForeignKey("users.id"), nullable=True)
+
+    production = relationship("Production")
+    production_set = relationship("ProductionSet")
