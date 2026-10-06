@@ -71,8 +71,29 @@ export interface DocumentDetail {
   text_content: string | null;
   native_path: string | null;
   image_paths: string[];
+  file_type?: string | null;
   tags: DocumentTagEntry[];
   note_count: number;
+}
+
+export interface EmailAttachment {
+  id: string;
+  bates_begin: string;
+  file_name: string | null;
+  file_type: string | null;
+}
+
+export interface EmailView {
+  id: string;
+  email_from: string | null;
+  email_to: string | null;
+  email_cc: string | null;
+  email_bcc: string | null;
+  email_subject: string | null;
+  date_sent: string | null;
+  body_html: string | null;
+  body_text: string | null;
+  attachments: EmailAttachment[];
 }
 
 export interface SearchResult {

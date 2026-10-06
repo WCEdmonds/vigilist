@@ -1,6 +1,6 @@
 import { auth } from '../firebase';
 import type {
-  AIReviewResult, Annotation, BatchDocument, BatesCandidates, CaseRole, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
+  AIReviewResult, Annotation, BatchDocument, BatesCandidates, CaseRole, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, EmailView, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
   DatePrecision, EventEditResult, FamilyThread, GraphData,
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
@@ -85,6 +85,9 @@ export const designateSources = (productionId: number, sourceType: 'collection' 
 
 export const getDocument = (id: string) =>
   request<DocumentDetail>(`/api/documents/${id}`);
+
+export const getDocumentEmail = (id: string) =>
+  request<EmailView>(`/api/documents/${id}/email`);
 
 export const getDocumentNav = (id: string, productionId?: number) =>
   request<{ prev_id: string | null; next_id: string | null }>(

@@ -162,6 +162,9 @@ class Document(Base):
     email_cc = Column(Text, nullable=True)
     email_bcc = Column(Text, nullable=True)
     email_subject = Column(String(1000), nullable=True)
+    # Original HTML body for the email preview. Deferred: only the email
+    # endpoint reads it, so list/search queries don't pay its egress.
+    email_body_html = deferred(Column(Text, nullable=True))
 
     # P1-4/5 — privilege overrides (NULL = derived / templated)
     privilege_disposition = Column(String(20), nullable=True)

@@ -4,6 +4,7 @@ import type { Annotation, DocEntity, DocumentDetail, DocumentTagEntry, Duplicate
 import DocumentNav from './DocumentNav';
 import ImagePanel from './ImagePanel';
 import NativeViewer, { type MediaPlayerHandle } from './NativeViewer';
+import EmailViewer from './EmailViewer';
 import MetadataPanel from './MetadataPanel';
 import NotesPanel from './NotesPanel';
 import TagBar from './TagBar';
@@ -230,11 +231,17 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     </div>
   );
 
-  const showCenterTabs = hasNative && hasImages;
+  const showCenterTabs = hasNative && hasImages && doc.file_type !== 'email';
 
   const isProcessing = doc.processing_status !== 'complete';
 
   const renderCenterPanel = () => {
+    // Email messages render as an email; their native_path is the whole
+    // mbox/pst container they came from, which the native viewer can't show.
+    if (doc.file_type === 'email') {
+      return <EmailViewer key={doc.id} docId={doc.id} onOpenAttachment={onNavigate} />;
+    }
+
     // Native tab selected, or native-only doc
     if (hasNative && (centerTab === 'native' || !hasImages)) {
       return <NativeViewer ref={mediaRef} docId={doc.id} nativePath={doc.native_path!} onTimeUpdate={setMediaTime} />;

@@ -43,6 +43,9 @@ class ParsedMessage:
     subject: str = ""
     date_sent: str | None = None
     body_text: str = ""
+    # Original HTML body (inline cid: images rewritten to data: URIs) for the
+    # email preview; empty for plain-text-only messages.
+    body_html: str = ""
     attachments: list[tuple[str, bytes]] = field(default_factory=list)
     message_id: str = ""
     in_reply_to: str = ""
@@ -66,10 +69,12 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     html_fallback: list[str] = []
     attachments: list[tuple[str, bytes]] = []
 
+    inline_images: dict[str, str] = {}
     if msg.is_multipart():
         for part in msg.walk():
             if part.is_multipart():
                 continue
+            _collect_inline_image(part, inline_images)
             disposition = part.get_content_disposition()
             content_type = part.get_content_type()
             if disposition == "attachment" or part.get_filename():
@@ -96,6 +101,7 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     body_text = "\n".join(p for p in body_parts if p).strip()
     if not body_text and html_fallback:
         body_text = _strip_html("\n".join(html_fallback)).strip()
+    body_html = _inline_cid_images("\n".join(html_fallback), inline_images)
 
     return ParsedMessage(
         from_=_header(msg, "From"),
@@ -105,11 +111,39 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
         subject=_header(msg, "Subject"),
         date_sent=_header(msg, "Date") or None,
         body_text=body_text,
+        body_html=body_html,
         attachments=attachments,
         message_id=_header(msg, "Message-ID"),
         in_reply_to=_header(msg, "In-Reply-To"),
         references=" ".join(_header(msg, "References").split()),
     )
+
+
+# Inline images above this size stay as broken cid: references rather than
+# bloating the stored HTML.
+_INLINE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _collect_inline_image(part: Message, out: dict[str, str]) -> None:
+    """Record an image part with a Content-ID as a data: URI keyed by its cid."""
+    import base64
+
+    cid = (part.get("Content-ID") or "").strip().strip("<>")
+    if not cid or not part.get_content_type().startswith("image/"):
+        return
+    payload = part.get_payload(decode=True) or b""
+    if not payload or len(payload) > _INLINE_IMAGE_MAX_BYTES:
+        return
+    out[cid] = f"data:{part.get_content_type()};base64,{base64.b64encode(payload).decode('ascii')}"
+
+
+def _inline_cid_images(html: str, images: dict[str, str]) -> str:
+    """Rewrite ``cid:`` references in ``html`` to the matching data: URIs."""
+    if not html or not images:
+        return html
+    import re
+
+    return re.sub(r"cid:([^\"'\s>)]+)", lambda m: images.get(m.group(1), m.group(0)), html)
 
 
 def _decode_part(part: Message) -> str:
@@ -130,6 +164,17 @@ def _strip_html(html: str) -> str:
     text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     return re.sub(r"[ \t\r\f\v]+", " ", text)
+
+
+def _msg_html(msg) -> str:
+    """HTML body of an extract-msg Message, or "" when it has none."""
+    try:
+        html = msg.htmlBody
+    except Exception:
+        return ""
+    if isinstance(html, bytes):
+        return html.decode("utf-8", errors="replace")
+    return html or ""
 
 
 def _parse_msg_bytes(data: bytes) -> ParsedMessage:
@@ -160,6 +205,7 @@ def _parse_msg_bytes(data: bytes) -> ParsedMessage:
                 subject=(msg.subject or "").strip(),
                 date_sent=(str(msg.date) if msg.date else None),
                 body_text=(msg.body or "").strip(),
+                body_html=_msg_html(msg),
                 attachments=attachments,
                 message_id=message_id.strip(),
                 in_reply_to=in_reply_to.strip(),
