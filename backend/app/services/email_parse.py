@@ -56,9 +56,34 @@ def _ext(filename: str) -> str:
     return os.path.splitext(filename or "")[1].lower()
 
 
+def decode_header_value(value: str) -> str:
+    """Decode RFC 2047 encoded-words ('=?utf-8?Q?...?=') into plain text.
+
+    Unknown or broken charsets fall back to a lossy decode rather than raising,
+    and folded whitespace is collapsed.
+    """
+    if not value:
+        return ""
+    from email.header import decode_header
+
+    parts: list[str] = []
+    try:
+        for chunk, charset in decode_header(value):
+            if isinstance(chunk, bytes):
+                try:
+                    parts.append(chunk.decode(charset or "utf-8", errors="replace"))
+                except LookupError:
+                    parts.append(chunk.decode("utf-8", errors="replace"))
+            else:
+                parts.append(chunk)
+    except Exception:
+        return " ".join(str(value).split())
+    return " ".join("".join(parts).split())
+
+
 def _header(msg: Message, name: str) -> str:
     value = msg.get(name)
-    return str(value).strip() if value else ""
+    return decode_header_value(str(value)) if value else ""
 
 
 def _parse_eml_bytes(data: bytes) -> ParsedMessage:

@@ -28,8 +28,16 @@ def test_offset_max_tail():
 
 
 def test_offset_ignores_other_prefixes_and_shapes():
-    vals = ["OTHER 000099", "ACME000100", "ACME 00x100", None, "ACME 000003 .0001"]
+    vals = ["OTHER 000099", "ACME000100", "ACME 00x100", None]
     assert compute_control_offset(vals, "ACME") == 0
+
+
+def test_offset_counts_family_suffixed_controls():
+    # Multi-message containers have no bare 'ACME 000003' row, only
+    # '-NNNN' messages and ' .NNNN' attachments; ignoring them restarted
+    # later loads at 000001 (uq_prod_bates collision, 2026-10-06).
+    assert compute_control_offset(["ACME 000003 .0001"], "ACME") == 3
+    assert compute_control_offset(["ACME 000004 -0002 .0001"], "ACME") == 4
 
 
 def test_offset_prefix_regex_escaped():
