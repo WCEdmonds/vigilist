@@ -226,7 +226,10 @@ def compute_control_offset(bates_values: list, prefix: str) -> int:
     """
     import re
 
-    pat = re.compile(rf"^{re.escape(prefix)} (\d+)$")
+    # Email families extend the container number: 'VOTE 000001 -0001' for a
+    # message and 'VOTE 000001 -0001 .0001' for its attachment. Only the
+    # leading container number feeds the sequence.
+    pat = re.compile(rf"^{re.escape(prefix)} (\d+)(?: |$)")
     best = 0
     for b in bates_values:
         m = pat.match(b or "")
