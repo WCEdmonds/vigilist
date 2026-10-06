@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, undefer
 
 from app.database import get_db
 from app.models import Annotation, Document, DocumentTag, Note, Redaction, User
@@ -28,7 +28,8 @@ from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
 from app.schemas import (
     BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
-    DocumentTagOut, PaginatedDocuments, TagOut, get_file_type,
+    DocumentTagOut, EmailAttachmentOut, EmailViewOut, PaginatedDocuments, TagOut,
+    get_file_type,
 )
 from app.services.redaction_render import burn_page
 
@@ -478,6 +479,56 @@ async def get_by_bates(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return await _doc_detail(doc, db)
+
+
+@router.get("/{doc_id}/email", response_model=EmailViewOut)
+async def get_document_email(
+    doc_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Headers, HTML/text body and attachment family of an email document."""
+    accessible = await get_accessible_production_ids(db, user)
+    doc = (await db.execute(
+        select(Document)
+        .where(Document.id == doc_id)
+        .options(undefer(Document.email_body_html))
+    )).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc.production_id not in accessible:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if doc.file_type != "email":
+        raise HTTPException(status_code=404, detail="Not an email document")
+
+    attachments: list[EmailAttachmentOut] = []
+    if doc.family_id:
+        rows = (await db.execute(
+            select(Document.id, Document.bates_begin, Document.file_name, Document.file_type)
+            .where(
+                Document.production_id == doc.production_id,
+                Document.family_id == doc.family_id,
+                Document.id != doc.id,
+            )
+            .order_by(Document.bates_begin)
+        )).all()
+        attachments = [
+            EmailAttachmentOut(id=r.id, bates_begin=r.bates_begin, file_name=r.file_name, file_type=r.file_type)
+            for r in rows
+        ]
+
+    return EmailViewOut(
+        id=doc.id,
+        email_from=doc.email_from,
+        email_to=doc.email_to,
+        email_cc=doc.email_cc,
+        email_bcc=doc.email_bcc,
+        email_subject=doc.email_subject,
+        date_sent=doc.date_sent,
+        body_html=doc.email_body_html,
+        body_text=doc.text_content,
+        attachments=attachments,
+    )
 
 
 @router.get("/{doc_id}", response_model=DocumentDetail)
@@ -1356,6 +1407,7 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         text_content=doc.text_content,
         native_path=doc.native_path,
         image_paths=doc.image_paths or [],
+        file_type=doc.file_type,
         tags=[DocumentTagOut(id=dt.id, tag=TagOut.model_validate(dt.tag), applied_by=dt.applied_by, applied_at=dt.applied_at) for dt in doc.tags],
         note_count=note_count,
         annotation_count=annotation_count,

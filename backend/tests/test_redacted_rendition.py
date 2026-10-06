@@ -41,6 +41,7 @@ class FakeDoc:
         self.metadata_ = {}
         self.text_content = text_content
         self.native_path = None
+        self.file_type = None
         self.tags = []
 
 

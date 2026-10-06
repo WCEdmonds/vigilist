@@ -162,6 +162,9 @@ class Document(Base):
     email_cc = Column(Text, nullable=True)
     email_bcc = Column(Text, nullable=True)
     email_subject = Column(String(1000), nullable=True)
+    # Original HTML body for the email preview. Deferred: only the email
+    # endpoint reads it, so list/search queries don't pay its egress.
+    email_body_html = deferred(Column(Text, nullable=True))
 
     # P1-4/5 — privilege overrides (NULL = derived / templated)
     privilege_disposition = Column(String(20), nullable=True)
@@ -300,6 +303,10 @@ class IngestJob(Base):
     # retries re-walk their slice; the guard on this set keeps each record
     # from inflating the counter on every retry.
     skipped_keys = Column(JSONB, nullable=False, default=list)
+    # Stable keys of source files fully ingested. Native containers expand to
+    # many documents, so completion counts distinct done/skipped source keys
+    # instead of comparing processed_files (documents) to total_files (files).
+    done_keys = Column(JSONB, nullable=False, default=list, server_default="[]")
     errors = Column(JSONB, nullable=False, default=list)
     field_mapping = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

@@ -109,6 +109,7 @@ def build_email_documents(
         email_cc=(parsed.cc or None),
         email_bcc=(parsed.bcc or None),
         email_subject=(parsed.subject or None),
+        email_body_html=(parsed.body_html or None),
         date_sent=normalize_date(parsed.date_sent) if parsed.date_sent else None,
         message_id=(parsed.message_id or None),
         in_reply_to=(parsed.in_reply_to or None),
@@ -777,6 +778,7 @@ async def ingest_native_batch(
     from app.services.ingest import (
         _finalize_job_if_done,
         _incr_skipped,
+        _mark_source_done,
         _persist_document,
         _persist_documents,
         _persist_job_errors,
@@ -862,6 +864,7 @@ async def ingest_native_batch(
                     continue
                 _stamp_source(doc, stamp)
                 await _persist_document(db, job_id, doc)
+            await _mark_source_done(db, job_id, skip_key)
         except Exception as e:
             logger.exception("Failed to process native file %s", item.get("relative_path"))
             errors.append(f"{control_number}: {e}")

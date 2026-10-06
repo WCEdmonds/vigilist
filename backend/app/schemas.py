@@ -171,12 +171,34 @@ class DocumentDetail(BaseModel):
     text_content: str | None
     native_path: str | None
     image_paths: list[str]
+    file_type: str | None = None
     tags: list[DocumentTagOut] = []
     note_count: int = 0
     annotation_count: int = 0
     redaction_count: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class EmailAttachmentOut(BaseModel):
+    id: UUID
+    bates_begin: str
+    file_name: str | None = None
+    file_type: str | None = None
+
+
+class EmailViewOut(BaseModel):
+    """Rendered-email payload for the viewer (headers, bodies, family)."""
+    id: UUID
+    email_from: str | None = None
+    email_to: str | None = None
+    email_cc: str | None = None
+    email_bcc: str | None = None
+    email_subject: str | None = None
+    date_sent: datetime | None = None
+    body_html: str | None = None
+    body_text: str | None = None
+    attachments: list[EmailAttachmentOut] = []
 
 
 class SearchResult(BaseModel):
@@ -351,6 +373,9 @@ class IngestJobOut(BaseModel):
     total_files: int
     processed_files: int
     skipped_files: int = 0
+    # Source files accounted for (ingested or skipped). Differs from
+    # processed_files (documents) when containers expand into many documents.
+    files_done: int = 0
     errors: list[str]
     created_at: datetime
     completed_at: datetime | None

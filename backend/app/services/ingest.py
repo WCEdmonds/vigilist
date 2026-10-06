@@ -176,7 +176,7 @@ async def ingest_production(
     # Update tsvector for all new documents
     await db.execute(
         text(
-            "UPDATE documents SET text_search_vector = to_tsvector('english', COALESCE(text_content, '')) "
+            f"UPDATE documents SET text_search_vector = {tsvector_sql()} "
             "WHERE production_id = :pid"
         ),
         {"pid": production.id},
@@ -501,6 +501,65 @@ async def _incr_skipped(db: AsyncSession, job_id: str, key: str) -> None:
 _UPDATE_JOB_ERRORS_SQL = "UPDATE ingest_jobs SET errors = cast(:errs as jsonb) WHERE id = :jid"
 
 
+# Postgres rejects a tsvector over 1 MB, which a single large extracted
+# attachment can exceed — and inside a family commit that drops the whole email
+# container. Only the first TSVECTOR_TEXT_CAP characters are full-text indexed;
+# text_content itself is stored in full (and still chunked for semantic search).
+TSVECTOR_TEXT_CAP = 200_000
+
+
+def tsvector_sql(source: str = "text_content") -> str:
+    """SQL expression building a size-capped english tsvector from ``source``."""
+    return f"to_tsvector('english', left(COALESCE({source}, ''), {TSVECTOR_TEXT_CAP}))"
+
+
+def _clamp_string_columns(doc: Document) -> None:
+    """Truncate values that overflow a bounded ``String(n)`` column.
+
+    One over-long header (e.g. a 722-char From) would otherwise raise on flush
+    and roll back every message in its container.
+    """
+    for col in Document.__table__.columns:
+        length = getattr(col.type, "length", None)
+        if not length:
+            continue
+        value = getattr(doc, col.key, None)
+        if isinstance(value, str) and len(value) > length:
+            setattr(doc, col.key, value[:length])
+
+
+# Guarded, idempotent "this source file is finished" marker. Native containers
+# (mbox/pst/zip) expand to many documents, so processed_files (a document count)
+# cannot be compared against total_files (a source-file count).
+_MARK_SOURCE_DONE_SQL = (
+    "UPDATE ingest_jobs SET "
+    "done_keys = done_keys || to_jsonb(cast(:key as text)) "
+    "WHERE id = :jid AND NOT (done_keys @> to_jsonb(cast(:key as text)))"
+)
+
+
+async def _mark_source_done(db: AsyncSession, job_id: str, key: str) -> None:
+    """Record one source file as fully ingested, at most once per key."""
+    await db.execute(text(_MARK_SOURCE_DONE_SQL), {"key": key, "jid": job_id})
+    await db.commit()
+
+
+def sources_attempted(job) -> int:
+    """Source files accounted for (ingested or skipped).
+
+    Native jobs count distinct container keys, so a retry that re-skips a
+    finished container is not counted twice. Other formats are one document per
+    source record, so the document counters already are source counts.
+    """
+    if job.source_format == "native":
+        return len(set(job.done_keys or []) | set(job.skipped_keys or []))
+    return job.processed_files + job.skipped_files
+
+
+def job_is_done(job) -> bool:
+    return sources_attempted(job) >= job.total_files
+
+
 async def _persist_job_errors(db: AsyncSession, job_id: str, errors: list[str]) -> None:
     """Persist the batch's collected error messages onto the job (JSONB column)."""
     await db.execute(
@@ -521,13 +580,14 @@ async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]
     if not docs:
         return
     for doc in docs:
+        _clamp_string_columns(doc)
         db.add(doc)
     await db.flush()
     for doc in docs:
         await db.execute(
             text(
                 "UPDATE documents SET text_search_vector = "
-                "to_tsvector('english', COALESCE(text_content, '')), "
+                f"{tsvector_sql()}, "
                 "processing_status = 'complete' "
                 "WHERE id = :id"
             ),
@@ -555,7 +615,7 @@ async def _finalize_job_if_done(
     from datetime import datetime, timezone
 
     await db.refresh(job)
-    if (job.processed_files + job.skipped_files) >= job.total_files and job.status == "processing":
+    if job_is_done(job) and job.status == "processing":
         result = await db.execute(
             select(Document).where(
                 Document.production_id == production_id,
