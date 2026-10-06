@@ -138,6 +138,8 @@ export interface IngestJob {
   total_files: number;
   processed_files: number;
   skipped_files: number;
+  /** Source files accounted for (ingested or skipped); containers expand to many documents. */
+  files_done?: number;
   errors: string[];
   created_at: string;
   completed_at: string | null;

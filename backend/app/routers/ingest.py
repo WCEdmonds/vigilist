@@ -434,6 +434,8 @@ async def get_ingest_status(
     if job.user_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    from app.services.ingest import sources_attempted
+
     prod = await db.get(Production, job.production_id)
 
     return IngestJobOut(
@@ -444,6 +446,7 @@ async def get_ingest_status(
         total_files=job.total_files,
         processed_files=job.processed_files,
         skipped_files=job.skipped_files,
+        files_done=sources_attempted(job),
         errors=job.errors or [],
         created_at=job.created_at,
         completed_at=job.completed_at,
@@ -539,7 +542,7 @@ async def reocr_batch_handler(
                 await db.execute(
                     text(
                         "UPDATE documents SET text_search_vector = "
-                        "to_tsvector('english', COALESCE(:txt, '')) "
+                        f"{ingest_service.tsvector_sql(':txt')} "
                         "WHERE id = :id"
                     ),
                     {"txt": doc.text_content, "id": doc.id},
@@ -589,7 +592,7 @@ async def run_reocr(production_id: int, force: bool = False):
                     await db.execute(
                         text(
                             "UPDATE documents SET text_search_vector = "
-                            "to_tsvector('english', COALESCE(:txt, '')) "
+                            f"{ingest_service.tsvector_sql(':txt')} "
                             "WHERE id = :id"
                         ),
                         {"txt": doc.text_content, "id": doc.id},

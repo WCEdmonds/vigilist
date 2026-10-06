@@ -300,6 +300,10 @@ class IngestJob(Base):
     # retries re-walk their slice; the guard on this set keeps each record
     # from inflating the counter on every retry.
     skipped_keys = Column(JSONB, nullable=False, default=list)
+    # Stable keys of source files fully ingested. Native containers expand to
+    # many documents, so completion counts distinct done/skipped source keys
+    # instead of comparing processed_files (documents) to total_files (files).
+    done_keys = Column(JSONB, nullable=False, default=list, server_default="[]")
     errors = Column(JSONB, nullable=False, default=list)
     field_mapping = Column(JSONB, nullable=False, default=dict)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

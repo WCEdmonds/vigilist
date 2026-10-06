@@ -351,6 +351,9 @@ class IngestJobOut(BaseModel):
     total_files: int
     processed_files: int
     skipped_files: int = 0
+    # Source files accounted for (ingested or skipped). Differs from
+    # processed_files (documents) when containers expand into many documents.
+    files_done: int = 0
     errors: list[str]
     created_at: datetime
     completed_at: datetime | None
