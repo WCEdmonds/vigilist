@@ -10,6 +10,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.audit import log_action
 from app.schemas import SearchResponse, SearchResult
+from app.services.families import parent_fields, parent_refs_for_ids
 from app.services.search import resolve_tz, search_documents
 from app.services.semantic_search import semantic_search
 
@@ -83,8 +84,9 @@ async def search(
     await log_action(db, user, "search_executed", "search", None,
                      details={"query": q, "result_count": total})
     await db.commit()
+    parents = await parent_refs_for_ids(db, [r["id"] for r in results])
     return SearchResponse(
-        results=[SearchResult(**r) for r in results],
+        results=[SearchResult(**r, **parent_fields(parents.get(r["id"]))) for r in results],
         total=total,
         page=page,
         per_page=per_page,

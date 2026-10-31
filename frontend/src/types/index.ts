@@ -57,6 +57,11 @@ export interface DocumentSummary {
   ai_decision?: string | null;
   ai_confidence?: number | null;
   ai_decided?: boolean;
+  /** Set when this document is an attachment (or a file from an archive). */
+  parent_id?: string | null;
+  parent_bates?: string | null;
+  parent_title?: string | null;
+  parent_is_email?: boolean | null;
 }
 
 export interface DocumentDetail {
@@ -75,6 +80,11 @@ export interface DocumentDetail {
   file_type?: string | null;
   tags: DocumentTagEntry[];
   note_count: number;
+  /** Set when this document is an attachment (or a file from an archive). */
+  parent_id?: string | null;
+  parent_bates?: string | null;
+  parent_title?: string | null;
+  parent_is_email?: boolean | null;
 }
 
 export interface EmailAttachment {
@@ -108,6 +118,11 @@ export interface SearchResult {
   rank: number;
   doc_date?: string | null;
   tags: Tag[];
+  /** Set when this document is an attachment (or a file from an archive). */
+  parent_id?: string | null;
+  parent_bates?: string | null;
+  parent_title?: string | null;
+  parent_is_email?: boolean | null;
 }
 
 export interface SearchResponse {

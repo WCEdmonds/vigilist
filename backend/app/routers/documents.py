@@ -26,6 +26,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
+from app.services.families import parent_fields, parent_refs_for_ids
 from app.services.search import date_order
 from app.schemas import (
     BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
@@ -259,6 +260,8 @@ async def list_documents(
         ).all()
         ai_decisions_by_doc = ai_decision_map(ai_rows)
 
+    parents = await parent_refs_for_ids(db, [d.id for d in docs])
+
     return PaginatedDocuments(
         documents=[
             DocumentSummary(
@@ -279,6 +282,7 @@ async def list_documents(
                 ai_decision=(ai_decisions_by_doc.get(str(d.id)) or {}).get("ai_decision"),
                 ai_confidence=(ai_decisions_by_doc.get(str(d.id)) or {}).get("ai_confidence"),
                 ai_decided=(ai_decisions_by_doc.get(str(d.id)) or {}).get("ai_decided", False),
+                **parent_fields(parents.get(d.id)),
             )
             for d in docs
         ],
@@ -1397,6 +1401,8 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         select(func.count(Redaction.id)).where(Redaction.document_id == doc.id)
     )).scalar() or 0
 
+    parents = await parent_refs_for_ids(db, [doc.id])
+
     return DocumentDetail(
         id=doc.id,
         production_id=doc.production_id,
@@ -1415,4 +1421,5 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         note_count=note_count,
         annotation_count=annotation_count,
         redaction_count=redaction_count,
+        **parent_fields(parents.get(doc.id)),
     )
