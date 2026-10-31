@@ -13,6 +13,7 @@ import IngestWizard from './components/IngestWizard';
 import ProductionSetsPanel from './components/ProductionSetsPanel';
 import DefensibilityPanel from './components/DefensibilityPanel';
 import AuditLog from './components/AuditLog';
+import PrivilegeLog from './components/PrivilegeLog';
 import ManageAccess from './components/ManageAccess';
 import ProductionSettings from './components/ProductionSettings';
 import ReviewWorkspace from './components/ReviewWorkspace';
@@ -95,6 +96,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [showManageAccess, setShowManageAccess] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
+  const [showPrivilegeLog, setShowPrivilegeLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(
@@ -577,6 +579,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onOpenShare={production.is_owner ? () => setShowManageAccess(true) : undefined}
         onOpenSettings={production.is_owner ? () => setShowSettings(true) : undefined}
         onOpenAudit={production.is_owner ? () => setShowAuditLog(true) : undefined}
+        onOpenPrivilegeLog={() => setShowPrivilegeLog(true)}
         onOpenIngest={() => setShowIngestWizard(true)}
         onOpenGuide={onOpenGuide}
         onRandomDoc={handleRandomDoc}
@@ -743,8 +746,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportSearchCsv(searchQuery, production.id, {
                   sort: searchSort, metadata: lastMetadata, fileType: filterFileType || undefined,
                   sourceParty: filterSourceParty || undefined, sourceType: sourceTypeParam, extras: lastExtras,
-                })}>
-                  Export CSV
+                })} title="Bates, family, date, from, to, cc, subject and tags for every result">
+                  Export metadata (CSV)
                 </button>
               </div>
             </div>
@@ -1160,6 +1163,15 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         <AuditLog
           productionId={production.id}
           onClose={() => setShowAuditLog(false)}
+        />
+      )}
+
+      {/* Privilege log modal */}
+      {showPrivilegeLog && (
+        <PrivilegeLog
+          productionId={production.id}
+          onClose={() => setShowPrivilegeLog(false)}
+          onOpenDocument={(id) => { setShowPrivilegeLog(false); setViewDocId(id); }}
         />
       )}
 

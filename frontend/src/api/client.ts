@@ -6,6 +6,7 @@ import type {
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag, TimelinePage, TimelineReviewStatus,
   SearchExtras, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied,
+  PrivilegeDisposition, PrivilegeLogRow,
 } from '../types';
 
 /**
@@ -243,11 +244,12 @@ export const createTag = (data: { name: string; category: string; color?: string
   request<Tag>('/api/tags', json(data));
 
 
-export const applyTags = (docId: string, tagIds: number[]) =>
-  request<DocumentTagEntry[]>(`/api/documents/${docId}/tags`, json({ tag_ids: tagIds }));
+// family: code the parent email and its attachments together.
+export const applyTags = (docId: string, tagIds: number[], family = false) =>
+  request<DocumentTagEntry[]>(`/api/documents/${docId}/tags`, json({ tag_ids: tagIds, family }));
 
-export const removeTag = (docId: string, tagId: number) =>
-  request(`/api/documents/${docId}/tags/${tagId}`, { method: 'DELETE' });
+export const removeTag = (docId: string, tagId: number, family = false) =>
+  request(`/api/documents/${docId}/tags/${tagId}${family ? '?family=true' : ''}`, { method: 'DELETE' });
 
 export const bulkTag = (docIds: string[], tagIds: number[]) =>
   request<{ tagged: number }>('/api/documents/bulk-tag', json({ doc_ids: docIds, tag_ids: tagIds }));
@@ -457,9 +459,28 @@ export async function exportSearchCsv(
   }
   if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
   if (extras?.dateTo) params.set('date_to', extras.dateTo);
-  if (extras?.dateFrom || extras?.dateTo) params.set('tz', browserTimeZone());
-  await downloadCsv(`/api/export/search/csv?${params}`, 'search_results.csv');
+  // Always send the timezone: the report's Date Sent column uses it too.
+  params.set('tz', browserTimeZone());
+  await downloadCsv(`/api/export/search/csv?${params}`, 'metadata_report.csv');
 }
+
+// ── Privilege log ──
+
+export const getPrivilegeLog = (productionId: number) =>
+  request<PrivilegeLogRow[]>(`/api/productions/${productionId}/privilege-log`);
+
+/** Only the fields passed are changed; null clears back to the derived value. */
+export const updatePrivilege = (
+  docId: string,
+  body: { disposition?: PrivilegeDisposition | null; description?: string | null },
+) =>
+  request<{ disposition: PrivilegeDisposition | null; description: string | null }>(
+    `/api/documents/${docId}/privilege`,
+    { ...json(body), method: 'PUT' },
+  );
+
+export const exportPrivilegeLogCsv = (productionId: number) =>
+  downloadCsv(`/api/export/privilege-log/csv?production_id=${productionId}`, 'privilege_log.csv');
 
 export const findSimilar = (docId: string) =>
   request<{ source_id: string; search_terms: string; results: SearchResult[]; total: number }>(

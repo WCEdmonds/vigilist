@@ -81,6 +81,8 @@ class DocumentTagOut(BaseModel):
 
 class ApplyTagsRequest(BaseModel):
     tag_ids: list[int]
+    # Code the document's whole family (parent email + attachments) together.
+    family: bool = False
 
 
 class BulkTagRequest(BaseModel):

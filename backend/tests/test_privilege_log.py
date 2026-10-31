@@ -251,3 +251,22 @@ def test_log_candidate_queries_use_single_array_bind():
         assert "= ANY (" in sql, sql
         assert "POSTCOMPILE" not in sql, sql
     assert candidate_sql and decision_sql
+
+
+def test_log_rows_expose_raw_overrides_for_the_editor():
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, privilege_disposition="withhold", privilege_description="Letter re legal advice.")
+    db = _log_db([(doc_id, "Attorney-Client")], [], [doc], override_docs=[doc])
+    r = asyncio.run(build_privilege_log_rows(db, 1))[0]
+    assert r["disposition_override"] == "withhold"
+    assert r["description_override"] == "Letter re legal advice."
+    # What the log would say without the hand-written text (editor placeholder).
+    assert r["generated_description"].startswith("Email from alice@firm.com")
+
+
+def test_log_rows_without_overrides_have_none():
+    doc_id = uuid4()
+    db = _log_db([(doc_id, "Attorney-Client")], [], [FakeDoc(doc_id)])
+    r = asyncio.run(build_privilege_log_rows(db, 1))[0]
+    assert r["disposition_override"] is None and r["description_override"] is None
+    assert r["generated_description"] == r["description"]
