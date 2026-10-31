@@ -26,6 +26,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids, get_user_role_for_production
 from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
+from app.services.search import date_order
 from app.schemas import (
     BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
     DocumentTagOut, EmailAttachmentOut, EmailViewOut, PaginatedDocuments, TagOut,
@@ -70,7 +71,7 @@ async def list_documents(
     file_type: str | None = Query(None, description="Filter by file type: video, audio, pdf, office, image, email, native, images_only"),
     source_party: str | None = Query(None, description="Filter by source party label"),
     source_type: str | None = Query(None, pattern="^(collection|received)$"),
-    sort: str = Query("bates", pattern="^(bates|recent|size)$"),
+    sort: str = Query("bates", pattern="^(bates|recent|size|date_asc|date_desc)$"),
     cluster_id: int | None = None,
     ai_decision: str | None = None,
     page: int = Query(1, ge=1),
@@ -182,6 +183,8 @@ async def list_documents(
         query = query.order_by(latest_activity.desc().nulls_last(), Document.bates_begin)
     elif sort == "size":
         query = query.order_by(Document.page_count.desc(), Document.bates_begin)
+    elif sort in ("date_asc", "date_desc"):
+        query = query.order_by(*date_order("asc" if sort == "date_asc" else "desc"))
     else:
         query = query.order_by(Document.bates_begin)
     total = (await db.execute(count_query)).scalar() or 0

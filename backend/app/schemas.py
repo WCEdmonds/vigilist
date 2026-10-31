@@ -210,6 +210,7 @@ class SearchResult(BaseModel):
     title: str | None = None
     snippet: str
     rank: float
+    doc_date: datetime | None = None
     tags: list[TagOut] = []
 
     model_config = {"from_attributes": True}
