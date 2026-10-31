@@ -71,6 +71,14 @@ async def main() -> int:
         from scripts.upload_ingest import _load_cloud_run_env
         _load_cloud_run_env(args.env_from_cloud_run, args.region, args.project, args.gcloud_account)
 
+    # Storage goes through firebase_admin, which the API initializes at
+    # startup; a CLI has to do it itself.
+    import firebase_admin
+
+    from app.config import settings
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(options={"projectId": settings.firebase_project_id or args.project})
+
     from sqlalchemy import select
 
     from app.database import async_session
