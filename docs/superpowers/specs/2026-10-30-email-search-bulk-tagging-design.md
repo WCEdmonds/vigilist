@@ -135,7 +135,8 @@ Behaviour:
    `{matched, attachments_added, total, already_tagged, conflicts,
    conflict_tags: [{tag_id, name, count}]}`.
 7. Apply (not dry run): if `conflicts > 0` and `conflict_action` is null ⇒ 409
-   with the dry-run payload (so the UI can ask). Then:
+   with detail `"conflicts_unresolved"`; the UI re-runs the dry run and asks.
+   Then:
    - `switch`: delete the conflicting same-category `DocumentTag` rows on
      those docs, then tag them.
    - `leave`: drop conflicting docs from the target set (they keep their
@@ -161,15 +162,20 @@ apply) so it's testable without HTTP.
   two-state toggle **Sender only / Any participant**. Wired through
   `searchDocuments` (`api/client.ts`) as `email_address` / `email_scope`.
 - **Bulk bar** (`App.tsx`): when a search is active and every visible row is
-  selected, show "Select all N matching" (Gmail pattern). Selection then
+  selected, show "Select all N matching" (Gmail pattern). Offered only when
+  the server ran the search as full-text (full-text mode, or any filter
+  active) — semantic results are a vector ranking that a query can't
+  reproduce, so they stay page-selection only. Selection then
   becomes "query mode" (the current search criteria) instead of an ID list;
   clearing or changing the search exits query mode.
 - **"Tag all matching…" button** in the bulk bar opens a dialog:
   - Tag picker, with Responsive / Not Responsive / privilege tags first.
   - "Include attachments" checkbox (on).
-  - When a privilege tag is picked: collapsed **Privilege log (manager)**
-    section with disposition select (blank = no override) and description
-    textarea. Hidden for non-managers and for non-privilege tags.
+  - When a privilege tag is picked: collapsed **Privilege log options
+    (managers only)** section with disposition select (blank = no override)
+    and description textarea. Hidden for non-privilege tags. The frontend has
+    no per-production role, so it is shown to everyone and the server's 403
+    is surfaced as an error in the dialog.
   - On open/changes, calls the endpoint with `dry_run: true` and shows
     "Apply to **1,284** documents (1,102 matched + 182 attachments; 40 already
     tagged)".
@@ -177,8 +183,8 @@ apply) so it's testable without HTTP.
     with a required radio — **Switch them to Not Responsive** / **Leave them as
     they are** — the Apply button is disabled until one is chosen.
   - Apply performs the real call, shows a toast from the response, refreshes
-    results. A 409 (conflicts appeared since the dry run) re-renders the
-    dialog with the new counts.
+    results. A 409 (conflicts appeared since the dry run) re-runs the dry run
+    so the dialog shows the new counts and asks again.
 - New client function: `bulkTagByQuery(body)`.
 
 ## Error handling
