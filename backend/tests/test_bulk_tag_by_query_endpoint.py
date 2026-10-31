@@ -24,7 +24,7 @@ class FakeTag:
 
 
 def _patch(monkeypatch, *, roles=None, accessible=(1, 2), matched=None, family=None,
-           already=(), conflicts=None, conflict_names=None):
+           already=(), conflicts=None, conflict_names=None, existing=None):
     """roles: production_id -> role (default reviewer everywhere)."""
     roles = roles or {}
     state = {"apply": None, "audit": [], "expanded": False}
@@ -55,9 +55,14 @@ def _patch(monkeypatch, *, roles=None, accessible=(1, 2), matched=None, family=N
     async def fake_conflicts(db, tag, ids):
         return dict(conflicts or {}), dict(conflict_names or {})
 
-    async def fake_apply(db, plan, tag_id, user_id, override):
+    async def fake_existing(db, ids):
+        return {d: v for d, v in (existing or {}).items() if d in set(ids)}
+
+    async def fake_apply(db, plan, tag_id, user_id, override, override_ids=None):
         state["apply"] = (plan, tag_id, user_id, override)
-        return len(plan.coded) if override else 0
+        state["override_ids"] = override_ids
+        targets = plan.coded if override_ids is None else override_ids
+        return len(targets) if override else 0
 
     monkeypatch.setattr(rt, "get_accessible_production_ids", fake_accessible)
     monkeypatch.setattr(rt, "get_user_role_for_production", fake_role)
@@ -68,6 +73,7 @@ def _patch(monkeypatch, *, roles=None, accessible=(1, 2), matched=None, family=N
     monkeypatch.setattr(rt.bt, "already_tagged_ids", fake_already)
     monkeypatch.setattr(rt.bt, "conflicting_tags", fake_conflicts)
     monkeypatch.setattr(rt.bt, "apply_plan", fake_apply)
+    monkeypatch.setattr(rt.bt, "existing_overrides", fake_existing)
     return state
 
 
@@ -120,6 +126,7 @@ def test_dry_run_returns_counts_and_writes_nothing(monkeypatch):
     assert out == {
         "matched": 2, "attachments_added": 1, "total": 3, "already_tagged": 1,
         "conflicts": 1, "conflict_tags": [{"tag_id": 1, "name": "Responsive", "count": 1}],
+        "existing_overrides": 0,
     }
     assert state["apply"] is None
     assert db.commits == 0
@@ -135,7 +142,8 @@ def test_apply_with_unresolved_conflicts_409(monkeypatch):
 def test_apply_switch_commits_and_audits(monkeypatch):
     state = _patch(monkeypatch, conflicts={B: {1}}, conflict_names={1: "Responsive"})
     out, db = _run(_query_body(conflict_action="switch"), FakeTag())
-    assert out == {"total": 2, "tagged": 2, "already_tagged": 0, "switched": 1, "left": 0, "overridden": 0}
+    assert out == {"total": 2, "tagged": 2, "already_tagged": 0, "switched": 1, "left": 0,
+                   "overridden": 0, "skipped_existing_overrides": 0}
     assert db.commits == 1
     plan, tag_id, user_id, override = state["apply"]
     assert plan.switch == {B: {1}} and tag_id == 5 and user_id == "u1" and override == {}
@@ -210,3 +218,30 @@ def test_over_cap_422(monkeypatch):
     _patch(monkeypatch, family={C: 1})
     monkeypatch.setattr(rt.bt, "MAX_BULK_DOCS", 2)
     _raises(_query_body(dry_run=True), FakeTag(), 422)
+
+
+PRIV = dict(is_privilege=True, category="privilege", name="Attorney-Client")
+
+
+def test_dry_run_counts_existing_privilege_entries(monkeypatch):
+    _patch(monkeypatch, existing={A: ("withhold", "Hand-written entry")})
+    out, _ = _run(_query_body(dry_run=True), FakeTag(**PRIV))
+    assert out["existing_overrides"] == 1
+
+
+def test_bulk_override_skips_existing_entries_by_default(monkeypatch):
+    state = _patch(monkeypatch, roles={1: "manager"}, existing={A: ("withhold", "Hand-written entry")})
+    out, _ = _run(_query_body(description="Counsel comms"), FakeTag(**PRIV))
+    assert state["override_ids"] == {B}
+    assert out["overridden"] == 1 and out["skipped_existing_overrides"] == 1
+    assert out["tagged"] == 2  # both still get the tag
+
+
+def test_overwrite_existing_records_previous_values(monkeypatch):
+    state = _patch(monkeypatch, roles={1: "manager"}, existing={A: ("withhold", "Hand-written entry")})
+    out, _ = _run(_query_body(description="Counsel comms", overwrite_existing=True), FakeTag(**PRIV))
+    assert state["override_ids"] == {A, B}
+    assert out["overridden"] == 2 and out["skipped_existing_overrides"] == 0
+    details = state["audit"][0][1]["details"]
+    assert details["previous_overrides"] == {
+        str(A): {"disposition": "withhold", "description": "Hand-written entry"}}

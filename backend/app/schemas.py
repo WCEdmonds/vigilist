@@ -111,6 +111,8 @@ class BulkTagByQueryRequest(BaseModel):
     conflict_action: Literal["switch", "leave"] | None = None
     disposition: str | None = None
     description: str | None = None
+    # Replace privilege log entries documents already have (default: skip them).
+    overwrite_existing: bool = False
     dry_run: bool = False
 
     @model_validator(mode="after")

@@ -669,6 +669,7 @@ export interface BulkTagByQueryBody {
   conflict_action?: 'switch' | 'leave' | null;
   disposition?: 'withhold' | 'redact_in_part' | 'produce' | null;
   description?: string | null;
+  overwrite_existing?: boolean;
   dry_run: boolean;
 }
 
@@ -679,6 +680,8 @@ export interface BulkTagDryRun {
   already_tagged: number;
   conflicts: number;
   conflict_tags: { tag_id: number; name: string; count: number }[];
+  /** Docs that already have a privilege disposition/description. */
+  existing_overrides: number;
 }
 
 export interface BulkTagApplied {
@@ -688,4 +691,5 @@ export interface BulkTagApplied {
   switched: number;
   left: number;
   overridden: number;
+  skipped_existing_overrides: number;
 }

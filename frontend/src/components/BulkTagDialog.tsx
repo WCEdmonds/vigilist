@@ -31,6 +31,7 @@ export default function BulkTagDialog({ target, tags, onClose, onApplied }: Prop
   const [conflictAction, setConflictAction] = useState<ConflictAction | null>(null);
   const [disposition, setDisposition] = useState<Disposition>('');
   const [description, setDescription] = useState('');
+  const [overwriteExisting, setOverwriteExisting] = useState(false);
   const [preview, setPreview] = useState<BulkTagDryRun | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,11 +72,13 @@ export default function BulkTagDialog({ target, tags, onClose, onApplied }: Prop
         conflict_action: preview.conflicts > 0 ? conflictAction : null,
         disposition: tag.is_privilege && disposition ? disposition : null,
         description: tag.is_privilege && description.trim() ? description.trim() : null,
+        overwrite_existing: overwriteExisting,
       });
       const parts = [`Tagged ${n(res.tagged)} document${res.tagged === 1 ? '' : 's'} "${tag.name}"`];
       if (res.switched) parts.push(`${n(res.switched)} switched`);
       if (res.left) parts.push(`${n(res.left)} left as they were`);
       if (res.already_tagged) parts.push(`${n(res.already_tagged)} already tagged`);
+      if (res.skipped_existing_overrides) parts.push(`${n(res.skipped_existing_overrides)} kept their existing privilege log entry`);
       onApplied(parts.join(' · '));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'unknown error';
@@ -185,11 +188,21 @@ export default function BulkTagDialog({ target, tags, onClose, onApplied }: Prop
                   </select>
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--text-sm)' }}>
-                  Log description (replaces the generated one on every document)
+                  Log description (replaces the generated one; documents that already have a hand-written entry keep it unless you choose to overwrite)
                   <textarea className="input" rows={3} value={description}
                     onChange={e => setDescription(e.target.value)} disabled={busy}
                     placeholder="e.g. Communication with outside counsel re: litigation strategy" />
                 </label>
+                {preview && preview.existing_overrides > 0 && (disposition || description.trim()) && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+                    <input type="checkbox" checked={overwriteExisting}
+                      onChange={e => setOverwriteExisting(e.target.checked)} disabled={busy} />
+                    <span>
+                      <strong>{n(preview.existing_overrides)}</strong> of these already have a privilege log entry.
+                      Overwrite them too? (Their current text is saved in the audit log.)
+                    </span>
+                  </label>
+                )}
               </div>
             </details>
           )}

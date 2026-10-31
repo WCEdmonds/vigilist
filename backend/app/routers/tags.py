@@ -281,6 +281,7 @@ async def bulk_tag_by_query(
     already = await bt.already_tagged_ids(db, tag.id, ids)
     conflicts, conflict_names = await bt.conflicting_tags(db, tag, ids)
     plan = bt.plan_tagging(targets.keys(), already, conflicts, body.conflict_action)
+    prior = await bt.existing_overrides(db, list(plan.coded)) if tag.is_privilege else {}
 
     if body.dry_run:
         return {
@@ -290,11 +291,16 @@ async def bulk_tag_by_query(
             "already_tagged": len(plan.already_tagged),
             "conflicts": len(plan.conflicts),
             "conflict_tags": bt.conflict_tag_counts(plan.conflicts, conflict_names),
+            "existing_overrides": len(prior),
         }
     if plan.conflicts and body.conflict_action is None:
         raise HTTPException(status_code=409, detail="conflicts_unresolved")
 
-    overridden = await bt.apply_plan(db, plan, tag.id, user.id, override)
+    # Hand-written privilege log entries are kept unless the reviewer chose to
+    # overwrite them; when they do, the old values go into the audit trail.
+    override_ids = plan.coded if body.overwrite_existing else plan.coded - prior.keys()
+    skipped = len(plan.coded) - len(override_ids) if override else 0
+    overridden = await bt.apply_plan(db, plan, tag.id, user.id, override, override_ids)
 
     criteria = (body.query.model_dump() if body.query is not None
                 else {"doc_ids": [str(d) for d in body.doc_ids]})
@@ -313,6 +319,12 @@ async def bulk_tag_by_query(
                 "include_attachments": body.include_attachments,
                 "criteria": criteria,
                 "override": override,
+                "skipped_existing_overrides": (
+                    len((plan.coded & in_prod) - override_ids) if override else 0),
+                **({"previous_overrides": {
+                    str(d): {"disposition": disp, "description": desc}
+                    for d, (disp, desc) in prior.items() if d in in_prod}}
+                   if override and body.overwrite_existing and prior else {}),
             },
         )
     await db.commit()
@@ -323,4 +335,5 @@ async def bulk_tag_by_query(
         "switched": len(plan.switch),
         "left": len(plan.left),
         "overridden": overridden,
+        "skipped_existing_overrides": skipped,
     }

@@ -192,3 +192,36 @@ def test_request_requires_exactly_one_target():
 def test_request_rejects_unknown_conflict_action():
     with pytest.raises(ValidationError):
         BulkTagByQueryRequest(tag_id=1, doc_ids=[A], conflict_action="merge")
+
+
+def test_apply_plan_override_limited_to_override_ids():
+    plan = bt.plan_tagging({A, B}, set(), conflicts={}, conflict_action=None)
+    db = FakeSession()
+    n = asyncio.run(bt.apply_plan(db, plan, tag_id=5, user_id="u1",
+                                  override={"privilege_description": "x"}, override_ids={B}))
+    assert n == 1
+    assert any(s.startswith("UPDATE documents") for s in db.executed)
+
+
+def test_apply_plan_empty_override_ids_skips_update():
+    plan = bt.plan_tagging({A}, set(), conflicts={}, conflict_action=None)
+    db = FakeSession()
+    n = asyncio.run(bt.apply_plan(db, plan, tag_id=5, user_id="u1",
+                                  override={"privilege_description": "x"}, override_ids=set()))
+    assert n == 0
+    assert not any(s.startswith("UPDATE") for s in db.executed)
+
+
+def test_existing_overrides_returns_prior_values():
+    db = FakeSession(responders=[("FROM documents", FakeResult(rows=[(A, "withhold", None)]))])
+    out = asyncio.run(bt.existing_overrides(db, [A, B]))
+    assert out == {A: ("withhold", None)}
+    sql = db.executed[0]
+    assert "privilege_disposition IS NOT NULL" in sql and "privilege_description IS NOT NULL" in sql
+    assert "= ANY (" in sql
+
+
+def test_existing_overrides_empty_input_skips_query():
+    db = FakeSession()
+    assert asyncio.run(bt.existing_overrides(db, [])) == {}
+    assert db.executed == []

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import aliased
 
@@ -119,6 +119,23 @@ async def conflicting_tags(db, tag, doc_ids) -> tuple[dict[UUID, set[int]], dict
     return by_doc, names
 
 
+async def existing_overrides(db, doc_ids) -> dict[UUID, tuple[str | None, str | None]]:
+    """Docs that already carry a privilege disposition or description. These
+    are usually written by hand, so a bulk override must not clobber them
+    without the reviewer choosing to (and the old values being kept)."""
+    if not doc_ids:
+        return {}
+    rows = (await db.execute(
+        select(Document.id, Document.privilege_disposition, Document.privilege_description)
+        .where(
+            ids_match(Document.id, doc_ids),
+            or_(Document.privilege_disposition.is_not(None),
+                Document.privilege_description.is_not(None)),
+        )
+    )).all()
+    return {doc_id: (disp, desc) for doc_id, disp, desc in rows}
+
+
 @dataclass(frozen=True)
 class TagPlan:
     to_tag: frozenset            # docs that get a new DocumentTag
@@ -162,8 +179,10 @@ def conflict_tag_counts(conflicts: dict, names: dict[int, str]) -> list[dict]:
     )
 
 
-async def apply_plan(db, plan: TagPlan, tag_id: int, user_id: str, override: dict) -> int:
-    """Write the plan. Returns how many documents got the override."""
+async def apply_plan(db, plan: TagPlan, tag_id: int, user_id: str, override: dict,
+                     override_ids=None) -> int:
+    """Write the plan. The override goes to override_ids (default: every doc
+    that ends up tagged). Returns how many documents got the override."""
     if plan.switch:
         stale_tag_ids = set().union(*plan.switch.values())
         await db.execute(
@@ -177,12 +196,13 @@ async def apply_plan(db, plan: TagPlan, tag_id: int, user_id: str, override: dic
             pg_insert(DocumentTag).on_conflict_do_nothing(constraint="uq_doc_tag"),
             [{"document_id": d, "tag_id": tag_id, "applied_by": user_id} for d in plan.to_tag],
         )
-    if override and plan.coded:
+    targets = plan.coded if override_ids is None else frozenset(override_ids)
+    if override and targets:
         await db.execute(
             update(Document)
-            .where(ids_match(Document.id, plan.coded))
+            .where(ids_match(Document.id, targets))
             .values(**override)
             .execution_options(synchronize_session=False)
         )
-        return len(plan.coded)
+        return len(targets)
     return 0
