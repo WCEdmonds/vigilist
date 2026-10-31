@@ -7,6 +7,8 @@ interface Props {
   tags: DocumentTagEntry[];
   onTagsChanged: (tags: DocumentTagEntry[]) => void;
   onAutoAdvance?: () => void;
+  /** Documents in this one's family, itself included (parent email + attachments). */
+  familySize?: number;
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -14,8 +16,13 @@ const COLOR_MAP: Record<string, string> = {
   purple: 'badge-purple', gray: 'badge-gray', blue: 'badge-blue',
 };
 
-export default function TagBar({ docId, tags, onTagsChanged, onAutoAdvance }: Props) {
+export default function TagBar({ docId, tags, onTagsChanged, onAutoAdvance, familySize = 1 }: Props) {
   const [allTags, setAllTags] = useState<Tag[]>([]);
+  // Tags code the whole family unless the reviewer opts out — and the
+  // opt-out covers only the document it was chosen on.
+  const [singleDocId, setSingleDocId] = useState<string | null>(null);
+  const hasFamily = familySize > 1;
+  const familyMode = hasFamily && singleDocId !== docId;
   const [showDropdown, setShowDropdown] = useState(false);
   const [flashClass, setFlashClass] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -37,17 +44,17 @@ export default function TagBar({ docId, tags, onTagsChanged, onAutoAdvance }: Pr
 
   const toggleTag = useCallback(async (tagId: number) => {
     if (appliedTagIds.has(tagId)) {
-      await removeTag(docId, tagId);
+      await removeTag(docId, tagId, familyMode);
       onTagsChanged(tags.filter(t => t.tag.id !== tagId));
       setFlashClass('flash-remove');
     } else {
-      const updated = await applyTags(docId, [tagId]);
+      const updated = await applyTags(docId, [tagId], familyMode);
       onTagsChanged(updated);
       setFlashClass('flash-success');
       setTimeout(() => onAutoAdvance?.(), 300);
     }
     setTimeout(() => setFlashClass(''), 600);
-  }, [docId, tags, appliedTagIds, onTagsChanged, onAutoAdvance]);
+  }, [docId, tags, appliedTagIds, onTagsChanged, onAutoAdvance, familyMode]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -111,6 +118,20 @@ export default function TagBar({ docId, tags, onTagsChanged, onAutoAdvance }: Pr
           </div>
         )}
       </div>
+
+      {hasFamily && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs tag-bar-scope"
+          aria-pressed={familyMode}
+          title={familyMode
+            ? 'Tags apply to the email and all its attachments. Click to tag only this document.'
+            : 'Tags apply to this document only. Click to tag the whole family.'}
+          onClick={() => setSingleDocId(familyMode ? docId : null)}
+        >
+          {familyMode ? `📎 Whole family (${familySize})` : 'This document only'}
+        </button>
+      )}
     </div>
   );
 }

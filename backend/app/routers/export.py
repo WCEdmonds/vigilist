@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import re
 from datetime import date
 from uuid import UUID
 
@@ -16,9 +17,14 @@ from app.database import get_db
 from app.models import Document, DocumentTag, Note, User
 from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
+from app.services.metadata_report import METADATA_HEADERS, metadata_row
 from app.services.privilege_log import build_privilege_log_rows
+from app.services.sql_arrays import ids_match
 
 router = APIRouter(prefix="/api/export", tags=["export"])
+
+# ts_headline wraps matches in <mark>; a spreadsheet shows the raw tags.
+_HIGHLIGHT = re.compile(r"</?mark>")
 
 
 @router.get("/documents/csv")
@@ -133,29 +139,37 @@ async def export_search_csv(
     except ValueError as e:  # unknown timezone
         raise HTTPException(status_code=422, detail=str(e))
 
+    # The metadata report: one row per result, in result order.
+    ids = [r["id"] for r in results]
+    docs: dict = {}
+    if ids:
+        loaded = (await db.execute(
+            select(Document)
+            .options(selectinload(Document.tags).selectinload(DocumentTag.tag))
+            .where(ids_match(Document.id, ids))
+        )).scalars().unique().all()
+        docs = {d.id: d for d in loaded}
+
     output = io.StringIO()
+    output.write("﻿")  # BOM so Excel reads names and subjects as UTF-8
     writer = csv.writer(output)
-    writer.writerow([
-        "Document ID", "Bates Begin", "Bates End", "Page Count",
-        "Title", "Snippet", "Rank",
-    ])
+    writer.writerow(["Document ID", *METADATA_HEADERS, "Snippet"])
 
     for r in results:
+        doc = docs.get(r["id"])
+        if doc is None:
+            continue
         writer.writerow([
-            str(r["id"]),
-            r["bates_begin"],
-            r["bates_end"],
-            r["page_count"],
-            r.get("title", ""),
-            r.get("snippet", ""),
-            r.get("rank", ""),
+            str(doc.id),
+            *metadata_row(doc, tz),
+            _HIGHLIGHT.sub("", r.get("snippet") or ""),
         ])
 
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=vigilist_search_export.csv"},
+        headers={"Content-Disposition": "attachment; filename=vigilist_metadata_report.csv"},
     )
 
 

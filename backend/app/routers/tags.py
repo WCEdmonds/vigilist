@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,6 +12,7 @@ from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_
 from app.services import bulk_tagging as bt
 from app.services.audit import log_action
 from app.services.privilege import DISPOSITIONS
+from app.services.sql_arrays import ids_match
 from app.schemas import (
     ApplyTagsRequest,
     BulkTagByQueryRequest,
@@ -122,6 +123,11 @@ async def apply_tags(
     if role == "readonly":
         raise HTTPException(status_code=403, detail="Read-only access")
 
+    if body.family and doc.family_id:
+        await _apply_to_family(db, user, doc, body.tag_ids)
+        await db.commit()
+        return await _document_tags(db, doc_id)
+
     for tag_id in body.tag_ids:
         existing = await db.execute(
             select(DocumentTag).where(
@@ -138,21 +144,51 @@ async def apply_tags(
         await log_action(db, user, "tag_applied", "document", str(doc_id),
                          production_id=doc.production_id, details={"tag_id": tag_id})
     await db.commit()
+    return await _document_tags(db, doc_id)
 
-    # Return updated tag list
-    query = (
+
+async def _document_tags(db, doc_id):
+    result = await db.execute(
         select(DocumentTag)
         .where(DocumentTag.document_id == doc_id)
         .options(selectinload(DocumentTag.tag))
     )
-    result = await db.execute(query)
     return result.scalars().all()
+
+
+async def _family_ids(db, doc) -> list[UUID]:
+    """The document plus every member of its family, same production."""
+    return list(await bt.expand_attachments(db, {doc.id: doc.production_id}))
+
+
+async def _apply_to_family(db, user, doc, tag_ids):
+    """Code the parent and its attachments together. A conflicting
+    responsiveness tag on a member is switched, so the family never ends up
+    half Responsive, half Not Responsive."""
+    ids = await _family_ids(db, doc)
+    for tag_id in tag_ids:
+        tag = await db.get(Tag, tag_id)
+        if not tag:
+            raise HTTPException(status_code=404, detail="Tag not found")
+        if tag.production_id is not None and tag.production_id != doc.production_id:
+            raise HTTPException(status_code=422, detail="Tag belongs to a different production")
+        already = await bt.already_tagged_ids(db, tag_id, ids)
+        conflicts, _ = await bt.conflicting_tags(db, tag, ids)
+        plan = bt.plan_tagging(ids, already, conflicts, "switch")
+        await bt.apply_plan(db, plan, tag_id, user.id, {})
+        for member in sorted(plan.to_tag, key=str):
+            details = {"tag_id": tag_id, "family": True, "source_document_id": str(doc.id)}
+            if member in plan.switch:
+                details["replaced_tag_ids"] = sorted(plan.switch[member])
+            await log_action(db, user, "tag_applied", "document", str(member),
+                             production_id=doc.production_id, details=details)
 
 
 @router.delete("/documents/{doc_id}/tags/{tag_id}")
 async def remove_tag(
     doc_id: UUID,
     tag_id: int,
+    family: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -165,6 +201,26 @@ async def remove_tag(
     role = await get_user_role_for_production(db, user, doc.production_id)
     if role == "readonly":
         raise HTTPException(status_code=403, detail="Read-only access")
+    if family and doc.family_id:
+        ids = await _family_ids(db, doc)
+        tagged = [r[0] for r in (await db.execute(
+            select(DocumentTag.document_id)
+            .where(DocumentTag.tag_id == tag_id, ids_match(DocumentTag.document_id, ids))
+        )).all()]
+        if not tagged:
+            raise HTTPException(status_code=404, detail="Tag not applied")
+        await db.execute(
+            delete(DocumentTag)
+            .where(DocumentTag.tag_id == tag_id, ids_match(DocumentTag.document_id, tagged))
+            .execution_options(synchronize_session=False)
+        )
+        for member in tagged:
+            await log_action(db, user, "tag_removed", "document", str(member),
+                             production_id=doc.production_id,
+                             details={"tag_id": tag_id, "family": True,
+                                      "source_document_id": str(doc_id)})
+        await db.commit()
+        return {"ok": True, "removed": len(tagged)}
     result = await db.execute(
         select(DocumentTag).where(
             DocumentTag.document_id == doc_id,

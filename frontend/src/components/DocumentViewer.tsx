@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentEntities, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
+import { createAnnotation, deleteAnnotation, findSimilar, getDocument, getDocumentDuplicates, getDocumentFamily, getDocumentEntities, getDocumentNav, listAnnotations, summarizeDocument, updateAnnotation } from '../api/client';
 import type { Annotation, DocEntity, DocumentDetail, DocumentTagEntry, DuplicateEntry } from '../types';
 import DocumentNav from './DocumentNav';
 import ImagePanel from './ImagePanel';
@@ -39,6 +39,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [duplicates, setDuplicates] = useState<DuplicateEntry[]>([]);
   const [entities, setEntities] = useState<DocEntity[]>([]);
+  // This document plus its family members (parent email + attachments).
+  const [familySize, setFamilySize] = useState(1);
   const [openEntityId, setOpenEntityId] = useState<string | null>(null);
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [imageRotation, setImageRotation] = useState(0);
@@ -73,6 +75,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     setAnnotations([]);
     setDuplicates([]);
     setEntities([]);
+    setFamilySize(1);
     setPopover(null);
     getDocument(docId).then(d => {
       setDoc(d);
@@ -82,6 +85,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     listAnnotations(docId).then(setAnnotations).catch(e => console.warn('listAnnotations failed:', e));
     getDocumentDuplicates(docId).then(setDuplicates).catch(e => console.warn('getDocumentDuplicates failed:', e));
     getDocumentEntities(docId).then(r => setEntities(r.entities)).catch(e => console.warn('getDocumentEntities failed:', e));
+    getDocumentFamily(docId).then(f => setFamilySize(f.family.length + 1)).catch(e => console.warn('getDocumentFamily failed:', e));
   }, [docId]);
 
   const handleTagsChanged = useCallback((tags: DocumentTagEntry[]) => {
@@ -365,7 +369,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
               {mobileTab === 'notes' && (
                 <>
                   <div style={{ flexShrink: 0 }}>
-                    <TagBar docId={doc.id} tags={doc.tags} onTagsChanged={handleTagsChanged} onAutoAdvance={handleAutoAdvance} />
+                    <TagBar docId={doc.id} tags={doc.tags} onTagsChanged={handleTagsChanged} onAutoAdvance={handleAutoAdvance} familySize={familySize} />
                   </div>
                   <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                     <NotesPanel docId={doc.id} mediaTime={mediaTime} onSeek={(t) => mediaRef.current?.seekTo(t)} />
@@ -426,7 +430,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         <div className="viewer-left-sidebar">
           {/* Tags */}
           <div className="sidebar-section">
-            <TagBar docId={doc.id} tags={doc.tags} onTagsChanged={handleTagsChanged} onAutoAdvance={handleAutoAdvance} />
+            <TagBar docId={doc.id} tags={doc.tags} onTagsChanged={handleTagsChanged} onAutoAdvance={handleAutoAdvance} familySize={familySize} />
           </div>
 
           {/* Notes & Pins — split evenly */}

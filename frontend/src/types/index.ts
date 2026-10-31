@@ -710,3 +710,27 @@ export interface BulkTagApplied {
   overridden: number;
   skipped_existing_overrides: number;
 }
+
+export type PrivilegeDisposition = 'withhold' | 'redact_in_part' | 'produce';
+
+/** One privilege log entry (GET /api/productions/{id}/privilege-log). */
+export interface PrivilegeLogRow {
+  document_id: string;
+  bates_begin: string;
+  bates_end: string;
+  doc_date: string | null;
+  custodian: string | null;
+  author: string | null;
+  recipients: string | null;
+  file_type: string | null;
+  /** Effective disposition: the override, else derived from tags/redactions. */
+  disposition: PrivilegeDisposition;
+  basis: string[];
+  /** What the log says: the hand-written text, else the generated sentence. */
+  description: string;
+  /** The generated sentence, shown as the editor's placeholder. */
+  generated_description: string;
+  disposition_override: PrivilegeDisposition | null;
+  description_override: string | null;
+  qc_status: string;
+}

@@ -22,6 +22,7 @@ interface AppHeaderProps {
   onOpenShare?: () => void;
   onOpenSettings?: () => void;
   onOpenAudit?: () => void;
+  onOpenPrivilegeLog?: () => void;
   onOpenIngest?: () => void;
   onOpenGuide?: () => void;
   onRandomDoc?: () => void;
@@ -49,6 +50,7 @@ export default function AppHeader({
   onOpenShare,
   onOpenSettings,
   onOpenAudit,
+  onOpenPrivilegeLog,
   onOpenIngest,
   onOpenGuide,
   onRandomDoc,
@@ -83,6 +85,7 @@ export default function AppHeader({
     onOpenSettings && { label: 'Production settings', action: onOpenSettings },
     onOpenIngest && { label: '＋ Ingest a production', action: onOpenIngest },
     onRandomDoc && { label: 'Random document', action: onRandomDoc },
+    onOpenPrivilegeLog && { label: 'Privilege log', action: onOpenPrivilegeLog },
     onOpenAudit && { label: 'Audit log', action: onOpenAudit },
     onOpenGuide && { label: 'Guide', action: onOpenGuide },
   ].filter(Boolean) as { label: string; action: () => void }[];

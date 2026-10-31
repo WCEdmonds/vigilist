@@ -102,6 +102,13 @@ async def build_privilege_log_rows(db: AsyncSession, production_id: int) -> list
                 doc.email_from, doc.email_to, doc_date, doc.file_type,
                 basis_list, disposition, doc.privilege_description,
             ),
+            "generated_description": log_description(
+                doc.email_from, doc.email_to, doc_date, doc.file_type,
+                basis_list, disposition, None,
+            ),
+            # The reviewer's own values, for the log editor (None = derived).
+            "disposition_override": doc.privilege_disposition,
+            "description_override": doc.privilege_description,
             "qc_status": status,
         })
     return rows

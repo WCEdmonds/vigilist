@@ -179,23 +179,28 @@ async def get_document_family(
     if not doc or doc.production_id not in accessible:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    async def _members(id_col, id_val):
+    async def _members(id_col, id_val, same_production=False):
         if not id_val:
             return []
-        result = await db.execute(
+        query = (
             select(Document.id, Document.bates_begin, Document.title, Document.is_inclusive)
             .where(id_col == id_val)
             .where(Document.production_id.in_(accessible))
             .where(Document.id != doc_id)
             .order_by(Document.bates_begin)
         )
+        if same_production:
+            query = query.where(Document.production_id == doc.production_id)
+        result = await db.execute(query)
         return [
             FamilyMemberOut(document_id=r[0], bates_begin=r[1], title=r[2], is_inclusive=r[3])
             for r in result.all()
         ]
 
     return FamilyThreadOut(
-        family=await _members(Document.family_id, doc.family_id),
+        # Control numbers repeat across productions, so a family never
+        # reaches outside its own.
+        family=await _members(Document.family_id, doc.family_id, same_production=True),
         thread=await _members(Document.thread_id, doc.thread_id),
     )
 
