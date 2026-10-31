@@ -1,5 +1,6 @@
 """Topic clustering using k-means on document embeddings with Claude-generated labels."""
 
+import asyncio
 import logging
 
 import numpy as np
@@ -12,54 +13,79 @@ from app.services.document_embeddings import get_document_embeddings
 logger = logging.getLogger(__name__)
 
 
+# Silhouette is O(n^2): score k on a fixed sample, as sklearn's sample_size
+# does, so a 3,000-doc production costs the same as a 2,000-doc one.
+_SILHOUETTE_SAMPLE = 2000
+
+
+def _sq_dists(X: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """Pairwise squared Euclidean distances via one matmul (no n*k*d array)."""
+    xx = np.einsum("ij,ij->i", X, X)[:, None]
+    cc = np.einsum("ij,ij->i", C, C)[None, :]
+    return np.maximum(xx + cc - 2.0 * (X @ C.T), 0.0)
+
+
+def _distance_matrix(X: np.ndarray) -> np.ndarray:
+    X64 = X.astype(np.float64)
+    D = np.sqrt(_sq_dists(X64, X64))
+    np.fill_diagonal(D, 0.0)
+    return D
+
+
+def _silhouette_from_distances(D: np.ndarray, labels: np.ndarray) -> float:
+    """Mean silhouette given a precomputed distance matrix. Points alone in
+    their cluster are skipped, matching the original implementation."""
+    n = len(labels)
+    if n < 3:
+        return 0.0
+    uniq, inv = np.unique(labels, return_inverse=True)
+    if len(uniq) < 2:
+        return 0.0
+    onehot = np.zeros((n, len(uniq)))
+    onehot[np.arange(n), inv] = 1.0
+    sums = D @ onehot                      # distance from each point to each cluster
+    counts = onehot.sum(axis=0)
+    own = counts[inv]
+    a = sums[np.arange(n), inv] / np.maximum(own - 1, 1)   # D[i,i] == 0
+    mean_other = sums / counts
+    mean_other[np.arange(n), inv] = np.inf
+    b = mean_other.min(axis=1)
+    valid = (own > 1) & np.isfinite(b)
+    if not valid.any():
+        return 0.0
+    denom = np.maximum(a, b)[valid]
+    s = np.divide(b[valid] - a[valid], denom, out=np.zeros_like(denom), where=denom > 0)
+    return float(s.mean())
+
+
+def _silhouette_sample(n: int) -> np.ndarray:
+    if n <= _SILHOUETTE_SAMPLE:
+        return np.arange(n)
+    return np.sort(np.random.default_rng(0).choice(n, _SILHOUETTE_SAMPLE, replace=False))
+
+
 def _silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
-    """Simplified silhouette score computation."""
+    """Silhouette score (on a fixed sample for large inputs)."""
     n = len(X)
     if n < 3:
         return 0.0
-
-    unique_labels = set(labels)
-    if len(unique_labels) < 2:
-        return 0.0
-
-    scores = []
-    for i in range(n):
-        # a(i) = average distance to same-cluster members
-        same = [j for j in range(n) if labels[j] == labels[i] and j != i]
-        if not same:
-            continue
-        a = np.mean([np.linalg.norm(X[i] - X[j]) for j in same])
-
-        # b(i) = min average distance to other clusters
-        b = float("inf")
-        for label in unique_labels:
-            if label == labels[i]:
-                continue
-            others = [j for j in range(n) if labels[j] == label]
-            if others:
-                avg_dist = np.mean([np.linalg.norm(X[i] - X[j]) for j in others])
-                b = min(b, avg_dist)
-
-        if b == float("inf"):
-            continue
-        scores.append((b - a) / max(a, b))
-
-    return float(np.mean(scores)) if scores else 0.0
+    idx = _silhouette_sample(n)
+    return _silhouette_from_distances(_distance_matrix(X[idx]), np.asarray(labels)[idx])
 
 
 def _kmeans(X: np.ndarray, k: int, max_iter: int = 30) -> np.ndarray:
-    """Simple k-means returning labels."""
+    """Simple k-means returning labels (k-means++-style farthest-point init)."""
     n = X.shape[0]
-    # K-means++ init
     idx = [np.random.randint(n)]
+    min_d = _sq_dists(X, X[idx[-1]:idx[-1] + 1])[:, 0]
     for _ in range(k - 1):
-        dists = np.min(np.linalg.norm(X[:, None, :] - X[idx][None, :, :], axis=2), axis=1)
-        idx.append(int(np.argmax(dists)))
+        nxt = int(np.argmax(min_d))
+        idx.append(nxt)
+        min_d = np.minimum(min_d, _sq_dists(X, X[nxt:nxt + 1])[:, 0])
     centroids = X[idx].copy()
 
     for _ in range(max_iter):
-        dists = np.linalg.norm(X[:, None, :] - centroids[None, :, :], axis=2)
-        labels = np.argmin(dists, axis=1)
+        labels = np.argmin(_sq_dists(X, centroids), axis=1)
         new_centroids = np.zeros_like(centroids)
         for j in range(k):
             mask = labels == j
@@ -72,6 +98,27 @@ def _kmeans(X: np.ndarray, k: int, max_iter: int = 30) -> np.ndarray:
         centroids = new_centroids
 
     return labels
+
+
+def choose_clusters(X: np.ndarray, num_clusters: int | None = None) -> tuple[np.ndarray, int, float | None]:
+    """Pick k by silhouette (unless given) and cluster. Pure CPU: callers run
+    it off the event loop. Returns (labels, k, best_silhouette_or_None)."""
+    n = len(X)
+    best_score = None
+    if num_clusters is None:
+        if n < 50:
+            k_range = range(2, min(6, n))
+        else:
+            k_range = range(5, min(31, n // 10 + 1))
+        idx = _silhouette_sample(n)
+        D = _distance_matrix(X[idx])  # computed once, reused for every k
+        best_k, best_score = 2, -1.0
+        for k in k_range:
+            score = _silhouette_from_distances(D, _kmeans(X, k)[idx])
+            if score > best_score:
+                best_score, best_k = score, k
+        num_clusters = best_k
+    return _kmeans(X, num_clusters), num_clusters, best_score
 
 
 def _sanitize_label(raw: str) -> str:
@@ -186,15 +233,6 @@ async def cluster_production(
     num_clusters: int | None = None,
 ) -> list[dict]:
     """Run topic clustering for a production. Returns list of cluster info dicts."""
-    # Clear previous clusters
-    old = await db.execute(
-        select(DocumentCluster.id).where(DocumentCluster.production_id == production_id)
-    )
-    old_ids = [row[0] for row in old.all()]
-    if old_ids:
-        await db.execute(delete(DocumentClusterAssignment).where(DocumentClusterAssignment.cluster_id.in_(old_ids)))
-        await db.execute(delete(DocumentCluster).where(DocumentCluster.id.in_(old_ids)))
-
     embeddings = await get_document_embeddings(db, production_id)
     if len(embeddings) < 3:
         return []
@@ -209,27 +247,6 @@ async def cluster_production(
 
     n = len(doc_ids)
 
-    # Auto-detect k
-    if num_clusters is None:
-        if n < 50:
-            k_range = range(2, min(6, n))
-        else:
-            k_range = range(5, min(31, n // 10 + 1))
-
-        best_k = 2
-        best_score = -1
-        for k in k_range:
-            labels = _kmeans(X, k)
-            score = _silhouette_score(X, labels)
-            if score > best_score:
-                best_score = score
-                best_k = k
-
-        num_clusters = best_k
-        logger.info("Auto-detected k=%d (silhouette=%.3f) for %d documents", best_k, best_score, n)
-
-    labels = _kmeans(X, num_clusters)
-
     # Titles + text snippets for labeling. Titles (AI-generated at ingest)
     # are a much cleaner topic signal than raw leading characters,
     # especially for OCR-heavy tabular documents.
@@ -243,8 +260,18 @@ async def cluster_production(
         doc_texts[str(doc_id)] = text or ""
         doc_titles[str(doc_id)] = title or ""
 
-    # Create clusters with labels
-    clusters_info = []
+    # Reads are done: end the transaction so no connection sits idle through
+    # the CPU work and the LLM calls below (it was dropped mid-stage before).
+    await db.commit()
+
+    # CPU-bound: run in a thread so the instance keeps serving requests.
+    auto = num_clusters is None
+    labels, num_clusters, best_score = await asyncio.to_thread(choose_clusters, X, num_clusters)
+    if auto:
+        logger.info("Auto-detected k=%d (silhouette=%.3f) for %d documents", num_clusters, best_score, n)
+
+    # Labels next (one LLM call per cluster), still with no transaction open.
+    pending = []
     for k in range(num_clusters):
         member_ids = [doc_ids[i] for i in range(n) if labels[i] == k]
         if not member_ids:
@@ -277,6 +304,20 @@ async def cluster_production(
         member_titles = [doc_titles.get(d, "") for d in member_ids]
         label = await _generate_cluster_label(member_titles, rep_lines)
 
+        pending.append((k, label, member_ids))
+
+    # Replace the old clusters only now that the new ones are ready, so the
+    # transaction is short and a failure leaves the previous clustering intact.
+    old = await db.execute(
+        select(DocumentCluster.id).where(DocumentCluster.production_id == production_id)
+    )
+    old_ids = [row[0] for row in old.all()]
+    if old_ids:
+        await db.execute(delete(DocumentClusterAssignment).where(DocumentClusterAssignment.cluster_id.in_(old_ids)))
+        await db.execute(delete(DocumentCluster).where(DocumentCluster.id.in_(old_ids)))
+
+    clusters_info = []
+    for k, label, member_ids in pending:
         cluster = DocumentCluster(
             production_id=production_id,
             cluster_index=k,
