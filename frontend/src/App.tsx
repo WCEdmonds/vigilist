@@ -727,7 +727,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     <option key={sp} value={sp}>{sp}</option>
                   ))}
                 </select>
-                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportSearchCsv(searchQuery, production.id)}>
+                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportSearchCsv(searchQuery, production.id, {
+                  sort: searchSort, metadata: lastMetadata, fileType: filterFileType || undefined,
+                  sourceParty: filterSourceParty || undefined, sourceType: sourceTypeParam, extras: lastExtras,
+                })}>
                   Export CSV
                 </button>
               </div>

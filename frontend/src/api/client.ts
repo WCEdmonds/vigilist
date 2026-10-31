@@ -427,9 +427,37 @@ export async function exportDocsCsv(productionId?: number, tagId?: number) {
   await downloadCsv(`/api/export/documents/csv${qs ? `?${qs}` : ''}`, 'documents.csv');
 }
 
-export async function exportSearchCsv(q: string, productionId?: number) {
+export async function exportSearchCsv(
+  q: string,
+  productionId?: number,
+  filters?: {
+    sort?: string;
+    metadata?: Record<string, string>;
+    fileType?: string;
+    sourceParty?: string;
+    sourceType?: string;
+    extras?: SearchExtras;
+  },
+) {
+  // Same filters as the on-screen search, so the file matches what the
+  // reviewer is looking at.
   const params = new URLSearchParams({ q });
   if (productionId) params.set('production_id', String(productionId));
+  if (filters?.sort) params.set('sort', filters.sort);
+  if (filters?.metadata && Object.keys(filters.metadata).length > 0) {
+    params.set('metadata', JSON.stringify(filters.metadata));
+  }
+  if (filters?.fileType) params.set('file_type', filters.fileType);
+  if (filters?.sourceParty) params.set('source_party', filters.sourceParty);
+  if (filters?.sourceType) params.set('source_type', filters.sourceType);
+  const extras = filters?.extras;
+  if (extras?.email && extras.email.address.trim()) {
+    params.set('email_address', extras.email.address.trim());
+    params.set('email_scope', extras.email.scope);
+  }
+  if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
+  if (extras?.dateTo) params.set('date_to', extras.dateTo);
+  if (extras?.dateFrom || extras?.dateTo) params.set('tz', browserTimeZone());
   await downloadCsv(`/api/export/search/csv?${params}`, 'search_results.csv');
 }
 
