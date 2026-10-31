@@ -102,7 +102,8 @@ def test_compute_manifest_counts_and_continuity():
              FakeItem(d2, "SMITH000005", "SMITH000005", 1, "withhold")]
     m = pe.compute_manifest(FakePS(), items)
     assert m["counts"] == {"documents": 2, "pages": 3, "produce": 1,
-                           "redact_in_part": 0, "withhold": 1, "native": 0}
+                           "redact_in_part": 0, "withhold": 1, "native": 0,
+                           "designations": {}}
     assert m["bates_range"] == {"begin": "SMITH000001", "end": "SMITH000005"}
     assert m["continuity"]["ok"] is False  # gap 000003-000004
     assert m["artifacts"][0]["path"].endswith("SMITH000001.pdf")

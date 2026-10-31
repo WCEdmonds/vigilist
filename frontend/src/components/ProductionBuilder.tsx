@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   addProductionSetDocuments, createProductionSet, deleteProductionSet, fetchProducedPdf,
   fetchProductionPackage, getProductionSet, getProductionSetManifest, getProductionSetMembers,
-  getProductionSetValidation, lockProductionSet, packageProductionSet, renderProductionSet,
+  createTag, getProductionSetValidation, lockProductionSet, packageProductionSet, renderProductionSet,
   type ManifestReport, type ProductionSetInfo, type ProductionSetMember,
   type ValidationConflict, type ValidationReport,
 } from '../api/client';
@@ -36,6 +36,12 @@ function saveBlob(blob: Blob, filename: string) {
 
 const fieldLabel = { fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' } as const;
 
+// The customer's pair: some documents Confidential, some AEO, some both.
+const STANDARD_DESIGNATIONS = [
+  { name: 'Confidential', designation: 'CONFIDENTIAL', color: 'yellow' },
+  { name: "Attorneys' Eyes Only", designation: "ATTORNEYS' EYES ONLY", color: 'red' },
+];
+
 export default function ProductionBuilder({ productionId, setId, tags, selectedIds, existingSets, onOpenDoc, onClose }: Props) {
   const [set, setSet] = useState<ProductionSetInfo | null>(null);
   const [members, setMembers] = useState<ProductionSetMember[]>([]);
@@ -52,6 +58,21 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
   const [startHint, setStartHint] = useState('');
   const [sortKey, setSortKey] = useState('control_number');
   const [designation, setDesignation] = useState('');
+  // Designation tags made here, until the parent's tag list next reloads.
+  const [createdTags, setCreatedTags] = useState<Tag[]>([]);
+  const [designationError, setDesignationError] = useState<string | null>(null);
+  const designationTags = [...tags, ...createdTags].filter(t => t.designation);
+
+  const handleCreateDesignationTags = async () => {
+    setDesignationError(null);
+    try {
+      const made = await Promise.all(STANDARD_DESIGNATIONS.map(d =>
+        createTag({ name: d.name, category: 'confidentiality', color: d.color, designation: d.designation })));
+      setCreatedTags(made);
+    } catch (e) {
+      setDesignationError(e instanceof Error ? e.message : 'Could not create the tags');
+    }
+  };
   const [imageFormat, setImageFormat] = useState<'pdf' | 'tiff'>('pdf');
   const [nativeTypes, setNativeTypes] = useState<string[]>([]);
   const [volumeCap, setVolumeCap] = useState('');
@@ -220,9 +241,24 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
                 <option value="custodian_date">Custodian, then date</option>
               </select>
             </label>
-            <label><span style={fieldLabel}>Confidentiality designation (stamped on every page; optional)</span>
+            <label><span style={fieldLabel}>Default confidentiality designation (optional)</span>
               <input className="input" value={designation} onChange={e => setDesignation(e.target.value)} placeholder="e.g. CONFIDENTIAL" maxLength={100} />
             </label>
+            <div style={{ ...fieldLabel, marginTop: -4 }}>
+              {designationTags.length > 0 ? (
+                <>Documents tagged {designationTags.map(t => `“${t.name}”`).join(' or ')} are stamped with
+                  that tag’s legend (both tags: both legends); every other document gets the default above.</>
+              ) : (
+                <>
+                  To stamp some documents Confidential and others Attorneys’ Eyes Only, code them with
+                  designation tags.{' '}
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={handleCreateDesignationTags}>
+                    Create Confidential &amp; AEO tags
+                  </button>
+                </>
+              )}
+              {designationError && <div role="alert" style={{ color: 'var(--color-danger, #b42318)' }}>{designationError}</div>}
+            </div>
             <div>
               <span style={fieldLabel}>Image format</span>
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>

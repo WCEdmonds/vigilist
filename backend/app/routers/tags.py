@@ -75,10 +75,17 @@ async def update_tag_privilege(
                 break
         else:
             raise HTTPException(status_code=403, detail="Manager or higher role required")
-    tag.is_privilege = body.is_privilege
-    await log_action(db, user, "tag_privilege_set", "tag", str(tag_id),
-                     production_id=tag.production_id,
-                     details={"is_privilege": body.is_privilege})
+    fields = body.model_fields_set
+    if "is_privilege" in fields and body.is_privilege is not None:
+        tag.is_privilege = body.is_privilege
+        await log_action(db, user, "tag_privilege_set", "tag", str(tag_id),
+                         production_id=tag.production_id,
+                         details={"is_privilege": body.is_privilege})
+    if "designation" in fields:
+        tag.designation = (body.designation or "").strip() or None
+        await log_action(db, user, "tag_designation_set", "tag", str(tag_id),
+                         production_id=tag.production_id,
+                         details={"designation": tag.designation})
     await db.commit()
     await db.refresh(tag)
     return TagOut.model_validate(tag)

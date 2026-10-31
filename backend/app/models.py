@@ -206,6 +206,9 @@ class Tag(Base):
     keyboard_shortcut = Column(String(5), nullable=True)
     production_id = Column(Integer, ForeignKey("productions.id"), nullable=True)
     is_privilege = Column(Boolean, nullable=False, default=False)
+    # Confidentiality legend this tag stamps on produced documents
+    # ("CONFIDENTIAL", "ATTORNEYS' EYES ONLY"); see services/designations.py.
+    designation = Column(String(100), nullable=True)
 
     document_tags = relationship("DocumentTag", back_populates="tag")
 

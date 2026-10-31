@@ -33,6 +33,7 @@ from app.schemas import (
 )
 from app.services import tasks
 from app.services.audit import log_action
+from app.services.designations import combine_designations
 from app.services.oidc import verify_cloud_tasks_request
 from app.services.privilege import effective_disposition
 from app.services.production_export import compute_manifest, package_set
@@ -401,6 +402,15 @@ async def lock_production_set(
     )).all()
     privileged = {r[0] for r in priv_rows}
 
+    designation_rows = (await db.execute(
+        select(DocumentTag.document_id, Tag.id, Tag.designation)
+        .join(Tag, Tag.id == DocumentTag.tag_id)
+        .where(Tag.designation.is_not(None), DocumentTag.document_id.in_(doc_ids))
+    )).all()
+    tag_designations: dict = {}
+    for did, tag_id, text in designation_rows:
+        tag_designations.setdefault(did, []).append((tag_id, text))
+
     red_rows = (await db.execute(
         select(Redaction.document_id, func.count(Redaction.id))
         .where(Redaction.document_id.in_(doc_ids))
@@ -442,6 +452,8 @@ async def lock_production_set(
         item.bates_begin = begin
         item.bates_end = end
         item.disposition, item.pages, item.produce_native = meta[did]
+        # None falls back to the set's default designation when rendering.
+        item.designation = combine_designations(tag_designations.get(did, []))
 
     ps.status = "locked"
     ps.locked_by = user.id

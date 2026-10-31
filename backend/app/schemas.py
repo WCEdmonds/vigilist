@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import UUID4, BaseModel, field_validator, model_validator
+from pydantic import UUID4, BaseModel, Field, field_validator, model_validator
 
 
 def get_file_type(native_path: str | None, page_count: int) -> str:
@@ -55,6 +55,7 @@ class TagOut(BaseModel):
     color: str
     keyboard_shortcut: str | None
     is_privilege: bool = False
+    designation: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -64,10 +65,13 @@ class TagCreate(BaseModel):
     category: str
     color: str = "gray"
     keyboard_shortcut: str | None = None
+    designation: str | None = Field(None, max_length=100)
 
 
 class TagPrivilegeUpdate(BaseModel):
-    is_privilege: bool
+    """Only the fields sent are changed; designation null clears it."""
+    is_privilege: bool | None = None
+    designation: str | None = Field(None, max_length=100)
 
 
 class DocumentTagOut(BaseModel):
