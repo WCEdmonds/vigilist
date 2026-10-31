@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, DocumentTag, Redaction, RedactionQCDecision, Tag
 from app.services.privilege import effective_disposition, log_description, qc_status
+from app.services.sql_arrays import ids_match
 from app.services.redaction_render import REASON_LABELS
 
 
@@ -44,13 +45,13 @@ async def build_privilege_log_rows(db: AsyncSession, production_id: int) -> list
     docs = (await db.execute(
         select(Document).where(
             Document.production_id == production_id,
-            Document.id.in_(candidate_ids),
+            ids_match(Document.id, candidate_ids),
         )
     )).scalars().all()
 
     decisions = (await db.execute(
         select(RedactionQCDecision)
-        .where(RedactionQCDecision.document_id.in_(candidate_ids))
+        .where(ids_match(RedactionQCDecision.document_id, candidate_ids))
         .order_by(RedactionQCDecision.document_id,
                   RedactionQCDecision.decided_at.desc(),
                   RedactionQCDecision.id.desc())

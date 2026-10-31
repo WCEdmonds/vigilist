@@ -13,15 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from sqlalchemy import and_, any_, delete, literal, select, update
-from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import aliased
 
 from app.models import Document, DocumentTag, Tag
 from app.schemas import BulkTagQuery
 from app.services.search import build_search_conditions
+from app.services.sql_arrays import ids_match
 
 # Categories where a document should carry at most one tag — applying one
 # tag in the category conflicts with any other already on the document.
@@ -31,11 +30,6 @@ MAX_BULK_DOCS = 50_000
 
 class NoCriteriaError(ValueError):
     """The query has no text or filters, so it would match nothing."""
-
-
-def ids_match(column, ids):
-    """`column = ANY(:ids)` with a single array bind parameter."""
-    return column == any_(literal(list(ids), ARRAY(PG_UUID(as_uuid=True))))
 
 
 async def resolve_query_docs(
