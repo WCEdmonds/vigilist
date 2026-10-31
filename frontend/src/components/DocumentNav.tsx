@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getByBates, getDocumentNav } from '../api/client';
 import type { DocumentDetail } from '../types';
+import AttachmentBadge from './AttachmentBadge';
 
 interface Props {
   doc: DocumentDetail;
@@ -61,6 +62,8 @@ export default function DocumentNav({ doc, onNavigate, searchQuery, onTitleChang
           {doc.title}
         </span>
       )}
+      <AttachmentBadge parentId={doc.parent_id} parentTitle={doc.parent_title} parentBates={doc.parent_bates}
+        parentIsEmail={doc.parent_is_email} onOpenParent={onNavigate} />
       <button className="btn btn-secondary btn-sm" onClick={goNext} disabled={!nextId}>Next →</button>
 
       {searchQuery && (

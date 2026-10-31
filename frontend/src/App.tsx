@@ -3,6 +3,7 @@ import { browserTimeZone, bulkTag, createTag, designateSources, exportDocsCsv, e
 import { entityDisplayName } from './utils/entityDisplay';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
+import AttachmentBadge from './components/AttachmentBadge';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
@@ -995,6 +996,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                               setDocuments(prev => prev.map(doc => doc.id === d.id ? { ...doc, title: newTitle } : doc));
                             }}
                           />
+                          <div>
+                            <AttachmentBadge parentId={d.parent_id} parentTitle={d.parent_title} parentBates={d.parent_bates}
+                              parentIsEmail={d.parent_is_email} onOpenParent={setViewDocId} />
+                          </div>
                         </td>
                         <td className="meta-cell">
                           <span className={`badge badge-${
@@ -1053,6 +1058,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     <div className="doc-grid-info">
                       <div className="doc-grid-bates">{d.bates_begin}</div>
                       {d.title && <div className="doc-grid-title">{d.title}</div>}
+                      <AttachmentBadge parentId={d.parent_id} parentTitle={d.parent_title} parentBates={d.parent_bates}
+                        parentIsEmail={d.parent_is_email} onOpenParent={setViewDocId} />
                       <div className="doc-grid-meta">
                         {d.page_count} pg{d.page_count !== 1 ? 's' : ''}
                         {d.tags?.map(tag => (

@@ -202,6 +202,10 @@ class DocumentSummary(BaseModel):
     ai_decided: bool = False
     source_party: str | None = None
     source_type: str | None = None
+    parent_id: UUID | None = None          # set when this is an attachment
+    parent_bates: str | None = None
+    parent_title: str | None = None
+    parent_is_email: bool | None = None
 
     model_config = {"from_attributes": True}
 
@@ -224,6 +228,10 @@ class DocumentDetail(BaseModel):
     note_count: int = 0
     annotation_count: int = 0
     redaction_count: int = 0
+    parent_id: UUID | None = None          # set when this is an attachment
+    parent_bates: str | None = None
+    parent_title: str | None = None
+    parent_is_email: bool | None = None
 
     model_config = {"from_attributes": True}
 
@@ -260,6 +268,10 @@ class SearchResult(BaseModel):
     rank: float
     doc_date: datetime | None = None
     tags: list[TagOut] = []
+    parent_id: UUID | None = None          # set when this is an attachment
+    parent_bates: str | None = None
+    parent_title: str | None = None
+    parent_is_email: bool | None = None
 
     model_config = {"from_attributes": True}
 

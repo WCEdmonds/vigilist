@@ -1,3 +1,4 @@
+import AttachmentBadge from './AttachmentBadge';
 import type { ChipEntity, SearchResult, Tag } from '../types';
 import { renderHighlightedSnippet } from '../utils/sanitize';
 
@@ -60,6 +61,8 @@ export default function SearchResults({ results, onSelect, selectedIds, onToggle
           {r.title && (
             <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)' }}>{r.title}</div>
           )}
+          <AttachmentBadge parentId={r.parent_id} parentTitle={r.parent_title} parentBates={r.parent_bates}
+            parentIsEmail={r.parent_is_email} onOpenParent={onSelect} />
           <div className="result-snippet">{renderHighlightedSnippet(r.snippet)}</div>
         </div>
       ))}

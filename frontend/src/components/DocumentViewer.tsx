@@ -292,6 +292,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.bates_begin}</div>
             {doc.title && <div style={{ fontSize: 11, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</div>}
+            {doc.parent_id && (
+              <button type="button" onClick={() => onNavigate(doc.parent_id!)}
+                style={{ display: 'block', maxWidth: '100%', fontSize: 11, color: '#fff', opacity: 0.75, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline dotted', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {doc.parent_is_email === false ? '📦 From' : '📎 Attachment to'} {doc.parent_title || doc.parent_bates}
+              </button>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <button

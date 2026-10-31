@@ -9,7 +9,9 @@ import asyncio
 import hashlib
 import io
 import logging
+import mimetypes
 import os
+import re
 import zipfile
 
 from sqlalchemy import select
@@ -61,6 +63,29 @@ def list_native_sources(production_id: int, load_prefix: str | None = None) -> l
     return items
 
 
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._ ()&+,=@-]")
+
+
+def attachment_storage_path(production_id: int, control: str, filename: str) -> str:
+    """Where an email attachment's bytes live. Deterministic (a retried batch
+    overwrites rather than duplicates), keeps the extension (the viewer and
+    native export key off it), and never under raw/ (scanned as new sources,
+    which would shift every later control number)."""
+    name = os.path.basename((filename or "").replace("\\", "/")).strip()
+    name = _UNSAFE_NAME_CHARS.sub("_", name).strip(". ") or "attachment"
+    if len(name) > 120:
+        stem, ext = os.path.splitext(name)
+        name = stem[: 120 - len(ext)] + ext
+    folder = control.replace(" ", "_")
+    return f"productions/{production_id}/attachments/{folder}/{name}"
+
+
+def _store_attachment(data: bytes, path: str) -> None:
+    from app.services.storage import upload_bytes
+
+    upload_bytes(data, path, content_type=mimetypes.guess_type(path)[0])
+
+
 def build_email_documents(
     parsed: ParsedMessage,
     message_control: str,
@@ -72,6 +97,7 @@ def build_email_documents(
     native_path: str | None = None,
     extract_fn=extract,
     ocr_fn=None,
+    store_fn=None,
 ) -> list[Document]:
     """Turn one parsed message into [parent, *attachment children].
 
@@ -120,6 +146,16 @@ def build_email_documents(
     for k, (att_name, att_bytes) in enumerate(parsed.attachments, start=1):
         att_control = f"{message_control} .{k:04d}"
         res = extract_fn(att_name, att_bytes, ocr_fn=ocr_fn)
+        # Store the attachment itself so it can be previewed and produced
+        # natively. Best-effort: without it the document still has its text.
+        att_native = None
+        if store_fn is not None:
+            att_path = attachment_storage_path(production_id, att_control, att_name)
+            try:
+                store_fn(att_bytes, att_path)
+                att_native = att_path
+            except Exception as e:
+                logger.warning("%s: could not store attachment %r: %s", att_control, att_name, e)
         docs.append(
             Document(
                 production_id=production_id,
@@ -129,7 +165,7 @@ def build_email_documents(
                 metadata_={"File Name": att_name, "Parent": message_control},
                 title=(att_name[:200] or None),
                 text_content=res.text or None,
-                native_path=None,
+                native_path=att_native,
                 image_paths=[],
                 family_id=message_control,
                 file_name=att_name,
@@ -236,6 +272,7 @@ def _expand_email_bytes(
     errors: list[str],
     native_path: str | None = None,
     ocr_fn=None,
+    store_fn=None,
 ) -> list[Document]:
     """Parse an email container's bytes into parent+attachment Documents.
 
@@ -271,6 +308,7 @@ def _expand_email_bytes(
                     msg_bytes=msg_bytes,
                     native_path=native_path,
                     ocr_fn=ocr_fn,
+                    store_fn=store_fn,
                 )
             )
         except Exception as e:
@@ -310,6 +348,7 @@ def process_native_email(
         errors=errors,
         native_path=storage_path,
         ocr_fn=_ocr_jpeg_text,
+        store_fn=_store_attachment,
     )
 
 
