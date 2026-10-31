@@ -25,6 +25,7 @@ import WelcomePage from './components/WelcomePage';
 import ProductionPicker from './components/ProductionPicker';
 import OnboardingGuide from './components/OnboardingGuide';
 import ContextRail from './components/ContextRail';
+import BulkTagDialog, { type BulkTarget } from './components/BulkTagDialog';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
 import { useOnboarding } from './hooks/useOnboarding';
@@ -68,6 +69,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [hasSearched, setHasSearched] = useState(!!initialUrl.q);
   const [lastSearchMode, setLastSearchMode] = useState<SearchMode>('fulltext');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // "Select all N matching": the selection becomes the search itself, so a
+  // bulk action reaches every hit, not just the page on screen.
+  const [allMatching, setAllMatching] = useState(false);
+  const [showBulkDialog, setShowBulkDialog] = useState(false);
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [showBulkTagPicker, setShowBulkTagPicker] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -209,6 +214,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setSearchQuery(query);
     setHasSearched(true);
     setSelectedIds(new Set());
+    setAllMatching(false);
     setLastMetadata(metadata);
     setLastExtras(extras);
     setBatesHits([]);
@@ -296,11 +302,13 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setSearchResults([]);
     setBatesHits([]);
     setSelectedIds(new Set());
+    setAllMatching(false);
     setLastExtras(undefined);
     loadDocuments();
   };
 
   const toggleSelect = useCallback((id: string) => {
+    setAllMatching(false);
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -505,6 +513,31 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   }
 
   const displayDocs = documents;
+  // The server runs full-text whenever any filter is set (semantic ignores
+  // filters). Only a full-text result set can be re-resolved as a query, so
+  // "select all matching" is offered only then.
+  const searchUsedFulltext = lastSearchMode === 'fulltext' || !!lastMetadata || hasExtras(lastExtras)
+    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam;
+  const pageAllSelected = hasSearched && searchResults.length > 0
+    && searchResults.every(r => selectedIds.has(r.id));
+  const bulkTarget: BulkTarget = allMatching
+    ? {
+        kind: 'query',
+        query: {
+          q: searchQuery,
+          production_id: production.id,
+          metadata: lastMetadata ?? null,
+          file_type: filterFileType || null,
+          source_party: filterSourceParty || null,
+          source_type: sourceTypeParam ?? null,
+          email_address: lastExtras?.email?.address ?? null,
+          email_scope: lastExtras?.email?.scope ?? 'from',
+          date_from: lastExtras?.dateFrom ?? null,
+          date_to: lastExtras?.dateTo ?? null,
+        },
+      }
+    : { kind: 'ids', docIds: Array.from(selectedIds) };
+  const selectedCount = allMatching ? searchTotal : selectedIds.size;
   const totalPages = Math.ceil(docTotal / perPage);
 
   return (
@@ -756,6 +789,31 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
               </div>
             )}
 
+            {searchResults.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2) 0', fontSize: 'var(--text-sm)' }}>
+                {allMatching ? (
+                  <>
+                    <span>All <strong>{searchTotal.toLocaleString()}</strong> matching documents are selected.</span>
+                    <button className="btn btn-ghost btn-xs" onClick={() => { setAllMatching(false); setSelectedIds(new Set()); }}>
+                      Clear selection
+                    </button>
+                  </>
+                ) : pageAllSelected ? (
+                  <>
+                    <span>All {searchResults.length} on this page are selected.</span>
+                    {searchUsedFulltext && searchTotal > searchResults.length && (
+                      <button className="btn btn-ghost btn-xs" onClick={() => setAllMatching(true)}>
+                        Select all {searchTotal.toLocaleString()} matching
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <button className="btn btn-ghost btn-xs" onClick={() => setSelectedIds(new Set(searchResults.map(r => r.id)))}>
+                    Select all on this page
+                  </button>
+                )}
+              </div>
+            )}
             <div className="card">
               <SearchResults
                 results={searchResults}
@@ -1118,9 +1176,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       {selectedIds.size > 0 && (
         <div className="floating-bar">
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
-            {selectedIds.size} selected
+            {selectedCount.toLocaleString()} selected
           </span>
           <div className="divider" style={{ background: 'rgba(255,255,255,0.15)', height: 20 }} />
+          {!allMatching && (<>
           <button
             className="btn btn-sm btn-secondary"
             onClick={handleBulkDownload}
@@ -1183,13 +1242,35 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
               </div>
             )}
           </div>
+          </>)}
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => { setShowBulkTagPicker(false); setShowBulkDialog(true); }}
+          >
+            {allMatching ? 'Tag all matching…' : 'Tag with options…'}
+          </button>
           <button
             className="btn btn-sm btn-ghost"
-            onClick={() => { setSelectedIds(new Set()); setShowBulkTagPicker(false); setNewTagName(''); }}
+            onClick={() => { setSelectedIds(new Set()); setAllMatching(false); setShowBulkTagPicker(false); setNewTagName(''); }}
           >
             Clear
           </button>
         </div>
+      )}
+      {showBulkDialog && (
+        <BulkTagDialog
+          target={bulkTarget}
+          tags={allTags}
+          onClose={() => setShowBulkDialog(false)}
+          onApplied={(message) => {
+            setShowBulkDialog(false);
+            setSelectedIds(new Set());
+            setAllMatching(false);
+            showToast(message, 'success');
+            if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
+            else loadDocuments(docPage);
+          }}
+        />
       )}
 
     </div>
