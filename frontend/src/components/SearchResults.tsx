@@ -52,7 +52,9 @@ export default function SearchResults({ results, onSelect, selectedIds, onToggle
               </button>
             ))}
             <span className="result-meta">
-              {r.doc_date ? `${r.doc_date.slice(0, 10)} · ` : ''}{r.page_count} pg{r.page_count !== 1 ? 's' : ''}
+              {/* en-CA renders YYYY-MM-DD in the reviewer's local timezone — the same
+                  day boundaries the date filter uses. */}
+              {r.doc_date ? `${new Date(r.doc_date).toLocaleDateString('en-CA')} · ` : ''}{r.page_count} pg{r.page_count !== 1 ? 's' : ''}
             </span>
           </div>
           {r.title && (

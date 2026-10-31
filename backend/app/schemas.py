@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import UUID4, BaseModel, model_validator
+from pydantic import UUID4, BaseModel, field_validator, model_validator
 
 
 def get_file_type(native_path: str | None, page_count: int) -> str:
@@ -101,6 +101,18 @@ class BulkTagQuery(BaseModel):
     email_scope: Literal["from", "any"] = "from"
     date_from: date | None = None
     date_to: date | None = None
+    tz: str | None = None
+
+    @field_validator("tz")
+    @classmethod
+    def _known_timezone(cls, v):
+        if v:
+            from zoneinfo import ZoneInfo
+            try:
+                ZoneInfo(v)
+            except Exception as e:
+                raise ValueError(f"Unknown timezone: {v}") from e
+        return v
 
 
 class BulkTagByQueryRequest(BaseModel):

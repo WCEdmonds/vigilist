@@ -49,6 +49,7 @@ async def resolve_query_docs(
         email_scope=query.email_scope,
         date_from=query.date_from,
         date_to=query.date_to,
+        tz=query.tz,
     )
     if not has_criteria:
         raise NoCriteriaError

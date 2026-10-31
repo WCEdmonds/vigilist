@@ -10,7 +10,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.audit import log_action
 from app.schemas import SearchResponse, SearchResult
-from app.services.search import search_documents
+from app.services.search import resolve_tz, search_documents
 from app.services.semantic_search import semantic_search
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -32,6 +32,7 @@ async def search(
     email_scope: str = Query("from", pattern="^(from|any)$"),
     date_from: date | None = Query(None, description="Inclusive start date (YYYY-MM-DD)"),
     date_to: date | None = Query(None, description="Inclusive end date (YYYY-MM-DD)"),
+    tz: str | None = Query(None, max_length=64, description="Reviewer's IANA timezone for date bounds"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -43,6 +44,10 @@ async def search(
             raise HTTPException(status_code=400, detail="Invalid metadata JSON")
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="date_from is after date_to")
+    try:
+        resolve_tz(tz)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     accessible = await get_accessible_production_ids(db, user)
 
@@ -73,6 +78,7 @@ async def search(
             email_scope=email_scope,
             date_from=date_from,
             date_to=date_to,
+            tz=tz,
         )
     await log_action(db, user, "search_executed", "search", None,
                      details={"query": q, "result_count": total})

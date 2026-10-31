@@ -142,7 +142,7 @@ def _call_search(**overrides):
     params = dict(
         q="", production_id=1, page=1, per_page=50, sort="relevance", mode="fulltext",
         metadata=None, file_type=None, source_party=None, source_type=None,
-        email_address=None, email_scope="from", date_from=None, date_to=None,
+        email_address=None, email_scope="from", date_from=None, date_to=None, tz=None,
     )
     params.update(overrides)
     return asyncio.run(rs.search(**params, db=FakeSession(), user=FakeUser()))
@@ -170,4 +170,33 @@ def test_search_router_rejects_reversed_dates(monkeypatch):
     _patch_router(monkeypatch)
     with pytest.raises(HTTPException) as exc:
         _call_search(date_from=date(2018, 4, 1), date_to=date(2018, 3, 1))
+    assert exc.value.status_code == 422
+
+
+def test_date_bounds_use_reviewer_timezone():
+    # 3/31 10pm EDT is still "3/31" to a reviewer in New York, though it is
+    # already 4/1 in UTC; day bounds must follow the reviewer's timezone.
+    conditions, _, _ = build_search_conditions(
+        "", date_from=date(2018, 3, 1), date_to=date(2018, 3, 31), tz="America/New_York")
+    _, lo = _compile(conditions[0])
+    _, hi = _compile(conditions[1])
+    assert lo == [datetime(2018, 3, 1, 5, 0, tzinfo=timezone.utc)]   # EST midnight
+    assert hi == [datetime(2018, 4, 1, 4, 0, tzinfo=timezone.utc)]   # EDT midnight
+
+
+def test_unknown_timezone_rejected():
+    with pytest.raises(ValueError):
+        build_search_conditions("", date_from=date(2018, 3, 1), tz="Mars/Olympus")
+
+
+def test_search_router_passes_timezone(monkeypatch):
+    calls = _patch_router(monkeypatch)
+    _call_search(date_from=date(2018, 3, 1), tz="America/New_York")
+    assert calls["search"]["tz"] == "America/New_York"
+
+
+def test_search_router_rejects_unknown_timezone(monkeypatch):
+    _patch_router(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        _call_search(date_from=date(2018, 3, 1), tz="Mars/Olympus")
     assert exc.value.status_code == 422

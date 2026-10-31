@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { browserTimeZone, bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
 import { entityDisplayName } from './utils/entityDisplay';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
@@ -534,6 +534,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           email_scope: lastExtras?.email?.scope ?? 'from',
           date_from: lastExtras?.dateFrom ?? null,
           date_to: lastExtras?.dateTo ?? null,
+          tz: browserTimeZone(),
         },
       }
     : { kind: 'ids', docIds: Array.from(selectedIds) };

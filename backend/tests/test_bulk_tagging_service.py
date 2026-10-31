@@ -225,3 +225,21 @@ def test_existing_overrides_empty_input_skips_query():
     db = FakeSession()
     assert asyncio.run(bt.existing_overrides(db, [])) == {}
     assert db.executed == []
+
+
+def test_bulk_query_rejects_unknown_timezone():
+    with pytest.raises(ValidationError):
+        BulkTagQuery(date_from="2018-03-01", tz="Mars/Olympus")
+
+
+def test_resolve_query_docs_passes_timezone(monkeypatch):
+    seen = {}
+
+    def fake_build(q, **kwargs):
+        seen.update(kwargs)
+        return [], None, True
+
+    monkeypatch.setattr(bt, "build_search_conditions", fake_build)
+    db = FakeSession(responders=[("FROM documents", FakeResult(rows=[]))])
+    asyncio.run(bt.resolve_query_docs(db, BulkTagQuery(email_address="a@b.com", tz="America/New_York"), [1]))
+    assert seen["tz"] == "America/New_York"

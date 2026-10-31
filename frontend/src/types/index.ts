@@ -659,6 +659,8 @@ export interface BulkTagQuery {
   email_scope?: EmailScope;
   date_from?: string | null;
   date_to?: string | null;
+  /** Reviewer's IANA timezone; date bounds are whole days in it. */
+  tz?: string | null;
 }
 
 export interface BulkTagByQueryBody {

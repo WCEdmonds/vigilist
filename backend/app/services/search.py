@@ -2,6 +2,7 @@
 
 import re
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,8 +134,18 @@ def date_order(direction: str) -> list:
     return [(d.asc() if direction == "asc" else d.desc()).nulls_last(), Document.bates_begin]
 
 
-def _day_start(d: date) -> datetime:
-    return datetime.combine(d, time.min, tzinfo=timezone.utc)
+def resolve_tz(name: str | None):
+    """The reviewer's IANA timezone, UTC when absent. ValueError if unknown."""
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ValueError(f"Unknown timezone: {name}") from e
+
+
+def _day_start(d: date, tz) -> datetime:
+    return datetime.combine(d, time.min, tzinfo=tz)
 
 
 def build_search_conditions(
@@ -150,15 +161,19 @@ def build_search_conditions(
     email_scope: str = "from",
     date_from: date | None = None,
     date_to: date | None = None,
+    tz: str | None = None,
 ) -> tuple[list, object | None, bool]:
     """WHERE clauses for a search. Shared by /api/search and bulk
     tag-by-query so both resolve exactly the same document set.
 
     Returns (conditions, tsquery, has_criteria): tsquery is None without a
     text query; has_criteria False means the search would match nothing.
-    Date bounds are inclusive whole days (UTC); undated documents never
-    match a date bound.
+    Date bounds are inclusive whole days in the reviewer's timezone `tz`
+    (UTC when absent) — an email sent 3/31 at 10pm Eastern is "3/31" to a
+    reviewer in New York. Undated documents never match a date bound.
+    Raises ValueError for an unknown timezone.
     """
+    zone = resolve_tz(tz)
     tsquery_str = build_tsquery(query) if query else ""
     email = (email_address or "").strip()
     has_criteria = bool(tsquery_str or metadata_filters or file_type
@@ -202,9 +217,9 @@ def build_search_conditions(
     if email:
         conditions.append(email_address_condition(email, email_scope))
     if date_from is not None:
-        conditions.append(document_date() >= _day_start(date_from))
+        conditions.append(document_date() >= _day_start(date_from, zone))
     if date_to is not None:
-        conditions.append(document_date() < _day_start(date_to + timedelta(days=1)))
+        conditions.append(document_date() < _day_start(date_to + timedelta(days=1), zone))
 
     return conditions, tsquery, has_criteria
 
@@ -225,6 +240,7 @@ async def search_documents(
     email_scope: str = "from",
     date_from: date | None = None,
     date_to: date | None = None,
+    tz: str | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     conditions, tsquery, has_criteria = build_search_conditions(
@@ -239,6 +255,7 @@ async def search_documents(
         email_scope=email_scope,
         date_from=date_from,
         date_to=date_to,
+        tz=tz,
     )
     if not has_criteria:
         return [], 0

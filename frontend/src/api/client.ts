@@ -199,6 +199,9 @@ export async function fetchBulkZip(docIds: string[]): Promise<Blob> {
 
 // ── Search ──
 
+/** Date filters are whole days in the reviewer's own timezone, not UTC. */
+export const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 export async function searchDocuments(
   q: string,
   page = 1,
@@ -227,6 +230,7 @@ export async function searchDocuments(
   }
   if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
   if (extras?.dateTo) params.set('date_to', extras.dateTo);
+  if (extras?.dateFrom || extras?.dateTo) params.set('tz', browserTimeZone());
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
