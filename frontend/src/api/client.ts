@@ -5,6 +5,7 @@ import type {
   IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag, TimelinePage, TimelineReviewStatus,
+  SearchExtras, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied,
 } from '../types';
 
 /**
@@ -209,6 +210,7 @@ export async function searchDocuments(
   fileType?: string,
   sourceParty?: string,
   sourceType?: string,
+  extras?: SearchExtras,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -219,6 +221,12 @@ export async function searchDocuments(
   if (fileType) params.set('file_type', fileType);
   if (sourceParty) params.set('source_party', sourceParty);
   if (sourceType) params.set('source_type', sourceType);
+  if (extras?.email && extras.email.address.trim()) {
+    params.set('email_address', extras.email.address.trim());
+    params.set('email_scope', extras.email.scope);
+  }
+  if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
+  if (extras?.dateTo) params.set('date_to', extras.dateTo);
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
@@ -239,6 +247,12 @@ export const removeTag = (docId: string, tagId: number) =>
 
 export const bulkTag = (docIds: string[], tagIds: number[]) =>
   request<{ tagged: number }>('/api/documents/bulk-tag', json({ doc_ids: docIds, tag_ids: tagIds }));
+
+export const bulkTagDryRun = (body: Omit<BulkTagByQueryBody, 'dry_run'>) =>
+  request<BulkTagDryRun>('/api/documents/bulk-tag-by-query', json({ ...body, dry_run: true }));
+
+export const bulkTagApply = (body: Omit<BulkTagByQueryBody, 'dry_run'>) =>
+  request<BulkTagApplied>('/api/documents/bulk-tag-by-query', json({ ...body, dry_run: false }));
 
 // ── Notes ──
 

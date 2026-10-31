@@ -51,7 +51,9 @@ export default function SearchResults({ results, onSelect, selectedIds, onToggle
                 {c.canonical_name}
               </button>
             ))}
-            <span className="result-meta">{r.page_count} pg{r.page_count !== 1 ? 's' : ''}</span>
+            <span className="result-meta">
+              {r.doc_date ? `${r.doc_date.slice(0, 10)} · ` : ''}{r.page_count} pg{r.page_count !== 1 ? 's' : ''}
+            </span>
           </div>
           {r.title && (
             <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)' }}>{r.title}</div>

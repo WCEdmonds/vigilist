@@ -31,7 +31,7 @@ import { useOnboarding } from './hooks/useOnboarding';
 import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
-import type { BatesCandidate, ChipEntity, DocumentSummary, ProductionInfo, ReviewBatch, SearchResult, Tag } from './types';
+import type { BatesCandidate, ChipEntity, DocumentSummary, ProductionInfo, ReviewBatch, SearchExtras, SearchResult, SearchSort, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -198,8 +198,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   };
 
   const [lastMetadata, setLastMetadata] = useState<Record<string, string> | undefined>(undefined);
+  const [lastExtras, setLastExtras] = useState<SearchExtras | undefined>(undefined);
+  const [searchSort, setSearchSort] = useState<SearchSort>('relevance');
+  const hasExtras = (x?: SearchExtras) => !!(x && (x.email || x.dateFrom || x.dateTo));
 
-  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => {
+  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, extras?: SearchExtras) => {
     const trimmed = query.trim();
 
     setLoading(true);
@@ -207,6 +210,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setHasSearched(true);
     setSelectedIds(new Set());
     setLastMetadata(metadata);
+    setLastExtras(extras);
     setBatesHits([]);
 
     // Resolve a document-number-shaped query alongside the search rather than
@@ -216,21 +220,21 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     // every document in a matter shares its prefix, so typing it is noise.
     // Deliberately not awaited: the search runs at full speed and the offer
     // appears above the results whenever the lookup lands.
-    if (!metadata && /^(?:[A-Za-z][A-Za-z\s\-_.]{0,30})?\d{1,}$/.test(trimmed)) {
+    if (!metadata && !hasExtras(extras) && /^(?:[A-Za-z][A-Za-z\s\-_.]{0,30})?\d{1,}$/.test(trimmed)) {
       import('./api/client')
         .then(({ getBatesCandidates }) => getBatesCandidates(trimmed, production.id))
         .then(r => setBatesHits(r.candidates))
         .catch(e => console.warn('Document-number lookup failed:', e));
     }
 
-    const mode = forceMode ?? detectSearchMode(query);
+    const mode = hasExtras(extras) ? 'fulltext' : (forceMode ?? detectSearchMode(query));
     setLastSearchMode(mode);
 
     try {
       const res = await searchDocuments(
-        query, 1, perPage, 'relevance', production.id,
+        query, 1, perPage, searchSort, production.id,
         metadata, mode, filterFileType || undefined,
-        filterSourceParty || undefined, sourceTypeParam,
+        filterSourceParty || undefined, sourceTypeParam, extras,
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
@@ -243,9 +247,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
 
   // Re-run the active search whenever the file-type filter changes.
   useEffect(() => {
-    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterFileType, filterSourceParty, workMode]);
+  }, [filterFileType, filterSourceParty, workMode, searchSort]);
 
   // Ambient entity chips: batch-fetch summaries for whichever page of rows
   // is currently on screen (doc list or search results), one call per newly
@@ -279,7 +283,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       const r = await designateSources(production.id, sourceType);
       showToast(`Marked ${r.updated} document${r.updated === 1 ? '' : 's'} as ${sourceType === 'received' ? 'received' : 'our collection'}`, 'success');
       getSourceParties(production.id).then(x => { setSourceParties(x.source_parties); setUndesignatedCount(x.undesignated); }).catch(() => {});
-      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
       else loadDocuments(docPage);
     } catch (e) {
       showToast(`Could not designate: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
@@ -292,6 +296,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setSearchResults([]);
     setBatesHits([]);
     setSelectedIds(new Set());
+    setLastExtras(undefined);
     loadDocuments();
   };
 
@@ -316,7 +321,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       setSelectedIds(new Set());
       setShowBulkTagPicker(false);
       showToast(`Tagged ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
-      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
       else loadDocuments(docPage);
     } catch (e) {
       showToast(`Could not apply tag: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
@@ -337,7 +342,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       setShowBulkTagPicker(false);
       setNewTagName('');
       showToast(`Created tag "${name}" and applied to ${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'}`, 'success');
-      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+      if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
       else loadDocuments(docPage);
     } catch (e) {
       showToast(`Could not create tag: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
@@ -396,7 +401,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // review workspace, since markers/tags may have changed there. Called from
   // event handlers only — never from a render-time effect.
   const refreshList = () => {
-    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode);
+    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     else loadDocuments(docPage);
   };
 
@@ -623,6 +628,16 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 </button>
                 Search results
                 <span className="section-count">{searchTotal}</span>
+                {lastExtras?.email && (
+                  <span className="badge badge-blue" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
+                    {lastExtras.email.scope === 'from' ? 'From' : 'Involving'} {lastExtras.email.address}
+                  </span>
+                )}
+                {(lastExtras?.dateFrom || lastExtras?.dateTo) && (
+                  <span className="badge badge-gray" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
+                    {lastExtras.dateFrom ?? '…'} – {lastExtras.dateTo ?? '…'}
+                  </span>
+                )}
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                 <span style={{ fontSize: 'var(--text-xs)', color: 'rgba(44,62,107,0.5)', padding: '2px 8px', background: 'rgba(44,62,107,0.04)', borderRadius: 'var(--radius-sm)' }}>
@@ -630,11 +645,24 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 </span>
                 <button
                   className="btn btn-ghost btn-xs"
-                  onClick={() => handleSearch(searchQuery, lastMetadata, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic')}
+                  onClick={() => handleSearch(searchQuery, lastMetadata, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic', lastExtras)}
                   style={{ fontSize: 'var(--text-xs)' }}
                 >
                   Try {lastSearchMode === 'semantic' ? 'full-text' : 'semantic'}
                 </button>
+                <label htmlFor="search-sort" className="visually-hidden">Sort results</label>
+                <select
+                  id="search-sort"
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 100 }}
+                  value={searchSort}
+                  onChange={e => setSearchSort(e.target.value as SearchSort)}
+                >
+                  <option value="relevance">Sort: Relevance</option>
+                  <option value="bates">Sort: Bates #</option>
+                  <option value="date_asc">Sort: Date (oldest)</option>
+                  <option value="date_desc">Sort: Date (newest)</option>
+                </select>
                 <label htmlFor="search-filter-type" className="visually-hidden">Filter by file type</label>
                 <select
                   id="search-filter-type"
@@ -805,6 +833,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   <option value="bates">Sort: Bates #</option>
                   <option value="recent">Sort: Recent</option>
                   <option value="size">Sort: Size</option>
+                  <option value="date_asc">Sort: Date (oldest)</option>
+                  <option value="date_desc">Sort: Date (newest)</option>
                 </select>
                 {(filterTagId || filterFileType) && (
                   <button className="btn btn-ghost btn-xs" onClick={() => { setFilterTagId(null); setFilterFileType(''); setDocPage(1); }}>
