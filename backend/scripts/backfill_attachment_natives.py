@@ -3,8 +3,8 @@
 Attachments ingested before attachment storage existed have native_path=NULL,
 so the viewer shows "No viewable content". Their bytes still exist inside the
 stored mailbox: this re-opens each parent's container (pst/ost/mbox/eml/msg,
-downloaded once per container), finds the k-th attachment of the m-th message
-by control number, checks it against the stored SHA-256, uploads it to the
+downloaded once per container), finds the attachment whose SHA-256 matches the
+one ingest recorded (position is unreliable: see attachment_index), uploads it to the
 same path new ingests use, and sets native_path.
 
 Usage (from backend/):
@@ -21,40 +21,28 @@ import argparse
 import asyncio
 import hashlib
 import os
-import re
-
-_MSG_SUFFIX = re.compile(r" -(\d{4})$")
-_ATT_SUFFIX = re.compile(r" \.(\d{4})$")
 
 
-def message_and_attachment_index(parent_bates: str, att_bates: str) -> tuple[int, int] | None:
-    """(m, k), 1-based, from 'BASE -mmmm' / 'BASE -mmmm .kkkk' control numbers.
-    A single-message container has no -mmmm suffix (m = 1)."""
-    if not att_bates.startswith(parent_bates + " ."):
-        return None
-    k = _ATT_SUFFIX.search(att_bates)
-    if not k:
-        return None
-    m = _MSG_SUFFIX.search(parent_bates)
-    return (int(m.group(1)) if m else 1, int(k.group(1)))
+def attachment_index(messages) -> dict[str, tuple[str, bytes]]:
+    """{sha256: (filename, bytes)} for every attachment in a re-expanded container.
+
+    Attachments are found by their own hash, not their position: re-running
+    readpst does not reproduce ingest's message order (on the real mailbox the
+    positions drifted by a few messages), but an attachment's bytes don't change.
+    """
+    index: dict[str, tuple[str, bytes]] = {}
+    for msg in messages:
+        for name, data in msg.attachments:
+            index.setdefault(hashlib.sha256(data).hexdigest(), (name, data))
+    return index
 
 
-def locate_attachment_bytes(messages, parent_bates: str, att_bates: str, expected_sha: str | None):
-    """(filename, bytes) of the attachment, or None unless its SHA-256 matches
-    what ingest recorded — never store bytes we can't prove are the same file."""
-    idx = message_and_attachment_index(parent_bates, att_bates)
-    if idx is None or not expected_sha:
+def locate_attachment_bytes(index, expected_sha: str | None):
+    """(filename, bytes) whose SHA-256 is what ingest recorded, else None —
+    never store bytes we can't prove are the same file."""
+    if not expected_sha:
         return None
-    m, k = idx
-    if not (1 <= m <= len(messages)):
-        return None
-    atts = messages[m - 1].attachments
-    if not (1 <= k <= len(atts)):
-        return None
-    name, data = atts[k - 1]
-    if hashlib.sha256(data).hexdigest() != expected_sha:
-        return None
-    return name, data
+    return index.get(expected_sha)
 
 
 async def main() -> int:
@@ -122,8 +110,12 @@ async def main() -> int:
         for container_path, pairs in by_container.items():
             data = await asyncio.to_thread(get_download_bytes, container_path)
             messages = await asyncio.to_thread(expand_email, os.path.basename(container_path), data)
+            del data
+            index = attachment_index(messages)
+            print(f"  {container_path}: {len(messages)} messages re-expanded")
+            del messages
             for parent, att in pairs:
-                found = locate_attachment_bytes(messages, parent.bates_begin, att.bates_begin, att.file_hash_sha256)
+                found = locate_attachment_bytes(index, att.file_hash_sha256)
                 if found is None:
                     stats["no_match"] += 1
                     continue

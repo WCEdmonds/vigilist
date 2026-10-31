@@ -3,7 +3,10 @@
 import hashlib
 
 from app.services.email_parse import ParsedMessage
-from scripts.backfill_attachment_natives import locate_attachment_bytes, message_and_attachment_index
+from scripts.backfill_attachment_natives import (
+    attachment_index,
+    locate_attachment_bytes,
+)
 
 
 def _sha(b):
@@ -16,23 +19,22 @@ MSGS = [
 ]
 
 
-def test_indexes_from_control_numbers():
-    assert message_and_attachment_index("ACME 000004 -0776", "ACME 000004 -0776 .0002") == (776, 2)
-    assert message_and_attachment_index("ACME 000009", "ACME 000009 .0001") == (1, 1)
-    assert message_and_attachment_index("ACME 000009", "ACME 000010 .0001") is None
-    assert message_and_attachment_index("ACME 000009", "ACME 000009") is None
+def test_finds_an_attachment_by_its_hash_wherever_it_sits():
+    # Re-expanding a PST does not reproduce ingest's message order (positions
+    # drifted by a few messages on the real mailbox), so position is no guide.
+    index = attachment_index(MSGS)
+    assert locate_attachment_bytes(index, _sha(b"Y")) == ("y.pdf", b"Y")
+    assert locate_attachment_bytes(index, _sha(b"A1")) == ("a.txt", b"A1")
 
 
-def test_locates_the_right_attachment_and_checks_its_hash():
-    name, data = locate_attachment_bytes(MSGS, "M -0002", "M -0002 .0002", _sha(b"Y"))
-    assert (name, data) == ("y.pdf", b"Y")
-
-
-def test_hash_mismatch_or_out_of_range_returns_none():
-    assert locate_attachment_bytes(MSGS, "M -0002", "M -0002 .0002", _sha(b"nope")) is None
-    assert locate_attachment_bytes(MSGS, "M -0003", "M -0003 .0001", _sha(b"A1")) is None
-    assert locate_attachment_bytes(MSGS, "M -0001", "M -0001 .0005", _sha(b"A1")) is None
+def test_unknown_hash_returns_none():
+    assert locate_attachment_bytes(attachment_index(MSGS), _sha(b"nope")) is None
 
 
 def test_missing_stored_hash_is_not_trusted():
-    assert locate_attachment_bytes(MSGS, "M -0001", "M -0001 .0001", None) is None
+    assert locate_attachment_bytes(attachment_index(MSGS), None) is None
+
+
+def test_identical_bytes_in_two_messages_index_once():
+    msgs = MSGS + [ParsedMessage(subject="fwd", attachments=[("copy.pdf", b"Y")])]
+    assert locate_attachment_bytes(attachment_index(msgs), _sha(b"Y"))[1] == b"Y"

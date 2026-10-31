@@ -256,12 +256,16 @@ def _explode_pst(data: bytes) -> list[ParsedMessage]:
         with open(pst_path, "wb") as fh:
             fh.write(data)
 
+        # -j 0: one job. readpst's default parallel mode drops a varying share
+        # of messages and can exit 11 (a real mailbox gave 1,788 and 1,802
+        # messages in two parallel runs, 1,876 every time with -j 0), which
+        # also made control numbers unreproducible.
         # -e: one .eml file per message; -o: output directory. readpst's own
         # stdout/stderr is unused (messages are read from the .eml files it
         # writes), so discard it rather than buffering it in memory — a large
         # PST can otherwise emit substantial logging.
         subprocess.run(
-            ["readpst", "-e", "-o", out_dir, pst_path],
+            ["readpst", "-j", "0", "-e", "-o", out_dir, pst_path],
             check=True,
             timeout=READPST_TIMEOUT,
             stdout=subprocess.DEVNULL,
