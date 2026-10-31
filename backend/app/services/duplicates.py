@@ -1,5 +1,6 @@
 """Near-duplicate detection using MinHash (exact) and embedding similarity (conceptual)."""
 
+import asyncio
 import logging
 from collections import defaultdict
 
@@ -78,61 +79,28 @@ def _find_connected_components(pairs: list[tuple[str, str, float]]) -> list[list
     return components
 
 
-async def detect_duplicates(
-    db: AsyncSession,
-    production_id: int,
-) -> dict:
-    """Run full duplicate detection for a production.
+def _similar_pairs(ids: list[str], M: np.ndarray) -> list[tuple[str, str, float]]:
+    """Pairs with cosine similarity in [0.80, 0.95) (exact dupes are MinHash's
+    job). M rows are unit-normalized; row blocks bound memory."""
+    pairs = []
+    n = len(ids)
+    for start in range(0, n, 500):
+        sims = M[start:start + 500] @ M.T
+        rows, cols = np.nonzero((sims >= 0.80) & (sims < 0.95))
+        gi = rows + start
+        keep = cols > gi  # each unordered pair once
+        for i, j in zip(gi[keep], cols[keep]):
+            pairs.append((ids[i], ids[j], float(sims[i - start, j])))
+    return pairs
 
-    Returns { hash_groups: int, exact_groups: int, similar_groups: int,
-    total_documents_grouped: int }
-    """
-    # Clear previous results
-    old_groups = await db.execute(
-        select(DuplicateGroup.id).where(DuplicateGroup.production_id == production_id)
-    )
-    old_ids = [row[0] for row in old_groups.all()]
-    if old_ids:
-        await db.execute(delete(DocumentDuplicate).where(DocumentDuplicate.group_id.in_(old_ids)))
-        await db.execute(delete(DuplicateGroup).where(DuplicateGroup.id.in_(old_ids)))
 
-    # --- Byte-identical (SHA-256) pass — independent of text ---
-    hash_result = await db.execute(
-        select(Document.id, Document.file_hash_sha256)
-        .where(Document.production_id == production_id)
-        .where(Document.file_hash_sha256.isnot(None))
-        .where(Document.file_hash_sha256 != "")
-    )
-    hash_rows = [(str(r[0]), r[1]) for r in hash_result.all()]
+def _compute_groups(hash_rows, docs, embeddings):
+    """All the CPU work, with no DB access: callers run it in a thread.
+    Returns (hash_components, exact_components, similar_components)."""
     hash_components = group_by_hash(hash_rows)
-    hash_doc_count = 0
-    for ids in hash_components:
-        group = DuplicateGroup(production_id=production_id, type="hash")
-        db.add(group)
-        await db.flush()
-        for doc_id in ids:
-            db.add(DocumentDuplicate(document_id=doc_id, group_id=group.id, similarity=1.0))
-            hash_doc_count += 1
     logger.info("Hash: found %d byte-identical groups", len(hash_components))
-
-    # Get all documents with text
-    result = await db.execute(
-        select(Document.id, Document.text_content)
-        .where(Document.production_id == production_id)
-        .where(Document.text_content.isnot(None))
-        .where(Document.text_content != "")
-    )
-    docs = [(str(row[0]), row[1]) for row in result.all()]
-    logger.info("Duplicate detection: %d documents with text", len(docs))
-
     if len(docs) < 2:
-        await db.commit()
-        return {
-            "hash_groups": len(hash_components),
-            "exact_groups": 0,
-            "similar_groups": 0,
-            "total_documents_grouped": hash_doc_count,
-        }
+        return hash_components, [], []
 
     # --- MinHash exact duplicates (95%+) ---
     exact_pairs = []
@@ -159,52 +127,73 @@ async def detect_duplicates(
     logger.info("MinHash: found %d exact duplicate groups from %d pairs", len(exact_components), len(exact_pairs))
 
     # --- Embedding similarity (80-95%) ---
-    embeddings = await get_document_embeddings(db, production_id)
     similar_pairs = []
-
     if embeddings:
         doc_ids_with_emb = list(embeddings.keys())
         emb_matrix = np.array([embeddings[d] for d in doc_ids_with_emb])
-
-        # Normalize for cosine similarity
         norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
         norms[norms == 0] = 1
-        emb_matrix = emb_matrix / norms
-
-        # For each doc, find similar ones (batch dot product)
-        # Process in batches of 500 for memory
-        for start in range(0, len(doc_ids_with_emb), 500):
-            batch = emb_matrix[start:start + 500]
-            sims = batch @ emb_matrix.T  # cosine similarity matrix
-
-            for i, row in enumerate(sims):
-                global_i = start + i
-                for j in range(global_i + 1, len(doc_ids_with_emb)):
-                    sim = float(row[j])
-                    if 0.80 <= sim < 0.95:  # Exclude exact dupes (handled by MinHash)
-                        similar_pairs.append((doc_ids_with_emb[global_i], doc_ids_with_emb[j], sim))
+        similar_pairs = _similar_pairs(doc_ids_with_emb, emb_matrix / norms)
 
     similar_components = _find_connected_components(similar_pairs)
     logger.info("Embeddings: found %d similar groups from %d pairs", len(similar_components), len(similar_pairs))
+    return hash_components, exact_components, similar_components
 
-    # --- Store results ---
-    exact_doc_count = 0
-    for component in exact_components:
-        group = DuplicateGroup(production_id=production_id, type="exact")
-        db.add(group)
-        await db.flush()
-        for doc_id, sim in component:
-            db.add(DocumentDuplicate(document_id=doc_id, group_id=group.id, similarity=sim))
-            exact_doc_count += 1
 
-    similar_doc_count = 0
-    for component in similar_components:
-        group = DuplicateGroup(production_id=production_id, type="similar")
-        db.add(group)
-        await db.flush()
-        for doc_id, sim in component:
-            db.add(DocumentDuplicate(document_id=doc_id, group_id=group.id, similarity=sim))
-            similar_doc_count += 1
+async def detect_duplicates(
+    db: AsyncSession,
+    production_id: int,
+) -> dict:
+    """Run full duplicate detection for a production.
+
+    Returns { hash_groups: int, exact_groups: int, similar_groups: int,
+    total_documents_grouped: int }
+    """
+    hash_result = await db.execute(
+        select(Document.id, Document.file_hash_sha256)
+        .where(Document.production_id == production_id)
+        .where(Document.file_hash_sha256.isnot(None))
+        .where(Document.file_hash_sha256 != "")
+    )
+    hash_rows = [(str(r[0]), r[1]) for r in hash_result.all()]
+
+    result = await db.execute(
+        select(Document.id, Document.text_content)
+        .where(Document.production_id == production_id)
+        .where(Document.text_content.isnot(None))
+        .where(Document.text_content != "")
+    )
+    docs = [(str(row[0]), row[1]) for row in result.all()]
+    logger.info("Duplicate detection: %d documents with text", len(docs))
+    embeddings = await get_document_embeddings(db, production_id) if len(docs) >= 2 else {}
+
+    # Reads are done: end the transaction so no connection sits idle through
+    # the CPU work, which runs in a thread so the instance keeps serving.
+    await db.commit()
+    hash_components, exact_components, similar_components = await asyncio.to_thread(
+        _compute_groups, hash_rows, docs, embeddings)
+
+    # Replace the previous results in one short transaction.
+    old_groups = await db.execute(
+        select(DuplicateGroup.id).where(DuplicateGroup.production_id == production_id)
+    )
+    old_ids = [row[0] for row in old_groups.all()]
+    if old_ids:
+        await db.execute(delete(DocumentDuplicate).where(DocumentDuplicate.group_id.in_(old_ids)))
+        await db.execute(delete(DuplicateGroup).where(DuplicateGroup.id.in_(old_ids)))
+
+    counts = {}
+    for kind, components in (("hash", hash_components), ("exact", exact_components),
+                             ("similar", similar_components)):
+        counts[kind] = 0
+        for component in components:
+            group = DuplicateGroup(production_id=production_id, type=kind)
+            db.add(group)
+            await db.flush()
+            for member in component:
+                doc_id, sim = (member, 1.0) if kind == "hash" else member
+                db.add(DocumentDuplicate(document_id=doc_id, group_id=group.id, similarity=sim))
+                counts[kind] += 1
 
     await db.commit()
 
@@ -212,5 +201,5 @@ async def detect_duplicates(
         "hash_groups": len(hash_components),
         "exact_groups": len(exact_components),
         "similar_groups": len(similar_components),
-        "total_documents_grouped": hash_doc_count + exact_doc_count + similar_doc_count,
+        "total_documents_grouped": counts["hash"] + counts["exact"] + counts["similar"],
     }
