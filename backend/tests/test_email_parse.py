@@ -150,3 +150,16 @@ def test_expand_email_pst_integration():
     msgs = expand_email("sample.pst", data)
     assert isinstance(msgs, list)
     assert all(isinstance(m, ParsedMessage) for m in msgs)
+
+
+def test_readpst_runs_single_job(monkeypatch, tmp_path):
+    """readpst's default parallel mode drops a varying share of messages and
+    can exit 11 (one real mailbox: 1,788 / 1,802 messages in two parallel runs
+    vs 1,876 every time with -j 0), so control numbers weren't reproducible."""
+    import app.services.email_parse as ep
+
+    calls = []
+    monkeypatch.setattr(ep.shutil, "which", lambda name: "/usr/bin/readpst")
+    monkeypatch.setattr(ep.subprocess, "run", lambda args, **kw: calls.append(args))
+    ep._explode_pst(b"not really a pst")
+    assert calls and calls[0][:3] == ["readpst", "-j", "0"]
