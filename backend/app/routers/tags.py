@@ -9,9 +9,12 @@ from app.database import get_db
 from app.models import Document, DocumentTag, Tag, User
 from app.routers.auth import get_current_user
 from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
+from app.services import bulk_tagging as bt
 from app.services.audit import log_action
+from app.services.privilege import DISPOSITIONS
 from app.schemas import (
     ApplyTagsRequest,
+    BulkTagByQueryRequest,
     BulkTagRequest,
     DocumentTagOut,
     TagCreate,
@@ -216,3 +219,108 @@ async def bulk_tag(
                      details={"doc_ids": [str(d) for d in body.doc_ids], "tag_ids": body.tag_ids})
     await db.commit()
     return {"tagged": count}
+
+
+@router.post("/documents/bulk-tag-by-query")
+async def bulk_tag_by_query(
+    body: BulkTagByQueryRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Apply one tag to every document matching a search (or to explicit
+    IDs), plus attachments. dry_run returns the counts the confirm step shows;
+    conflicting responsiveness tags must be resolved with conflict_action."""
+    tag = await db.get(Tag, body.tag_id)
+    if not tag:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    override: dict = {}
+    if body.disposition is not None:
+        if body.disposition not in DISPOSITIONS:
+            raise HTTPException(status_code=422, detail="invalid disposition")
+        override["privilege_disposition"] = body.disposition
+    if body.description is not None and body.description.strip():
+        override["privilege_description"] = body.description.strip()
+    if override and not tag.is_privilege:
+        raise HTTPException(
+            status_code=422,
+            detail="Privilege disposition and description only apply with a privilege tag")
+
+    accessible = await get_accessible_production_ids(db, user)
+    if body.query is not None:
+        try:
+            matched = await bt.resolve_query_docs(db, body.query, accessible)
+        except bt.NoCriteriaError:
+            raise HTTPException(status_code=422, detail="Search has no text or filters")
+    else:
+        matched = await bt.resolve_explicit_docs(db, body.doc_ids)
+        missing = set(body.doc_ids) - set(matched)
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Document {next(iter(missing))} not found")
+        if any(pid not in accessible for pid in matched.values()):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    targets = await bt.expand_attachments(db, matched) if body.include_attachments else dict(matched)
+    if len(targets) > bt.MAX_BULK_DOCS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"More than {bt.MAX_BULK_DOCS:,} documents — narrow the search")
+
+    productions = set(targets.values())
+    if tag.production_id is not None and productions - {tag.production_id}:
+        raise HTTPException(status_code=422, detail="Tag belongs to a different production")
+    required = "manager" if override else "reviewer"
+    for pid in sorted(productions):
+        role = await get_user_role_for_production(db, user, pid)
+        if ROLE_RANK.get(role, 0) < ROLE_RANK[required]:
+            raise HTTPException(
+                status_code=403,
+                detail="Manager or higher role required" if override else "Read-only access")
+
+    ids = list(targets)
+    already = await bt.already_tagged_ids(db, tag.id, ids)
+    conflicts, conflict_names = await bt.conflicting_tags(db, tag, ids)
+    plan = bt.plan_tagging(targets.keys(), already, conflicts, body.conflict_action)
+
+    if body.dry_run:
+        return {
+            "matched": len(matched),
+            "attachments_added": len(targets) - len(matched),
+            "total": len(targets),
+            "already_tagged": len(plan.already_tagged),
+            "conflicts": len(plan.conflicts),
+            "conflict_tags": bt.conflict_tag_counts(plan.conflicts, conflict_names),
+        }
+    if plan.conflicts and body.conflict_action is None:
+        raise HTTPException(status_code=409, detail="conflicts_unresolved")
+
+    overridden = await bt.apply_plan(db, plan, tag.id, user.id, override)
+
+    criteria = (body.query.model_dump() if body.query is not None
+                else {"doc_ids": [str(d) for d in body.doc_ids]})
+    for pid in sorted(productions):
+        in_prod = {d for d, p in targets.items() if p == pid}
+        await log_action(
+            db, user, "bulk_tag_by_query", "document", None,
+            production_id=pid,
+            details={
+                "tag_id": tag.id,
+                "tag_name": tag.name,
+                "tagged": len(plan.to_tag & in_prod),
+                "switched": len(set(plan.switch) & in_prod),
+                "left": len(plan.left & in_prod),
+                "conflict_action": body.conflict_action,
+                "include_attachments": body.include_attachments,
+                "criteria": criteria,
+                "override": override,
+            },
+        )
+    await db.commit()
+    return {
+        "total": len(targets),
+        "tagged": len(plan.to_tag),
+        "already_tagged": len(plan.already_tagged),
+        "switched": len(plan.switch),
+        "left": len(plan.left),
+        "overridden": overridden,
+    }
