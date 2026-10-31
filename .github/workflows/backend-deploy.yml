@@ -20,6 +20,7 @@ jobs:
       PROJECT_ID: ediscover
       REGION: us-central1
       SERVICE_NAME: vigilist-api
+      WORKER_NAME: vigilist-worker
       TASKS_QUEUE: vigilist-ingest
     steps:
       - uses: actions/checkout@v4
@@ -118,3 +119,55 @@ jobs:
             --member="serviceAccount:${{ steps.meta.outputs.compute_sa }}" \
             --role="roles/run.invoker" \
             --region=$REGION --project=$PROJECT_ID --quiet
+
+      # Cloud Tasks (ingest batches, the ambient pipeline, re-OCR, renders) run
+      # on a separate private service built from the same image, so heavy work
+      # can't freeze the instances serving the app. Incidents 2026-10-07 and
+      # 2026-10-30: a mailbox pipeline wedged vigilist-api instances and user
+      # requests (even sign-in) hung for 25+ minutes.
+      - name: Deploy task worker (same image, private)
+        run: |
+          API_JSON=$(gcloud run services describe $SERVICE_NAME --region=$REGION --project=$PROJECT_ID --format=json)
+          IMAGE=$(echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].image')
+          # Same configuration as the web service (values are never echoed).
+          echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].env[]? | select(.value != null) | "\(.name): \(.value | @json)"' > "$RUNNER_TEMP/worker-env.yaml"
+          gcloud run deploy $WORKER_NAME \
+            --image "$IMAGE" \
+            --region $REGION \
+            --project $PROJECT_ID \
+            --platform managed \
+            --no-allow-unauthenticated \
+            --service-account ${{ steps.meta.outputs.compute_sa }} \
+            --timeout 3600 \
+            --memory 4Gi \
+            --cpu 2 \
+            --concurrency 4 \
+            --min-instances 0 \
+            --max-instances 5 \
+            --env-vars-file "$RUNNER_TEMP/worker-env.yaml" \
+            --quiet
+          rm -f "$RUNNER_TEMP/worker-env.yaml"
+
+      - name: Allow Cloud Tasks to invoke the worker
+        run: |
+          gcloud run services add-iam-policy-binding $WORKER_NAME \
+            --member="serviceAccount:${{ steps.meta.outputs.compute_sa }}" \
+            --role="roles/run.invoker" \
+            --region=$REGION --project=$PROJECT_ID --quiet
+
+      - name: Point Cloud Tasks at the worker
+        run: |
+          WORKER_URL=$(gcloud run services describe $WORKER_NAME --region=$REGION --project=$PROJECT_ID --format='value(status.url)')
+          if [ -z "$WORKER_URL" ]; then
+            echo "::error::Could not resolve the $WORKER_NAME URL."
+            exit 1
+          fi
+          # Both services enqueue tasks (the pipeline chains its own follow-ups).
+          for SVC in $SERVICE_NAME $WORKER_NAME; do
+            CUR=$(gcloud run services describe $SVC --region=$REGION --project=$PROJECT_ID --format=json \
+              | jq -r '.spec.template.spec.containers[0].env[]? | select(.name=="VIGILIST_CLOUD_TASKS_WORKER_URL") | .value // empty')
+            if [ "$CUR" != "$WORKER_URL" ]; then
+              gcloud run services update $SVC --region=$REGION --project=$PROJECT_ID \
+                --update-env-vars="VIGILIST_CLOUD_TASKS_WORKER_URL=$WORKER_URL" --quiet
+            fi
+          done

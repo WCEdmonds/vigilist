@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     cloud_tasks_queue: str = "vigilist-ingest"
     cloud_run_service_url: str = ""
     cloud_tasks_service_account: str = ""
+    # Separate Cloud Run service that receives every Cloud Task (ingest
+    # batches, the ambient pipeline, re-OCR, rendering). Heavy work there
+    # can't starve the web service that serves the app (incident
+    # 2026-10-07: a mailbox ingest wedged every vigilist-api instance for
+    # hours). Unset = tasks target cloud_run_service_url, as before.
+    cloud_tasks_worker_url: str = ""
+
+    @property
+    def tasks_target_url(self) -> str:
+        """Base URL (and OIDC audience) that Cloud Tasks are sent to."""
+        return self.cloud_tasks_worker_url or self.cloud_run_service_url
 
     model_config = {"env_prefix": "VIGILIST_", "env_file": ".env", "env_file_encoding": "utf-8"}
 

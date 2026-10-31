@@ -28,11 +28,15 @@ async def verify_cloud_tasks_request(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Missing bearer token")
 
     token = auth[7:]
+    # Tasks are signed for the worker URL when one is configured; tasks
+    # enqueued before it existed still carry the web service URL.
+    audiences = [a for a in (settings.cloud_tasks_worker_url,
+                             settings.cloud_run_service_url) if a]
     try:
         claims = id_token.verify_oauth2_token(
             token,
             _transport,
-            audience=settings.cloud_run_service_url,
+            audience=audiences,
         )
     except Exception as e:
         logger.warning("OIDC token verification failed: %s", e)
