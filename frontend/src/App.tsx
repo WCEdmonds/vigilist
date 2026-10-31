@@ -207,6 +207,21 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [searchSort, setSearchSort] = useState<SearchSort>('relevance');
   const hasExtras = (x?: SearchExtras) => !!(x && (x.email || x.dateFrom || x.dateTo));
 
+  // "Find similar" swaps in an AI-ranked list that no query can reproduce:
+  // drop any selection (especially "all matching", which would otherwise
+  // re-resolve the label text as a full-text search) and the old filters.
+  const showSimilarResults = (label: string, results: SearchResult[]) => {
+    setSelectedIds(new Set());
+    setAllMatching(false);
+    setLastExtras(undefined);
+    setLastMetadata(undefined);
+    setLastSearchMode('semantic');
+    setSearchQuery(label);
+    setHasSearched(true);
+    setSearchResults(results);
+    setSearchTotal(results.length);
+  };
+
   const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, extras?: SearchExtras) => {
     const trimmed = query.trim();
 
@@ -502,10 +517,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         onSearch={(q) => { setViewDocId(null); handleSearch(q); }}
         onSimilarResults={(label, results) => {
           setViewDocId(null);
-          setSearchQuery(label);
-          setHasSearched(true);
-          setSearchResults(results);
-          setSearchTotal(results.length);
+          showSimilarResults(label, results);
         }}
         docIds={currentDocIds}
       />
@@ -1122,12 +1134,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           documents={documents}
           searchResults={searchResults}
           onViewDocument={setViewDocId}
-          onSimilarResults={(label, results) => {
-            setSearchQuery(label);
-            setHasSearched(true);
-            setSearchResults(results);
-            setSearchTotal(results.length);
-          }}
+          onSimilarResults={showSimilarResults}
           onAttached={focusChat}
           onOpenEntity={navigateToEntity}
         />
