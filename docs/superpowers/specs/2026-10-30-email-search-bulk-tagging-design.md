@@ -3,7 +3,8 @@
 Date: 2026-10-30
 Status: approved in brainstorming (rev 2: generalized from privilege-only to
 any tag, e.g. Not Responsive; reviewer chooses how to handle conflicting
-responsiveness tags)
+responsiveness tags. rev 3: date range filter + date sort folded in — customer
+request "date sorting and/or limiting")
 
 ## Problem
 
@@ -24,6 +25,9 @@ block this today:
 
 - A reviewer can search `jane@lawfirm.com` (or `@lawfirm.com`) and choose
   **Sender only** or **Any participant** (from/to/cc/bcc).
+- A reviewer can limit any search to a **date range** and **sort by date**
+  (oldest/newest first); the browse list can also sort by date. Bulk actions
+  honour the date range ("privileged, from @lawfirm.com, after 3/1/2018").
 - From the results, they can apply **any tag** (Responsive, Not Responsive, a
   privilege tag, …) to **all N matching documents**, with a confirm step
   showing the exact count.
@@ -92,6 +96,26 @@ the same document set as the search the user is looking at.
 No index in v1 (ILIKE substring can't use btree; per-production scans are
 fine at current sizes). A `pg_trgm` GIN index is the follow-up if needed.
 
+### 1b. Search: date range + date sort
+
+**Document date** = `COALESCE(date_sent, date_created)` — emails use the sent
+date, loose files their created date. One helper `document_date()` in
+`services/search.py`, used everywhere below.
+
+- `GET /api/search` gains `date_from`, `date_to` (`YYYY-MM-DD`, both
+  inclusive whole days, UTC day boundaries: `>= from 00:00` and
+  `< (to + 1 day) 00:00`). `date_from > date_to` ⇒ 422. Documents with no
+  date are excluded when a range is set. A date bound alone counts as an
+  active filter (no `q` needed) and disables the semantic path.
+- `sort` gains `date_asc` and `date_desc` (undated last, then Bates) on
+  `/api/search` and on `GET /api/documents`.
+- `SearchResult` gains `doc_date: datetime | None`, shown on each result row.
+- `BulkTagQuery` gains `date_from` / `date_to` so bulk actions resolve the
+  same set.
+- UI: From/To date inputs in the Omnibox Filters menu (count as filters); a
+  sort select on the search results header (Relevance / Bates / Date oldest /
+  Date newest); "Date (oldest)" / "Date (newest)" added to the browse sort.
+
 ### 2. Bulk tag-by-query endpoint
 
 `POST /api/documents/bulk-tag-by-query`
@@ -103,7 +127,8 @@ fine at current sizes). A `pg_trgm` GIN index is the follow-up if needed.
   "query": {            // same filter fields as GET /api/search
     "q": "", "production_id": 12, "metadata": {...}, "file_type": null,
     "source_party": null, "source_type": null,
-    "email_address": "jane@lawfirm.com", "email_scope": "any"
+    "email_address": "jane@lawfirm.com", "email_scope": "any",
+    "date_from": "2018-03-01", "date_to": null
   },
 
   "tag_id": 7,                    // required; any tag
@@ -203,6 +228,8 @@ Backend (pytest):
 - Email filter: `from` vs `any`; display-name format; domain match;
   case-insensitivity; LIKE metacharacters treated literally; email filter alone
   returns results; combined with `q` and metadata.
+- Date filter: inclusive day bounds (to-date becomes next-day exclusive);
+  date alone is criteria; reversed range 422; date sort orders undated last.
 - Bulk endpoint/service: dry-run returns counts and writes nothing; query-mode
   set equals search result set; attachment (family_id) expansion incl. not
   crossing productions; idempotent re-apply (`already_tagged`); conflicts

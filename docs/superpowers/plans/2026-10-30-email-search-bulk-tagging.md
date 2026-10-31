@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a reviewer search emails by address (sender only or any participant) and apply any tag — privileged, Not Responsive, etc. — to every matching document plus attachments, with a dry-run count, a switch/leave prompt for conflicting responsiveness tags, and optional bulk privilege-log overrides.
+**Goal:** Let a reviewer search emails by address (sender only or any participant) and by date range, sort by date, and apply any tag — privileged, Not Responsive, etc. — to every matching document plus attachments, with a dry-run count, a switch/leave prompt for conflicting responsiveness tags, and optional bulk privilege-log overrides.
 
 **Architecture:** Search filter-building is factored into `build_search_conditions` so `/api/search` and the new `POST /api/documents/bulk-tag-by-query` resolve the identical set. A new `services/bulk_tagging.py` holds a pure planner (`plan_tagging`) plus small DB helpers that pass ID sets as one Postgres array bind. The frontend adds an email filter to the Omnibox, a Gmail-style "Select all N matching", and a `BulkTagDialog` that always dry-runs before applying.
 
@@ -16,6 +16,7 @@
 
 - User-facing copy says **"attachments"**, never "family". Internally expansion uses `Document.family_id`.
 - Email match: case-insensitive substring; LIKE metacharacters `%`, `_`, `\` in input are literal.
+- Document date = `COALESCE(date_sent, date_created)`; `date_from`/`date_to` are inclusive whole days (UTC); undated docs never match a date bound and sort last. Sort values: search `relevance|bates|date_asc|date_desc`, browse adds `date_asc|date_desc`.
 - `email_scope` values are exactly `"from"` (default) and `"any"`. UI labels: **Sender only** / **Any participant**.
 - Exclusive categories: `EXCLUSIVE_CATEGORIES = {"responsiveness"}` only.
 - `conflict_action` values are exactly `"switch"` and `"leave"`; apply with unresolved conflicts ⇒ HTTP 409, detail `"conflicts_unresolved"`.
@@ -32,46 +33,55 @@
 1. **Underscore in an email address** (`j_smith@firm.com`) — `_` is a LIKE wildcard; must match literally, not as "any char". Pinned in Task 1 (`test_metacharacters_escaped_in_bind_value`).
 2. **Very large result sets (10k–50k docs)** — every ID-set query must use a single array bind, or asyncpg errors past 32,767 params. Pinned in Task 2 (`test_ids_match_is_single_array_bind`, `test_apply_plan_*` assert `= ANY`).
 3. **Control numbers repeat across productions** — attachment expansion must join on `production_id` too, or tagging one production's email pulls in another's documents. Pinned in Task 2 (`test_expand_attachments_joins_on_production`).
-4. **A document already carrying both the chosen tag and an opposite responsiveness tag** — not a conflict (already tagged); must not prompt or be switched. Pinned in Task 2 (`test_plan_already_tagged_doc_is_not_a_conflict`).
+4. **"To" date the reviewer types (e.g. 3/31)** — must include emails sent any time on 3/31, not stop at midnight. Pinned in Task 1 (`test_date_range_is_inclusive_whole_days`).
 5. **Semantic-mode search** — results are a vector ranking a query can't reproduce, so "Select all N matching" must not be offered; otherwise the bulk action would tag a different (full-text) set. Pinned in Task 6 manual verification step and in Task 5's `searchUsedFulltext` gate.
 
 ---
 
-### Task 1: Email participant filter in search
+### Task 1: Email participant + date filters and date sort in search
 
 **Files:**
-- Modify: `backend/app/services/search.py` (imports; new helpers; `search_documents` at :103-175)
+- Modify: `backend/app/services/search.py` (imports; new helpers; `search_documents` at :103-205)
 - Modify: `backend/app/routers/search.py:18-71`
+- Modify: `backend/app/routers/documents.py:73` (sort pattern) and `:173-186` (order_by branches)
+- Modify: `backend/app/schemas.py:204` (`SearchResult`)
 - Test: `backend/tests/test_search_email_filter.py` (create)
 
 **Interfaces:**
 - Produces:
   - `escape_like(value: str) -> str`
   - `email_address_condition(address: str, scope: str = "from") -> ColumnElement[bool]`
-  - `build_search_conditions(query: str = "", *, production_id: int | None = None, accessible_production_ids: list[int] | None = None, metadata_filters: dict[str, str] | None = None, file_type: str | None = None, source_party: str | None = None, source_type: str | None = None, email_address: str | None = None, email_scope: str = "from") -> tuple[list, object | None, bool]` — returns `(conditions, tsquery_or_None, has_criteria)`
-  - `search_documents(...)` gains kwargs `email_address: str | None = None, email_scope: str = "from"`
-  - `GET /api/search` gains query params `email_address`, `email_scope` (`^(from|any)$`, default `from`)
+  - `document_date() -> ColumnElement` — `COALESCE(date_sent, date_created)`
+  - `date_order(direction: str) -> list` — `[document_date() ASC|DESC NULLS LAST, bates_begin]`
+  - `build_search_conditions(query: str = "", *, production_id=None, accessible_production_ids=None, metadata_filters=None, file_type=None, source_party=None, source_type=None, email_address: str | None = None, email_scope: str = "from", date_from: date | None = None, date_to: date | None = None) -> tuple[list, object | None, bool]` — returns `(conditions, tsquery_or_None, has_criteria)`
+  - `search_documents(...)` gains kwargs `email_address`, `email_scope`, `date_from`, `date_to`; `sort` accepts `relevance | bates | date_asc | date_desc`; each result dict gains `"doc_date"`.
+  - `SearchResult.doc_date: datetime | None = None`
+  - `GET /api/search` gains `email_address`, `email_scope` (`^(from|any)$`), `date_from`, `date_to` (`YYYY-MM-DD`); `sort` pattern `^(relevance|bates|date_asc|date_desc)$`; reversed range ⇒ 422.
+  - `GET /api/documents` `sort` pattern `^(bates|recent|size|date_asc|date_desc)$`.
 
 - [ ] **Step 1: Write the failing tests**
 
 Create `backend/tests/test_search_email_filter.py`:
 
 ```python
-"""Email participant filter + shared search-condition builder. No DB.
-
-Conditions are compiled with the Postgres dialect; bind values are read from
-compiled.params so escaping is checked on the exact value sent to the DB.
-"""
+"""Email participant + date filters and the shared search-condition builder.
+No DB: conditions are compiled with the Postgres dialect; bind values are read
+from compiled.params so escaping/bounds are checked on the exact value sent."""
 
 import asyncio
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 import app.routers.search as rs
-from app.services.search import build_search_conditions, email_address_condition, escape_like
+from app.services.search import (
+    build_search_conditions, date_order, email_address_condition, escape_like,
+)
 from tests.fakes import FakeSession, FakeUser
+
+DOC_DATE = "coalesce(documents.date_sent, documents.date_created)"
 
 
 def _compile(clause):
@@ -140,7 +150,35 @@ def test_invalid_metadata_key_still_rejected():
     assert exc.value.status_code == 400
 
 
-def test_search_router_passes_email_and_skips_semantic(monkeypatch):
+def test_date_range_is_inclusive_whole_days():
+    conditions, _, has_criteria = build_search_conditions(
+        "", date_from=date(2018, 3, 1), date_to=date(2018, 3, 31))
+    assert has_criteria is True
+    assert len(conditions) == 2
+    lo_sql, lo_params = _compile(conditions[0])
+    hi_sql, hi_params = _compile(conditions[1])
+    assert f"{DOC_DATE} >=" in lo_sql
+    assert lo_params == [datetime(2018, 3, 1, tzinfo=timezone.utc)]
+    # "to" is inclusive: everything before the start of the NEXT day.
+    assert f"{DOC_DATE} <" in hi_sql
+    assert hi_params == [datetime(2018, 4, 1, tzinfo=timezone.utc)]
+
+
+def test_date_bound_alone_is_criteria():
+    _, _, has_criteria = build_search_conditions("", date_to=date(2018, 1, 1))
+    assert has_criteria is True
+
+
+def test_date_order_puts_undated_last():
+    desc = str(date_order("desc")[0].compile(dialect=postgresql.dialect()))
+    asc = str(date_order("asc")[0].compile(dialect=postgresql.dialect()))
+    assert desc == f"{DOC_DATE} DESC NULLS LAST"
+    assert asc == f"{DOC_DATE} ASC NULLS LAST"
+
+
+# ── router ──
+
+def _patch_router(monkeypatch):
     calls = {}
 
     async def fake_accessible(db, user):
@@ -161,16 +199,44 @@ def test_search_router_passes_email_and_skips_semantic(monkeypatch):
     monkeypatch.setattr(rs, "semantic_search", fake_semantic)
     monkeypatch.setattr(rs, "search_documents", fake_search)
     monkeypatch.setattr(rs, "log_action", fake_log)
+    return calls
 
-    asyncio.run(rs.search(
-        q="what did jane say", production_id=1, page=1, per_page=50, sort="relevance",
-        mode="semantic", metadata=None, file_type=None, source_party=None, source_type=None,
-        email_address="jane@x.com", email_scope="any",
-        db=FakeSession(), user=FakeUser(),
-    ))
+
+def _call_search(**overrides):
+    # Router functions called directly get Query() objects as defaults, so
+    # every parameter is passed explicitly.
+    params = dict(
+        q="", production_id=1, page=1, per_page=50, sort="relevance", mode="fulltext",
+        metadata=None, file_type=None, source_party=None, source_type=None,
+        email_address=None, email_scope="from", date_from=None, date_to=None,
+    )
+    params.update(overrides)
+    return asyncio.run(rs.search(**params, db=FakeSession(), user=FakeUser()))
+
+
+def test_search_router_passes_email_and_skips_semantic(monkeypatch):
+    calls = _patch_router(monkeypatch)
+    _call_search(q="what did jane say", mode="semantic",
+                 email_address="jane@x.com", email_scope="any")
     assert "semantic" not in calls
     assert calls["search"]["email_address"] == "jane@x.com"
     assert calls["search"]["email_scope"] == "any"
+
+
+def test_search_router_passes_dates_and_date_sort(monkeypatch):
+    calls = _patch_router(monkeypatch)
+    _call_search(q="what did jane say", mode="semantic", sort="date_desc",
+                 date_from=date(2018, 3, 1))
+    assert "semantic" not in calls
+    assert calls["search"]["date_from"] == date(2018, 3, 1)
+    assert calls["search"]["sort"] == "date_desc"
+
+
+def test_search_router_rejects_reversed_dates(monkeypatch):
+    _patch_router(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        _call_search(date_from=date(2018, 4, 1), date_to=date(2018, 3, 1))
+    assert exc.value.status_code == 422
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -178,20 +244,20 @@ def test_search_router_passes_email_and_skips_semantic(monkeypatch):
 Run: `python -m pytest tests/test_search_email_filter.py -q`
 Expected: FAIL — `ImportError: cannot import name 'build_search_conditions'`.
 
-- [ ] **Step 3: Implement in `backend/app/services/search.py`**
+- [ ] **Step 3: Implement helpers in `backend/app/services/search.py`**
 
-Change the import line `from sqlalchemy import func, literal_column, select` to:
+Change the imports at the top to (keep the existing `AsyncSession` and `Document` imports):
 
 ```python
+import re
+from datetime import date, datetime, time, timedelta, timezone
+
 from sqlalchemy import func, literal_column, or_, select
 ```
 
-Add above `async def search_documents` (after the existing `FILE_TYPE_EXTENSIONS` dict / `build_tsquery`):
+Add above `async def search_documents` (after `build_tsquery` / `FILE_TYPE_EXTENSIONS`):
 
 ```python
-EMAIL_SCOPES = frozenset({"from", "any"})
-
-
 def escape_like(value: str) -> str:
     """Escape LIKE/ILIKE metacharacters so user input matches literally —
     email addresses routinely contain '_', which LIKE treats as a wildcard."""
@@ -213,6 +279,21 @@ def email_address_condition(address: str, scope: str = "from"):
     return or_(*(col.ilike(pattern, escape="\\") for col in cols))
 
 
+def document_date():
+    """A document's date: the sent date for emails, else the created date."""
+    return func.coalesce(Document.date_sent, Document.date_created)
+
+
+def date_order(direction: str) -> list:
+    """ORDER BY document date with undated documents last, Bates as tiebreak."""
+    d = document_date()
+    return [(d.asc() if direction == "asc" else d.desc()).nulls_last(), Document.bates_begin]
+
+
+def _day_start(d: date) -> datetime:
+    return datetime.combine(d, time.min, tzinfo=timezone.utc)
+
+
 def build_search_conditions(
     query: str = "",
     *,
@@ -224,17 +305,22 @@ def build_search_conditions(
     source_type: str | None = None,
     email_address: str | None = None,
     email_scope: str = "from",
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[list, object | None, bool]:
     """WHERE clauses for a search. Shared by /api/search and bulk
     tag-by-query so both resolve exactly the same document set.
 
     Returns (conditions, tsquery, has_criteria): tsquery is None without a
     text query; has_criteria False means the search would match nothing.
+    Date bounds are inclusive whole days (UTC); undated documents never
+    match a date bound.
     """
     tsquery_str = build_tsquery(query) if query else ""
     email = (email_address or "").strip()
     has_criteria = bool(tsquery_str or metadata_filters or file_type
-                        or source_party or source_type or email)
+                        or source_party or source_type or email
+                        or date_from is not None or date_to is not None)
 
     conditions = []
     tsquery = None
@@ -272,11 +358,15 @@ def build_search_conditions(
         conditions.append(Document.source_type.is_distinct_from("received"))
     if email:
         conditions.append(email_address_condition(email, email_scope))
+    if date_from is not None:
+        conditions.append(document_date() >= _day_start(date_from))
+    if date_to is not None:
+        conditions.append(document_date() < _day_start(date_to + timedelta(days=1)))
 
     return conditions, tsquery, has_criteria
 ```
 
-Then replace the body of `search_documents` from its signature through the line before `if has_text_query:\n        rank = ...` with:
+- [ ] **Step 4: Rework `search_documents`** — replace its signature and body up to (not including) `if has_text_query:\n        rank = func.ts_rank(...)` with:
 
 ```python
 async def search_documents(
@@ -293,6 +383,8 @@ async def search_documents(
     source_type: str | None = None,
     email_address: str | None = None,
     email_scope: str = "from",
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     conditions, tsquery, has_criteria = build_search_conditions(
@@ -305,27 +397,84 @@ async def search_documents(
         source_type=source_type,
         email_address=email_address,
         email_scope=email_scope,
+        date_from=date_from,
+        date_to=date_to,
     )
     if not has_criteria:
         return [], 0
     has_text_query = tsquery is not None
 ```
 
-Leave everything from `if has_text_query:\n        rank = func.ts_rank(...)` to the end unchanged (it already uses `tsquery` and `has_text_query`).
+Further down in the same function, change the results query and ordering to:
 
-- [ ] **Step 4: Wire the router** — in `backend/app/routers/search.py`, add two params after `source_type`:
+```python
+    q = (
+        select(Document, rank, headline, document_date().label("doc_date"))
+        .where(*conditions)
+    )
+
+    if sort == "bates":
+        q = q.order_by(Document.bates_begin)
+    elif sort == "date_asc":
+        q = q.order_by(*date_order("asc"))
+    elif sort == "date_desc":
+        q = q.order_by(*date_order("desc"))
+    else:
+        q = q.order_by(rank.desc())
+```
+
+and the result loop to:
+
+```python
+    for doc, rank_val, snippet, doc_date in rows:
+        results.append({
+            "id": doc.id,
+            "production_id": doc.production_id,
+            "bates_begin": doc.bates_begin,
+            "bates_end": doc.bates_end,
+            "page_count": doc.page_count,
+            "title": doc.title,
+            "snippet": snippet,
+            "rank": float(rank_val),
+            "doc_date": doc_date,
+        })
+```
+
+- [ ] **Step 5: Schema** — in `backend/app/schemas.py` `class SearchResult`, add after `rank: float`:
+
+```python
+    doc_date: datetime | None = None
+```
+
+- [ ] **Step 6: Search router** — in `backend/app/routers/search.py` add `from datetime import date`; change the `sort` param to:
+
+```python
+    sort: str = Query("relevance", pattern="^(relevance|bates|date_asc|date_desc)$"),
+```
+
+add after `source_type`:
 
 ```python
     email_address: str | None = Query(None, description="Email address or @domain to match"),
     email_scope: str = Query("from", pattern="^(from|any)$"),
+    date_from: date | None = Query(None, description="Inclusive start date (YYYY-MM-DD)"),
+    date_to: date | None = Query(None, description="Inclusive end date (YYYY-MM-DD)"),
 ```
 
-Change the semantic gate to:
+after the metadata JSON parsing block add:
+
+```python
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from is after date_to")
+```
+
+change the semantic gate to:
 
 ```python
     has_email = bool(email_address and email_address.strip())
+    has_dates = date_from is not None or date_to is not None
     if (mode == "semantic" and q.strip() and not metadata_filters and not file_type
-            and not source_party and not source_type and not has_email):
+            and not source_party and not source_type and not has_email and not has_dates):
 ```
 
 and add to the `search_documents(...)` call:
@@ -333,18 +482,27 @@ and add to the `search_documents(...)` call:
 ```python
             email_address=email_address,
             email_scope=email_scope,
+            date_from=date_from,
+            date_to=date_to,
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 7: Browse-list date sort** — in `backend/app/routers/documents.py` add `from app.services.search import date_order`, change the `sort` param pattern to `"^(bates|recent|size|date_asc|date_desc)$"`, and add before the final `else:` of the sort chain (~:185):
+
+```python
+    elif sort in ("date_asc", "date_desc"):
+        query = query.order_by(*date_order("asc" if sort == "date_asc" else "desc"))
+```
+
+- [ ] **Step 8: Run tests**
 
 Run: `python -m pytest tests/test_search_email_filter.py -q` → all PASS.
-Run: `python -m pytest -q` → 888 passed, 2 skipped (baseline 878 + 10).
+Run: `python -m pytest -q` → 893 passed, 2 skipped (baseline 878 + 15).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add backend/app/services/search.py backend/app/routers/search.py backend/tests/test_search_email_filter.py
-git commit -m "feat(search): filter by email sender or any participant"
+git add backend/app/services/search.py backend/app/routers/search.py backend/app/routers/documents.py backend/app/schemas.py backend/tests/test_search_email_filter.py
+git commit -m "feat(search): email participant and date-range filters, date sort"
 ```
 
 ---
@@ -360,7 +518,7 @@ git commit -m "feat(search): filter by email sender or any participant"
 **Interfaces:**
 - Consumes: `build_search_conditions` (Task 1).
 - Produces (schemas):
-  - `BulkTagQuery(q: str = "", production_id: int | None, metadata: dict[str, str] | None, file_type: str | None, source_party: str | None, source_type: Literal["collection","received"] | None, email_address: str | None, email_scope: Literal["from","any"] = "from")`
+  - `BulkTagQuery(q: str = "", production_id: int | None, metadata: dict[str, str] | None, file_type: str | None, source_party: str | None, source_type: Literal["collection","received"] | None, email_address: str | None, email_scope: Literal["from","any"] = "from", date_from: date | None, date_to: date | None)`
   - `BulkTagByQueryRequest(doc_ids: list[UUID] | None, query: BulkTagQuery | None, tag_id: int, include_attachments: bool = True, conflict_action: Literal["switch","leave"] | None, disposition: str | None, description: str | None, dry_run: bool = False)` — exactly one of `doc_ids`/`query`, `doc_ids` non-empty.
 - Produces (`app.services.bulk_tagging`):
   - `EXCLUSIVE_CATEGORIES: frozenset[str]`, `MAX_BULK_DOCS: int`
@@ -534,6 +692,13 @@ def test_resolve_query_docs_returns_id_to_production():
     assert "LIMIT" in db.executed[0]
 
 
+def test_resolve_query_docs_honours_date_range():
+    from datetime import date
+    db = FakeSession(responders=[("FROM documents", FakeResult(rows=[(A, 1)]))])
+    asyncio.run(bt.resolve_query_docs(db, BulkTagQuery(date_from=date(2018, 3, 1)), [1]))
+    assert "coalesce(documents.date_sent, documents.date_created) >=" in db.executed[0]
+
+
 def test_apply_plan_switch_deletes_then_inserts():
     plan = bt.plan_tagging({A, B}, set(), conflicts={B: {9}}, conflict_action="switch")
     db = FakeSession()
@@ -604,6 +769,8 @@ class BulkTagQuery(BaseModel):
     source_type: Literal["collection", "received"] | None = None
     email_address: str | None = None
     email_scope: Literal["from", "any"] = "from"
+    date_from: date | None = None
+    date_to: date | None = None
 
 
 class BulkTagByQueryRequest(BaseModel):
@@ -683,6 +850,8 @@ async def resolve_query_docs(
         source_type=query.source_type,
         email_address=query.email_address,
         email_scope=query.email_scope,
+        date_from=query.date_from,
+        date_to=query.date_to,
     )
     if not has_criteria:
         raise NoCriteriaError
@@ -1202,21 +1371,22 @@ git commit -m "feat(tags): POST /documents/bulk-tag-by-query with dry run and co
 
 ---
 
-### Task 4: Frontend — email filter in search
+### Task 4: Frontend — email + date filters, date sort
 
 **Files:**
-- Modify: `frontend/src/types/index.ts` (`Tag` at :6; append new types)
+- Modify: `frontend/src/types/index.ts` (`Tag` at :6, `SearchResult` at :99; append new types)
 - Modify: `frontend/src/api/client.ts` (`searchDocuments` ~:201; add bulk functions after `bulkTag` ~:240)
 - Modify: `frontend/src/components/Omnibox.tsx`
 - Modify: `frontend/src/components/AppHeader.tsx:13`
-- Modify: `frontend/src/App.tsx` (`handleSearch` ~:200-240, re-run call sites, `clearSearch` ~:288, results header ~:620)
+- Modify: `frontend/src/components/SearchResults.tsx` (result header row ~:54)
+- Modify: `frontend/src/App.tsx` (`handleSearch` ~:200-240, re-run call sites, `clearSearch` ~:288, results header ~:620, browse sort select ~:802)
 
 **Interfaces:**
-- Produces (types): `EmailScope = 'from' | 'any'`; `EmailFilter { address: string; scope: EmailScope }`; `BulkTagQuery`, `BulkTagByQueryBody`, `BulkTagDryRun`, `BulkTagApplied` (below); `Tag.is_privilege?: boolean`.
-- Produces (client): `searchDocuments(..., sourceType?, email?: EmailFilter)`; `bulkTagDryRun(body: Omit<BulkTagByQueryBody, 'dry_run'>): Promise<BulkTagDryRun>`; `bulkTagApply(body: Omit<BulkTagByQueryBody, 'dry_run'>): Promise<BulkTagApplied>`.
-- Produces (App): state `lastEmail: EmailFilter | undefined`; `handleSearch(query, metadata?, forceMode?, email?)`.
+- Produces (types): `EmailScope = 'from' | 'any'`; `EmailFilter { address: string; scope: EmailScope }`; `SearchExtras { email?: EmailFilter; dateFrom?: string; dateTo?: string }` (dates `YYYY-MM-DD`); `SearchSort = 'relevance' | 'bates' | 'date_asc' | 'date_desc'`; `BulkTagQuery`, `BulkTagByQueryBody`, `BulkTagDryRun`, `BulkTagApplied` (below); `Tag.is_privilege?: boolean`; `SearchResult.doc_date?: string | null`.
+- Produces (client): `searchDocuments(..., sourceType?, extras?: SearchExtras)`; `bulkTagDryRun(body: Omit<BulkTagByQueryBody, 'dry_run'>): Promise<BulkTagDryRun>`; `bulkTagApply(body: Omit<BulkTagByQueryBody, 'dry_run'>): Promise<BulkTagApplied>`.
+- Produces (App): state `lastExtras: SearchExtras | undefined`, `searchSort: SearchSort`; `handleSearch(query, metadata?, forceMode?, extras?)`; helper `hasExtras(extras?: SearchExtras): boolean`.
 
-- [ ] **Step 1: Types** — in `frontend/src/types/index.ts`, add `is_privilege?: boolean;` to `interface Tag` after `keyboard_shortcut`, and append:
+- [ ] **Step 1: Types** — in `frontend/src/types/index.ts`, add `is_privilege?: boolean;` to `interface Tag` after `keyboard_shortcut`; add `doc_date?: string | null;` to `interface SearchResult` after `rank`; and append:
 
 ```ts
 export type EmailScope = 'from' | 'any';
@@ -1225,6 +1395,15 @@ export interface EmailFilter {
   address: string;
   scope: EmailScope;
 }
+
+/** Search filters beyond text + metadata. Dates are YYYY-MM-DD, inclusive. */
+export interface SearchExtras {
+  email?: EmailFilter;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export type SearchSort = 'relevance' | 'bates' | 'date_asc' | 'date_desc';
 
 /** The /api/search filters, so a bulk action resolves the same set. */
 export interface BulkTagQuery {
@@ -1236,6 +1415,8 @@ export interface BulkTagQuery {
   source_type?: string | null;
   email_address?: string | null;
   email_scope?: EmailScope;
+  date_from?: string | null;
+  date_to?: string | null;
 }
 
 export interface BulkTagByQueryBody {
@@ -1268,21 +1449,23 @@ export interface BulkTagApplied {
 }
 ```
 
-- [ ] **Step 2: Client** — in `frontend/src/api/client.ts` add `EmailFilter, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied` to the existing `import type { ... } from '../types'` list. Add a final parameter to `searchDocuments`:
+- [ ] **Step 2: Client** — in `frontend/src/api/client.ts` add `SearchExtras, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied` to the existing `import type { ... } from '../types'` list. Add a final parameter to `searchDocuments`:
 
 ```ts
   sourceType?: string,
-  email?: EmailFilter,
+  extras?: SearchExtras,
 ): Promise<SearchResponse> {
 ```
 
-and before the `return request<SearchResponse>(...)` line:
+and before its `return request<SearchResponse>(...)` line:
 
 ```ts
-  if (email && email.address.trim()) {
-    params.set('email_address', email.address.trim());
-    params.set('email_scope', email.scope);
+  if (extras?.email && extras.email.address.trim()) {
+    params.set('email_address', extras.email.address.trim());
+    params.set('email_scope', extras.email.scope);
   }
+  if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
+  if (extras?.dateTo) params.set('date_to', extras.dateTo);
 ```
 
 After `bulkTag`, add:
@@ -1297,10 +1480,10 @@ export const bulkTagApply = (body: Omit<BulkTagByQueryBody, 'dry_run'>) =>
 
 - [ ] **Step 3: Omnibox** — in `frontend/src/components/Omnibox.tsx`:
 
-Change the types import to `import type { EmailFilter, EmailScope, SavedSearch } from '../types';` and the prop:
+Change the types import to `import type { EmailScope, SavedSearch, SearchExtras } from '../types';` and the prop to:
 
 ```ts
-  onSearch: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, email?: EmailFilter) => void;
+  onSearch: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, extras?: SearchExtras) => void;
 ```
 
 Add state after `filterValue`:
@@ -1308,6 +1491,8 @@ Add state after `filterValue`:
 ```ts
   const [emailAddress, setEmailAddress] = useState('');
   const [emailScope, setEmailScope] = useState<EmailScope>('from');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 ```
 
 Replace `const filterCount = ...` and `submit` with:
@@ -1315,19 +1500,25 @@ Replace `const filterCount = ...` and `submit` with:
 ```ts
   const metadataCount = Object.keys(metadataFilters).length;
   const emailActive = emailAddress.trim().length > 0;
-  const filterCount = metadataCount + (emailActive ? 1 : 0);
+  const filterCount = metadataCount + (emailActive ? 1 : 0) + (dateFrom || dateTo ? 1 : 0);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const email: EmailFilter | undefined = emailActive
-      ? { address: emailAddress.trim(), scope: emailScope }
-      : undefined;
-    if (!query.trim() && !email) return;
+    const extras: SearchExtras = {};
+    if (emailActive) extras.email = { address: emailAddress.trim(), scope: emailScope };
+    if (dateFrom) extras.dateFrom = dateFrom;
+    if (dateTo) extras.dateTo = dateTo;
+    const hasExtras = !!(extras.email || extras.dateFrom || extras.dateTo);
+    if (!query.trim() && !hasExtras) return;
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      showToast('The "from" date is after the "to" date', 'error');
+      return;
+    }
     setMenu('none');
-    // An email filter always runs full-text server-side; say so up front so
+    // Email/date filters always run full-text server-side; say so up front so
     // the results header and bulk selection agree with what the server did.
     onSearch(query.trim(), metadataCount > 0 ? metadataFilters : undefined,
-      email ? 'fulltext' : mode, email);
+      hasExtras ? 'fulltext' : mode, hasExtras ? extras : undefined);
     setModeOverride(null);
   };
 ```
@@ -1358,9 +1549,19 @@ In the `menu === 'filters'` dropdown, insert as the first child (before the `Obj
                 onClick={() => setEmailScope('any')}
               >Any participant</button>
             </div>
-            {emailActive && (
-              <button type="button" className="btn btn-ghost btn-xs" aria-label="Clear email filter"
-                onClick={() => setEmailAddress('')}>×</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: '1 1 100%' }}>
+              <label style={{ fontSize: 'var(--text-xs)' }} htmlFor="omnibox-date-from">From</label>
+              <input id="omnibox-date-from" type="date" className="input input-sm"
+                value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <label style={{ fontSize: 'var(--text-xs)' }} htmlFor="omnibox-date-to">To</label>
+              <input id="omnibox-date-to" type="date" className="input input-sm"
+                value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            </div>
+            {(emailActive || dateFrom || dateTo) && (
+              <button type="button" className="btn btn-ghost btn-xs"
+                onClick={() => { setEmailAddress(''); setDateFrom(''); setDateTo(''); }}>
+                Clear
+              </button>
             )}
             <button type="submit" className="btn btn-primary btn-xs">Search</button>
           </form>
@@ -1369,61 +1570,108 @@ In the `menu === 'filters'` dropdown, insert as the first child (before the `Obj
 - [ ] **Step 4: AppHeader prop type** — in `frontend/src/components/AppHeader.tsx:13`:
 
 ```ts
-  onSearch?: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, email?: EmailFilter) => void;
+  onSearch?: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, extras?: SearchExtras) => void;
 ```
 
-adding `EmailFilter` to its `../types` import (add `import type { EmailFilter } from '../types';` if it has no types import).
+importing `SearchExtras` from `../types` (add `import type { SearchExtras } from '../types';` if the file has no types import).
 
-- [ ] **Step 5: App wiring** — in `frontend/src/App.tsx`:
-
-Add `EmailFilter` to the `./types` import. Next to `lastMetadata` (~:200):
-
-```ts
-  const [lastEmail, setLastEmail] = useState<EmailFilter | undefined>(undefined);
-```
-
-Change `handleSearch`:
-
-```ts
-  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, email?: EmailFilter) => {
-```
-
-inside it, after `setLastMetadata(metadata);` add `setLastEmail(email);`; change the Bates lookup guard `if (!metadata && /^...$/.test(trimmed))` to `if (!metadata && !email && /^...$/.test(trimmed))`; change `const mode = forceMode ?? detectSearchMode(query);` to:
-
-```ts
-    const mode = email ? 'fulltext' : (forceMode ?? detectSearchMode(query));
-```
-
-and append `email` as the last argument of the `searchDocuments(...)` call (after `sourceTypeParam`).
-
-Re-runs must keep the email filter. Replace every `handleSearch(searchQuery, lastMetadata, lastSearchMode)` with `handleSearch(searchQuery, lastMetadata, lastSearchMode, lastEmail)` (5 sites: the file-type effect and four refresh-after-action sites — verify with `grep -n "handleSearch(searchQuery" src/App.tsx`), and the mode toggle button (~:633) with:
+- [ ] **Step 5: Result dates** — in `frontend/src/components/SearchResults.tsx`, change the meta span (`<span className="result-meta">{r.page_count} pg…</span>`) to:
 
 ```tsx
-                  onClick={() => handleSearch(searchQuery, lastMetadata, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic', lastEmail)}
+            <span className="result-meta">
+              {r.doc_date ? `${r.doc_date.slice(0, 10)} · ` : ''}{r.page_count} pg{r.page_count !== 1 ? 's' : ''}
+            </span>
 ```
 
-In `clearSearch` add `setLastEmail(undefined);`.
+- [ ] **Step 6: App wiring** — in `frontend/src/App.tsx`:
+
+Add `SearchExtras, SearchSort` to the `./types` import. Next to `lastMetadata` (~:200):
+
+```ts
+  const [lastExtras, setLastExtras] = useState<SearchExtras | undefined>(undefined);
+  const [searchSort, setSearchSort] = useState<SearchSort>('relevance');
+```
+
+Above `handleSearch`, add:
+
+```ts
+  const hasExtras = (x?: SearchExtras) => !!(x && (x.email || x.dateFrom || x.dateTo));
+```
+
+Change `handleSearch`'s signature to:
+
+```ts
+  const handleSearch = async (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, extras?: SearchExtras) => {
+```
+
+inside it: after `setLastMetadata(metadata);` add `setLastExtras(extras);`; change the Bates lookup guard `if (!metadata && /^...$/.test(trimmed))` to `if (!metadata && !hasExtras(extras) && /^...$/.test(trimmed))`; change `const mode = forceMode ?? detectSearchMode(query);` to:
+
+```ts
+    const mode = hasExtras(extras) ? 'fulltext' : (forceMode ?? detectSearchMode(query));
+```
+
+and in the `searchDocuments(...)` call replace the hard-coded `'relevance'` with `searchSort` and append `extras` as the last argument (after `sourceTypeParam`).
+
+Re-runs must keep the filters. Replace every `handleSearch(searchQuery, lastMetadata, lastSearchMode)` with `handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras)` (verify all sites with `grep -n "handleSearch(searchQuery" src/App.tsx`), and the mode toggle button (~:633) with:
+
+```tsx
+                  onClick={() => handleSearch(searchQuery, lastMetadata, lastSearchMode === 'semantic' ? 'fulltext' : 'semantic', lastExtras)}
+```
+
+Add `searchSort` to the dependency array of the "Re-run the active search whenever the file-type filter changes" effect: `}, [filterFileType, filterSourceParty, workMode, searchSort]);`.
+
+In `clearSearch` add `setLastExtras(undefined);`.
 
 In the results header, right after `<span className="section-count">{searchTotal}</span>` (~:625), add:
 
 ```tsx
-                {lastEmail && (
+                {lastExtras?.email && (
                   <span className="badge badge-blue" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
-                    {lastEmail.scope === 'from' ? 'From' : 'Involving'} {lastEmail.address}
+                    {lastExtras.email.scope === 'from' ? 'From' : 'Involving'} {lastExtras.email.address}
+                  </span>
+                )}
+                {(lastExtras?.dateFrom || lastExtras?.dateTo) && (
+                  <span className="badge badge-gray" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
+                    {lastExtras.dateFrom ?? '…'} – {lastExtras.dateTo ?? '…'}
                   </span>
                 )}
 ```
 
-- [ ] **Step 6: Verify build + lint**
+In the same header's control group (right after the "Try full-text/semantic" button), add the search sort select:
+
+```tsx
+                <label htmlFor="search-sort" className="visually-hidden">Sort results</label>
+                <select
+                  id="search-sort"
+                  className="input input-sm"
+                  style={{ width: 'auto', minWidth: 100 }}
+                  value={searchSort}
+                  onChange={e => setSearchSort(e.target.value as SearchSort)}
+                >
+                  <option value="relevance">Sort: Relevance</option>
+                  <option value="bates">Sort: Bates #</option>
+                  <option value="date_asc">Sort: Date (oldest)</option>
+                  <option value="date_desc">Sort: Date (newest)</option>
+                </select>
+```
+
+In the browse list sort select (`id="sort-by"`, ~:802), add after the `size` option:
+
+```tsx
+                  <option value="date_asc">Sort: Date (oldest)</option>
+                  <option value="date_desc">Sort: Date (newest)</option>
+```
+
+- [ ] **Step 7: Verify build + lint**
 
 Run: `npm run build` → succeeds.
-Run: `npx eslint src/components/Omnibox.tsx src/components/AppHeader.tsx src/api/client.ts src/types/index.ts src/App.tsx` → `App.tsx` ≤ 7 errors / 1 warning (baseline); other files no new errors versus `git stash`-free baseline (run the same command on `origin/main` files via `git show origin/main:frontend/src/<file>` if a count is in doubt).
+Before your first edit in this task, run `npx eslint src/components/Omnibox.tsx src/components/AppHeader.tsx src/components/SearchResults.tsx src/api/client.ts src/types/index.ts src/App.tsx` and record each file's error/warning count. Run it again now → no file exceeds its recorded count (`App.tsx` baseline is 7 errors / 1 warning).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add frontend/src/types/index.ts frontend/src/api/client.ts frontend/src/components/Omnibox.tsx frontend/src/components/AppHeader.tsx frontend/src/App.tsx
-git commit -m "feat(search-ui): email address filter with sender/any-participant toggle"
+git add frontend/src/types/index.ts frontend/src/api/client.ts frontend/src/components/Omnibox.tsx frontend/src/components/AppHeader.tsx frontend/src/components/SearchResults.tsx frontend/src/App.tsx
+git commit -m "feat(search-ui): email and date-range filters, date sort"
 ```
 
 ---
@@ -1435,7 +1683,7 @@ git commit -m "feat(search-ui): email address filter with sender/any-participant
 - Modify: `frontend/src/App.tsx` (state ~:70; `toggleSelect` ~:298; `handleSearch`/`clearSearch` resets; above `<SearchResults` ~:732; floating bar ~:1088)
 
 **Interfaces:**
-- Consumes: `bulkTagDryRun`, `bulkTagApply`, `BulkTagQuery`, `BulkTagByQueryBody`, `BulkTagDryRun`, `Tag` (Task 4).
+- Consumes: `bulkTagDryRun`, `bulkTagApply`, `BulkTagQuery`, `BulkTagByQueryBody`, `BulkTagDryRun`, `Tag`; App state `lastExtras`, `hasExtras()` (Task 4).
 - Produces: `BulkTagDialog` default export, props `{ target: BulkTarget; tags: Tag[]; onClose: () => void; onApplied: (message: string) => void }`; exported type `BulkTarget = { kind: 'ids'; docIds: string[] } | { kind: 'query'; query: BulkTagQuery }`.
 
 - [ ] **Step 1: Create `frontend/src/components/BulkTagDialog.tsx`**
@@ -1677,7 +1925,7 @@ Before the `return (` of `Home` (next to `const displayDocs = documents;`), add:
   // The server runs full-text whenever any filter is set (semantic ignores
   // filters). Only a full-text result set can be re-resolved as a query, so
   // "select all matching" is offered only then.
-  const searchUsedFulltext = lastSearchMode === 'fulltext' || !!lastMetadata || !!lastEmail
+  const searchUsedFulltext = lastSearchMode === 'fulltext' || !!lastMetadata || hasExtras(lastExtras)
     || !!filterFileType || !!filterSourceParty || !!sourceTypeParam;
   const pageAllSelected = hasSearched && searchResults.length > 0
     && searchResults.every(r => selectedIds.has(r.id));
@@ -1691,8 +1939,10 @@ Before the `return (` of `Home` (next to `const displayDocs = documents;`), add:
           file_type: filterFileType || null,
           source_party: filterSourceParty || null,
           source_type: sourceTypeParam ?? null,
-          email_address: lastEmail?.address ?? null,
-          email_scope: lastEmail?.scope ?? 'from',
+          email_address: lastExtras?.email?.address ?? null,
+          email_scope: lastExtras?.email?.scope ?? 'from',
+          date_from: lastExtras?.dateFrom ?? null,
+          date_to: lastExtras?.dateTo ?? null,
         },
       }
     : { kind: 'ids', docIds: Array.from(selectedIds) };
@@ -1759,7 +2009,7 @@ After the floating bar's closing `)}`, add:
             setSelectedIds(new Set());
             setAllMatching(false);
             showToast(message, 'success');
-            if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastEmail);
+            if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
             else loadDocuments(docPage);
           }}
         />
@@ -1798,6 +2048,9 @@ git commit -m "feat(review-ui): select all matching + bulk tag dialog with confl
   5. Pick a privilege tag, set description as a manager → privilege log CSV (`/api/productions/{id}/privilege-log/csv`) shows the description and basis for every tagged doc and its attachments.
   6. Semantic-mode query (e.g. "what did jane say") with no filters → no "Select all N matching" link (Review Focus #5).
   7. Uncheck "Include attachments" → count drops by the attachment count.
+  8. Filters → From 2018-03-01 To 2018-03-31 (no text) → only March 2018 docs, including ones sent late on 3/31; header chip shows the range; a reversed range is refused with a toast.
+  9. Search sort **Date (newest)** / **Date (oldest)** reorders results; result rows show the date; undated docs sort last. Browse list sort by date works too.
+  10. Date range + `@domain` + **Tag all matching…** → dry-run count equals the search total (+ attachments).
 
 - [ ] **Step 5: Push and open PR** (only after user approval to push)
 
