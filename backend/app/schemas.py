@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import UUID4, BaseModel
+from pydantic import UUID4, BaseModel, model_validator
 
 
 def get_file_type(native_path: str | None, page_count: int) -> str:
@@ -86,6 +86,40 @@ class ApplyTagsRequest(BaseModel):
 class BulkTagRequest(BaseModel):
     doc_ids: list[UUID]
     tag_ids: list[int]
+
+
+class BulkTagQuery(BaseModel):
+    """The /api/search filter fields, so a bulk action resolves the same set
+    the reviewer is looking at."""
+    q: str = ""
+    production_id: int | None = None
+    metadata: dict[str, str] | None = None
+    file_type: str | None = None
+    source_party: str | None = None
+    source_type: Literal["collection", "received"] | None = None
+    email_address: str | None = None
+    email_scope: Literal["from", "any"] = "from"
+    date_from: date | None = None
+    date_to: date | None = None
+
+
+class BulkTagByQueryRequest(BaseModel):
+    doc_ids: list[UUID] | None = None
+    query: BulkTagQuery | None = None
+    tag_id: int
+    include_attachments: bool = True
+    conflict_action: Literal["switch", "leave"] | None = None
+    disposition: str | None = None
+    description: str | None = None
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self):
+        if (self.doc_ids is None) == (self.query is None):
+            raise ValueError("Provide exactly one of doc_ids or query")
+        if self.doc_ids is not None and not self.doc_ids:
+            raise ValueError("doc_ids must not be empty")
+        return self
 
 
 # ── Notes ──
