@@ -69,13 +69,15 @@ class FakeSession:
         self.added = []
         self.deleted = []
         self.commits = 0
+        self.executed_params = []
 
     async def get(self, model, key):
         return self._get_objects.get((model.__name__, key))
 
-    async def execute(self, stmt):
+    async def execute(self, stmt, params=None):
         sql = str(stmt)
         self.executed.append(sql)
+        self.executed_params.append(params)
         for substring, result in self.responders:
             if substring in sql:
                 return result(sql) if callable(result) else result

@@ -2,6 +2,8 @@
 
 import csv
 import io
+import json
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -86,20 +88,50 @@ async def export_documents_csv(
 
 @router.get("/search/csv")
 async def export_search_csv(
-    q: str,
+    q: str = "",
     production_id: int | None = None,
+    sort: str = Query("relevance", pattern="^(relevance|bates|date_asc|date_desc)$"),
+    metadata: str | None = Query(None, description="JSON object of metadata key-value filters"),
+    file_type: str | None = None,
+    source_party: str | None = None,
+    source_type: str | None = Query(None, pattern="^(collection|received)$"),
+    email_address: str | None = None,
+    email_scope: str = Query("from", pattern="^(from|any)$"),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tz: str | None = Query(None, max_length=64),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Export search results as CSV."""
-    from app.services.search import search_documents
+    """Export search results as CSV — the same filters as /api/search, so the
+    file matches the result set the reviewer is looking at."""
+    from app.services import search as search_svc
+
+    metadata_filters = None
+    if metadata:
+        try:
+            metadata_filters = json.loads(metadata)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid metadata JSON")
 
     accessible = await get_accessible_production_ids(db, user)
-    results, total = await search_documents(
-        db, q, page=1, per_page=10000,
-        production_id=production_id,
-        accessible_production_ids=accessible,
-    )
+    try:
+        results, total = await search_svc.search_documents(
+            db, q, page=1, per_page=10000, sort=sort,
+            production_id=production_id,
+            accessible_production_ids=accessible,
+            metadata_filters=metadata_filters,
+            file_type=file_type,
+            source_party=source_party,
+            source_type=source_type,
+            email_address=email_address,
+            email_scope=email_scope,
+            date_from=date_from,
+            date_to=date_to,
+            tz=tz,
+        )
+    except ValueError as e:  # unknown timezone
+        raise HTTPException(status_code=422, detail=str(e))
 
     output = io.StringIO()
     writer = csv.writer(output)

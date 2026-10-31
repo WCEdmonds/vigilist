@@ -51,7 +51,11 @@ export default function SearchResults({ results, onSelect, selectedIds, onToggle
                 {c.canonical_name}
               </button>
             ))}
-            <span className="result-meta">{r.page_count} pg{r.page_count !== 1 ? 's' : ''}</span>
+            <span className="result-meta">
+              {/* en-CA renders YYYY-MM-DD in the reviewer's local timezone — the same
+                  day boundaries the date filter uses. */}
+              {r.doc_date ? `${new Date(r.doc_date).toLocaleDateString('en-CA')} · ` : ''}{r.page_count} pg{r.page_count !== 1 ? 's' : ''}
+            </span>
           </div>
           {r.title && (
             <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-1)' }}>{r.title}</div>

@@ -235,3 +235,19 @@ def test_privilege_log_csv_shape(monkeypatch):
     assert "DOC-001" in lines[1]
     assert "Attorney-Client; PII" in lines[1]
     assert "privilege_log.csv" in out.headers["content-disposition"]
+
+
+def test_log_candidate_queries_use_single_array_bind():
+    # A bulk-tagged production can have >32,767 privilege candidates; an
+    # expanding IN() binds one parameter per id and asyncpg rejects the query.
+    doc_id = uuid4()
+    db = _log_db([(doc_id, "Attorney-Client")], [], [FakeDoc(doc_id)])
+    asyncio.run(build_privilege_log_rows(db, 1))
+    candidate_sql = [s for s in db.executed
+                     if "documents.id" in s and "WHERE documents.production_id" in s
+                     and "privilege_disposition IS NOT NULL" not in s and "JOIN" not in s]
+    decision_sql = [s for s in db.executed if "FROM redaction_qc_decisions" in s]
+    for sql in candidate_sql + decision_sql:
+        assert "= ANY (" in sql, sql
+        assert "POSTCOMPILE" not in sql, sql
+    assert candidate_sql and decision_sql

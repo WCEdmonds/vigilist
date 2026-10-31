@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Omnibox from './Omnibox';
 import UserAvatar from './UserAvatar';
 import { useAuth } from '../hooks/useAuth';
-import type { ProductionInfo } from '../types';
+import type { ProductionInfo, SearchExtras } from '../types';
 import type { SearchMode } from '../utils/searchMode';
 
 interface AppHeaderProps {
@@ -10,7 +10,7 @@ interface AppHeaderProps {
   productions: ProductionInfo[];
   onSelectProduction?: (p: ProductionInfo) => void;
   onShowAllProductions?: () => void;
-  onSearch?: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode) => void;
+  onSearch?: (query: string, metadata?: Record<string, string>, forceMode?: SearchMode, extras?: SearchExtras) => void;
   onLogoClick?: () => void;
   initialQuery?: string;
   onAsk?: (question: string) => void;

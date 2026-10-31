@@ -9,6 +9,7 @@ export interface Tag {
   category: string;
   color: string;
   keyboard_shortcut: string | null;
+  is_privilege?: boolean;
 }
 
 export interface DocumentTagEntry {
@@ -105,6 +106,7 @@ export interface SearchResult {
   title: string | null;
   snippet: string;
   rank: number;
+  doc_date?: string | null;
   tags: Tag[];
 }
 
@@ -627,4 +629,69 @@ export interface ConversationMessage {
 
 export interface ConversationDetail extends ConversationSummary {
   messages: ConversationMessage[];
+}
+
+export type EmailScope = 'from' | 'any';
+
+export interface EmailFilter {
+  address: string;
+  scope: EmailScope;
+}
+
+/** Search filters beyond text + metadata. Dates are YYYY-MM-DD, inclusive. */
+export interface SearchExtras {
+  email?: EmailFilter;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export type SearchSort = 'relevance' | 'bates' | 'date_asc' | 'date_desc';
+
+/** The /api/search filters, so a bulk action resolves the same set. */
+export interface BulkTagQuery {
+  q: string;
+  production_id: number;
+  metadata?: Record<string, string> | null;
+  file_type?: string | null;
+  source_party?: string | null;
+  source_type?: string | null;
+  email_address?: string | null;
+  email_scope?: EmailScope;
+  date_from?: string | null;
+  date_to?: string | null;
+  /** Reviewer's IANA timezone; date bounds are whole days in it. */
+  tz?: string | null;
+}
+
+export interface BulkTagByQueryBody {
+  doc_ids?: string[];
+  query?: BulkTagQuery;
+  tag_id: number;
+  include_attachments: boolean;
+  conflict_action?: 'switch' | 'leave' | null;
+  disposition?: 'withhold' | 'redact_in_part' | 'produce' | null;
+  description?: string | null;
+  overwrite_existing?: boolean;
+  dry_run: boolean;
+}
+
+export interface BulkTagDryRun {
+  matched: number;
+  attachments_added: number;
+  total: number;
+  already_tagged: number;
+  conflicts: number;
+  conflict_tags: { tag_id: number; name: string; count: number }[];
+  /** Docs that already have a privilege disposition/description. */
+  existing_overrides: number;
+}
+
+export interface BulkTagApplied {
+  total: number;
+  tagged: number;
+  already_tagged: number;
+  switched: number;
+  left: number;
+  overridden: number;
+  skipped_existing_overrides: number;
 }
