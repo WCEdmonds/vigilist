@@ -678,6 +678,24 @@ export interface BulkTagQuery {
   date_to?: string | null;
   /** Reviewer's IANA timezone; date bounds are whole days in it. */
   tz?: string | null;
+  folder_id?: number | null;
+}
+
+/** A named set of a matter's documents (GET /api/productions/{id}/folders). */
+export interface FolderInfo {
+  id: number;
+  production_id: number;
+  name: string;
+  document_count: number;
+  created_at: string;
+}
+
+export interface FolderAddResult {
+  matched: number;
+  attachments_added: number;
+  added: number;
+  already_in_folder: number;
+  document_count: number;
 }
 
 export interface BulkTagByQueryBody {

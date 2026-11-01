@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
 from app.database import get_db
-from app.models import Annotation, Document, DocumentTag, Note, Redaction, User
+from app.models import Annotation, Document, DocumentTag, FolderDocument, Note, Redaction, User
 from app.models_review import ReviewProject, AIReviewResult
 
 # Pin colors used by both the viewer overlay and the burned-in PDF pins.
@@ -75,6 +75,7 @@ async def list_documents(
     sort: str = Query("bates", pattern="^(bates|recent|size|date_asc|date_desc)$"),
     cluster_id: int | None = None,
     ai_decision: str | None = None,
+    folder_id: int | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -89,6 +90,12 @@ async def list_documents(
     if production_id:
         query = query.where(Document.production_id == production_id)
         count_query = count_query.where(Document.production_id == production_id)
+
+    if folder_id:
+        in_folder = Document.id.in_(
+            select(FolderDocument.document_id).where(FolderDocument.folder_id == folder_id))
+        query = query.where(in_folder)
+        count_query = count_query.where(in_folder)
 
     if tag_id:
         query = query.where(Document.tags.any(DocumentTag.tag_id == tag_id))

@@ -108,6 +108,7 @@ class BulkTagQuery(BaseModel):
     date_from: date | None = None
     date_to: date | None = None
     tz: str | None = None
+    folder_id: int | None = None
 
     @field_validator("tz")
     @classmethod
@@ -698,6 +699,36 @@ class ClusterOut(BaseModel):
     page_count: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class FolderCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+
+
+class FolderOut(BaseModel):
+    id: int
+    production_id: int
+    name: str
+    document_count: int = 0
+    created_at: datetime
+
+
+class FolderAddDocuments(BaseModel):
+    """Add explicit documents or everything matching a search (the /api/search
+    filters), plus attachments of anything added."""
+    doc_ids: list[UUID] | None = None
+    query: BulkTagQuery | None = None
+    include_attachments: bool = True
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self):
+        if (self.doc_ids is None) == (self.query is None):
+            raise ValueError("Provide exactly one of doc_ids or query")
+        return self
+
+
+class FolderRemoveDocuments(BaseModel):
+    doc_ids: list[UUID] = Field(..., min_length=1)
 
 
 class PropagateTagRequest(BaseModel):

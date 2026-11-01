@@ -106,6 +106,7 @@ async def export_search_csv(
     date_from: date | None = None,
     date_to: date | None = None,
     tz: str | None = Query(None, max_length=64),
+    folder_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -135,6 +136,7 @@ async def export_search_csv(
             date_from=date_from,
             date_to=date_to,
             tz=tz,
+            folder_id=folder_id,
         )
     except ValueError as e:  # unknown timezone
         raise HTTPException(status_code=422, detail=str(e))

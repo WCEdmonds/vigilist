@@ -243,6 +243,35 @@ class Note(Base):
     document = relationship("Document", back_populates="notes")
 
 
+class Folder(Base):
+    """A named set of a matter's documents that reviewers work from (e.g. one
+    time period). A snapshot: membership changes only when someone adds or
+    removes documents, never because a search would now match differently."""
+    __tablename__ = "folders"
+    __table_args__ = (
+        UniqueConstraint("production_id", "name", name="uq_folder_name"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    production_id = Column(Integer, ForeignKey("productions.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    created_by = Column(String(100), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class FolderDocument(Base):
+    __tablename__ = "folder_documents"
+    __table_args__ = (
+        UniqueConstraint("folder_id", "document_id", name="uq_folder_doc"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    folder_id = Column(Integer, ForeignKey("folders.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    added_by = Column(String(100), nullable=False)
+    added_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 class SavedSearch(Base):
     __tablename__ = "saved_searches"
 

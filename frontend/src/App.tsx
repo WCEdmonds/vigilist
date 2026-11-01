@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { browserTimeZone, bulkTag, createTag, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listProductions, searchDocuments } from './api/client';
+import { browserTimeZone, bulkTag, createTag, deleteFolder, designateSources, exportDocsCsv, exportSearchCsv, fetchBulkZip, getEntitiesSummary, getMyBatches, getSourceParties, getTags, listDocuments, listFolders, listProductions, removeFromFolder, searchDocuments } from './api/client';
 import { entityDisplayName } from './utils/entityDisplay';
 import DocumentViewer from './components/DocumentViewer';
 import AuthImage from './components/AuthImage';
@@ -28,13 +28,14 @@ import ProductionPicker from './components/ProductionPicker';
 import OnboardingGuide from './components/OnboardingGuide';
 import ContextRail from './components/ContextRail';
 import BulkTagDialog, { type BulkTarget } from './components/BulkTagDialog';
+import FolderDialog from './components/FolderDialog';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { getInitialUrlState, useSyncUrl } from './hooks/useUrlState';
 import { useOnboarding } from './hooks/useOnboarding';
 import { useChat } from './hooks/useChat';
 import { SLIDES } from './onboarding/slides';
 import { detectSearchMode, type SearchMode } from './utils/searchMode';
-import type { BatesCandidate, ChipEntity, DocumentSummary, ProductionInfo, ReviewBatch, SearchExtras, SearchResult, SearchSort, Tag } from './types';
+import type { BatesCandidate, ChipEntity, DocumentSummary, FolderInfo, ProductionInfo, ReviewBatch, SearchExtras, SearchResult, SearchSort, Tag } from './types';
 
 const COLOR_MAP: Record<string, string> = {
   green: 'badge-green', red: 'badge-red', yellow: 'badge-yellow',
@@ -82,6 +83,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [filterFileType, setFilterFileType] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('bates');
   const [filterSourceParty, setFilterSourceParty] = useState<string>('');
+  // Folders: named subsets of the matter (e.g. one time period).
+  const [folders, setFolders] = useState<FolderInfo[]>([]);
+  const [filterFolderId, setFilterFolderId] = useState<number | null>(null);
+  const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [sourceParties, setSourceParties] = useState<string[]>([]);
   const [undesignatedCount, setUndesignatedCount] = useState(0);
   const [workMode, setWorkModeState] = useState<'all' | 'incoming' | 'outgoing'>(
@@ -189,12 +194,13 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     getTags().then(setAllTags).catch(e => console.warn('getTags failed:', e));
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
     getSourceParties(production.id).then(r => { setSourceParties(r.source_parties); setUndesignatedCount(r.undesignated); }).catch(e => console.warn('getSourceParties failed:', e));
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode]);
+    listFolders(production.id).then(setFolders).catch(e => console.warn('listFolders failed:', e));
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode, filterFolderId]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam, filterFolderId ?? undefined);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -258,7 +264,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       const res = await searchDocuments(
         query, 1, perPage, searchSort, production.id,
         metadata, mode, filterFileType || undefined,
-        filterSourceParty || undefined, sourceTypeParam, extras,
+        filterSourceParty || undefined, sourceTypeParam, extras, filterFolderId ?? undefined,
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
@@ -273,7 +279,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   useEffect(() => {
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterFileType, filterSourceParty, workMode, searchSort]);
+  }, [filterFileType, filterSourceParty, workMode, searchSort, filterFolderId]);
 
   // Ambient entity chips: batch-fetch summaries for whichever page of rows
   // is currently on screen (doc list or search results), one call per newly
@@ -532,7 +538,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // filters). Only a full-text result set can be re-resolved as a query, so
   // "select all matching" is offered only then.
   const searchUsedFulltext = lastSearchMode === 'fulltext' || !!lastMetadata || hasExtras(lastExtras)
-    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam;
+    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam || filterFolderId !== null;
   const pageAllSelected = hasSearched && searchResults.length > 0
     && searchResults.every(r => selectedIds.has(r.id));
   const bulkTarget: BulkTarget = allMatching
@@ -550,9 +556,65 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           date_from: lastExtras?.dateFrom ?? null,
           date_to: lastExtras?.dateTo ?? null,
           tz: browserTimeZone(),
+          folder_id: filterFolderId,
         },
       }
     : { kind: 'ids', docIds: Array.from(selectedIds) };
+  const activeFolder = folders.find(f => f.id === filterFolderId) ?? null;
+
+  const refreshAfterFolderChange = () => {
+    listFolders(production.id).then(setFolders).catch(e => console.warn('listFolders failed:', e));
+    if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
+    else loadDocuments(docPage);
+  };
+
+  const handleRemoveFromFolder = async () => {
+    if (!activeFolder || selectedIds.size === 0) return;
+    try {
+      const res = await removeFromFolder(activeFolder.id, Array.from(selectedIds));
+      setSelectedIds(new Set());
+      showToast(`Removed ${res.removed.toLocaleString()} from “${activeFolder.name}” (the documents stay in the matter)`, 'success');
+      refreshAfterFolderChange();
+    } catch (e) {
+      showToast(`Could not remove: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
+    }
+  };
+
+  const handleDeleteFolder = async () => {
+    if (!activeFolder) return;
+    if (!window.confirm(`Delete the folder “${activeFolder.name}”? Its ${activeFolder.document_count.toLocaleString()} documents stay in the matter.`)) return;
+    try {
+      await deleteFolder(activeFolder.id);
+      showToast(`Deleted folder “${activeFolder.name}”`, 'success');
+      setFilterFolderId(null);
+      listFolders(production.id).then(setFolders).catch(e => console.warn('listFolders failed:', e));
+    } catch (e) {
+      showToast(`Could not delete the folder: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
+    }
+  };
+
+  const folderFilter = folders.length > 0 && (
+    <>
+      <select
+        aria-label="Filter by folder"
+        className="input input-sm"
+        style={{ width: 'auto', minWidth: 120 }}
+        value={filterFolderId ?? ''}
+        onChange={e => { setFilterFolderId(e.target.value ? Number(e.target.value) : null); setDocPage(1); setSelectedIds(new Set()); setAllMatching(false); }}
+      >
+        <option value="">All folders</option>
+        {folders.map(f => (
+          <option key={f.id} value={f.id}>📁 {f.name} ({f.document_count.toLocaleString()})</option>
+        ))}
+      </select>
+      {activeFolder && (
+        <button type="button" className="btn btn-ghost btn-xs" onClick={handleDeleteFolder}
+                title="Delete this folder (its documents stay in the matter)">
+          Delete folder
+        </button>
+      )}
+    </>
+  );
   const selectedCount = allMatching ? searchTotal : selectedIds.size;
   const totalPages = Math.ceil(docTotal / perPage);
 
@@ -743,9 +805,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     <option key={sp} value={sp}>{sp}</option>
                   ))}
                 </select>
+                {folderFilter}
                 <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportSearchCsv(searchQuery, production.id, {
                   sort: searchSort, metadata: lastMetadata, fileType: filterFileType || undefined,
                   sourceParty: filterSourceParty || undefined, sourceType: sourceTypeParam, extras: lastExtras,
+                  folderId: filterFolderId ?? undefined,
                 })} title="Bates, family, date, from, to, cc, subject and tags for every result">
                   Export metadata (CSV)
                 </button>
@@ -900,6 +964,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     <option key={sp} value={sp}>{sp}</option>
                   ))}
                 </select>
+                {folderFilter}
                 <label htmlFor="sort-by" className="visually-hidden">Sort order</label>
                 <select
                   id="sort-by"
@@ -1274,6 +1339,18 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           </div>
           </>)}
           <button
+            className="btn btn-sm btn-secondary"
+            onClick={() => { setShowBulkTagPicker(false); setShowFolderDialog(true); }}
+          >
+            {allMatching ? 'Add all matching to folder…' : 'Add to folder…'}
+          </button>
+          {activeFolder && !allMatching && (
+            <button className="btn btn-sm btn-secondary" onClick={handleRemoveFromFolder}
+                    title={`Take the selected documents out of “${activeFolder.name}”`}>
+              Remove from folder
+            </button>
+          )}
+          <button
             className="btn btn-sm btn-primary"
             onClick={() => { setShowBulkTagPicker(false); setShowBulkDialog(true); }}
           >
@@ -1286,6 +1363,22 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
             Clear
           </button>
         </div>
+      )}
+      {showFolderDialog && (
+        <FolderDialog
+          productionId={production.id}
+          target={bulkTarget}
+          count={selectedCount}
+          folders={folders}
+          onClose={() => setShowFolderDialog(false)}
+          onAdded={(message) => {
+            setShowFolderDialog(false);
+            setSelectedIds(new Set());
+            setAllMatching(false);
+            showToast(message, 'success');
+            refreshAfterFolderChange();
+          }}
+        />
       )}
       {showBulkDialog && (
         <BulkTagDialog
