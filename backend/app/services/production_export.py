@@ -128,6 +128,13 @@ def compute_manifest(ps: ProductionSet, items,
         if i.disposition in counts:
             counts[i.disposition] += 1
     counts["native"] = sum(1 for i in items if getattr(i, "produce_native", False))
+    # Documents per stamped legend (per-item designation, else the set default).
+    designations: dict[str, int] = {}
+    for i in items:
+        legend = getattr(i, "designation", None) or ps.designation
+        if legend:
+            designations[legend] = designations.get(legend, 0) + 1
+    counts["designations"] = designations
     bates_range = ({"begin": items[0].bates_begin, "end": items[-1].bates_end}
                    if items else {"begin": None, "end": None})
     errors = check_continuity(

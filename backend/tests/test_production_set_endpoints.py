@@ -891,3 +891,31 @@ def test_produced_pdf_409_for_tiff_set(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(rps.get_produced_pdf(set_id=1, document_id=d1, db=db, user=FakeUser()))
     assert exc.value.status_code == 409
+
+
+def test_lock_takes_each_documents_designation_from_its_tags(monkeypatch):
+    _patch(monkeypatch)
+    d1, d2, d3 = uuid4(), uuid4(), uuid4()
+    items = [FakeItem(d1, item_id=1), FakeItem(d2, item_id=2), FakeItem(d3, item_id=3)]
+    ps = FakePS()
+    doc_rows = [(d, f"C-{n}", None, None, TS, None, 1, None, "email", None)
+                for n, d in enumerate((d1, d2, d3), start=1)]
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("coalesce", FakeResult()),
+            ("tags.designation IS NOT NULL", FakeResult(rows=[
+                (d1, 7, "CONFIDENTIAL"),
+                (d2, 8, "ATTORNEYS' EYES ONLY"), (d2, 7, "CONFIDENTIAL"),
+            ])),
+            ("is_privilege", FakeResult()),
+            ("redactions", FakeResult(rows=[])),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.page_count", FakeResult(rows=doc_rows)),
+        ],
+    )
+    asyncio.run(rps.lock_production_set(set_id=1, db=db, user=FakeUser()))
+    by_doc = {i.document_id: i for i in items}
+    assert by_doc[d1].designation == "CONFIDENTIAL"
+    assert by_doc[d2].designation == "CONFIDENTIAL – ATTORNEYS' EYES ONLY"
+    assert by_doc[d3].designation is None   # falls back to the set's default at render

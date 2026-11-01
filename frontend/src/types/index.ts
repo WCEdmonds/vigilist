@@ -10,6 +10,8 @@ export interface Tag {
   color: string;
   keyboard_shortcut: string | null;
   is_privilege?: boolean;
+  /** Confidentiality legend stamped on produced documents carrying this tag. */
+  designation?: string | null;
 }
 
 export interface DocumentTagEntry {

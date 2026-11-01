@@ -240,7 +240,7 @@ export async function searchDocuments(
 export const getTags = (category?: string) =>
   request<Tag[]>(`/api/tags${category ? `?category=${category}` : ''}`);
 
-export const createTag = (data: { name: string; category: string; color?: string; keyboard_shortcut?: string }) =>
+export const createTag = (data: { name: string; category: string; color?: string; keyboard_shortcut?: string; designation?: string }) =>
   request<Tag>('/api/tags', json(data));
 
 
