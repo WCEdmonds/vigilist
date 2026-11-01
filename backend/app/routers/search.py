@@ -34,6 +34,7 @@ async def search(
     date_from: date | None = Query(None, description="Inclusive start date (YYYY-MM-DD)"),
     date_to: date | None = Query(None, description="Inclusive end date (YYYY-MM-DD)"),
     tz: str | None = Query(None, max_length=64, description="Reviewer's IANA timezone for date bounds"),
+    folder_id: int | None = Query(None, description="Only documents in this folder"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -61,7 +62,8 @@ async def search(
     has_email = bool(email_address and email_address.strip())
     has_dates = date_from is not None or date_to is not None
     if (mode == "semantic" and q.strip() and not metadata_filters and not file_type
-            and not source_party and not source_type and not has_email and not has_dates):
+            and not source_party and not source_type and not has_email and not has_dates
+            and folder_id is None):
         results, total = await semantic_search(
             db, q, production_id=production_id, page=page, per_page=per_page,
             accessible_production_ids=accessible,
@@ -80,6 +82,7 @@ async def search(
             date_from=date_from,
             date_to=date_to,
             tz=tz,
+            folder_id=folder_id,
         )
     await log_action(db, user, "search_executed", "search", None,
                      details={"query": q, "result_count": total})

@@ -6,7 +6,7 @@ import type {
   PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag, TimelinePage, TimelineReviewStatus,
   SearchExtras, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied,
-  PrivilegeDisposition, PrivilegeLogRow,
+  PrivilegeDisposition, PrivilegeLogRow, FolderInfo, FolderAddResult, BulkTagQuery,
 } from '../types';
 
 /**
@@ -63,7 +63,7 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
 }
 
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string, sourceParty?: string, sourceType?: string) {
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string, sourceParty?: string, sourceType?: string, folderId?: number) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
@@ -72,8 +72,30 @@ export function listDocuments(page = 1, perPage = 50, productionId?: number, tag
   if (aiDecision) params.set('ai_decision', aiDecision);
   if (sourceParty) params.set('source_party', sourceParty);
   if (sourceType) params.set('source_type', sourceType);
+  if (folderId) params.set('folder_id', String(folderId));
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
+
+// ── Folders ──
+
+export const listFolders = (productionId: number) =>
+  request<FolderInfo[]>(`/api/productions/${productionId}/folders`);
+
+export const createFolder = (productionId: number, name: string) =>
+  request<FolderInfo>(`/api/productions/${productionId}/folders`, json({ name }));
+
+export const deleteFolder = (folderId: number) =>
+  request<{ ok: boolean }>(`/api/folders/${folderId}`, { method: 'DELETE' });
+
+/** Explicit documents or everything matching a search, plus attachments. */
+export const addToFolder = (
+  folderId: number,
+  target: { doc_ids: string[] } | { query: BulkTagQuery },
+) => request<FolderAddResult>(`/api/folders/${folderId}/documents`, json({ ...target, include_attachments: true }));
+
+export const removeFromFolder = (folderId: number, docIds: string[]) =>
+  request<{ removed: number; document_count: number }>(
+    `/api/folders/${folderId}/documents/remove`, json({ doc_ids: docIds }));
 
 export const getSourceParties = (productionId: number) =>
   request<{ source_parties: string[]; undesignated: number }>(`/api/documents/source-parties?production_id=${productionId}`);
@@ -215,6 +237,7 @@ export async function searchDocuments(
   sourceParty?: string,
   sourceType?: string,
   extras?: SearchExtras,
+  folderId?: number,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -232,6 +255,7 @@ export async function searchDocuments(
   if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
   if (extras?.dateTo) params.set('date_to', extras.dateTo);
   if (extras?.dateFrom || extras?.dateTo) params.set('tz', browserTimeZone());
+  if (folderId) params.set('folder_id', String(folderId));
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
@@ -439,6 +463,7 @@ export async function exportSearchCsv(
     sourceParty?: string;
     sourceType?: string;
     extras?: SearchExtras;
+    folderId?: number;
   },
 ) {
   // Same filters as the on-screen search, so the file matches what the
@@ -459,6 +484,7 @@ export async function exportSearchCsv(
   }
   if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
   if (extras?.dateTo) params.set('date_to', extras.dateTo);
+  if (filters?.folderId) params.set('folder_id', String(filters.folderId));
   // Always send the timezone: the report's Date Sent column uses it too.
   params.set('tz', browserTimeZone());
   await downloadCsv(`/api/export/search/csv?${params}`, 'metadata_report.csv');

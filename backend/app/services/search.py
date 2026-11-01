@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document
+from app.models import Document, FolderDocument
 
 
 # Characters allowed inside a tsquery lexeme. Everything else (quotes,
@@ -162,6 +162,7 @@ def build_search_conditions(
     date_from: date | None = None,
     date_to: date | None = None,
     tz: str | None = None,
+    folder_id: int | None = None,
 ) -> tuple[list, object | None, bool]:
     """WHERE clauses for a search. Shared by /api/search and bulk
     tag-by-query so both resolve exactly the same document set.
@@ -178,7 +179,8 @@ def build_search_conditions(
     email = (email_address or "").strip()
     has_criteria = bool(tsquery_str or metadata_filters or file_type
                         or source_party or source_type or email
-                        or date_from is not None or date_to is not None)
+                        or date_from is not None or date_to is not None
+                        or folder_id is not None)
 
     conditions = []
     tsquery = None
@@ -220,6 +222,9 @@ def build_search_conditions(
         conditions.append(document_date() >= _day_start(date_from, zone))
     if date_to is not None:
         conditions.append(document_date() < _day_start(date_to + timedelta(days=1), zone))
+    if folder_id is not None:
+        conditions.append(Document.id.in_(
+            select(FolderDocument.document_id).where(FolderDocument.folder_id == folder_id)))
 
     return conditions, tsquery, has_criteria
 
@@ -241,6 +246,7 @@ async def search_documents(
     date_from: date | None = None,
     date_to: date | None = None,
     tz: str | None = None,
+    folder_id: int | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     conditions, tsquery, has_criteria = build_search_conditions(
@@ -256,6 +262,7 @@ async def search_documents(
         date_from=date_from,
         date_to=date_to,
         tz=tz,
+        folder_id=folder_id,
     )
     if not has_criteria:
         return [], 0
