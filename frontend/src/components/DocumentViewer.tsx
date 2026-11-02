@@ -10,6 +10,7 @@ import NotesPanel from './NotesPanel';
 import TagBar from './TagBar';
 import PreparePages from './PreparePages';
 import RedactionToolbar from './RedactionToolbar';
+import RedactionsPanel from './RedactionsPanel';
 import { useRedactions } from '../hooks/useRedactions';
 import TextPanel from './TextPanel';
 import AnnotationPopover from './AnnotationPopover';
@@ -27,7 +28,7 @@ interface Props {
   docIds?: string[];
 }
 
-type RightTab = 'text' | 'metadata' | 'summary';
+type RightTab = 'text' | 'metadata' | 'summary' | 'redactions';
 type CenterTab = 'images' | 'native';
 
 export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery, onSearch, onSimilarResults, docIds }: Props) {
@@ -671,6 +672,11 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
             <button className={`tab ${rightTab === 'summary' ? 'active' : ''}`} onClick={() => { setRightTab('summary'); if (!summary && !summaryLoading) handleSummarize(); }}>
               Summary
             </button>
+            {(hasImages || red.redactions.length > 0) && (
+              <button className={`tab ${rightTab === 'redactions' ? 'active' : ''}`} onClick={() => setRightTab('redactions')}>
+                Redactions{red.redactions.length ? ` (${red.redactions.length})` : ''}
+              </button>
+            )}
           </div>
 
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -681,6 +687,19 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                 entities={entities}
                 onEntityClick={id => setOpenEntityId(id)}
                 focusEntityId={focusEntityId}
+              />
+            )}
+            {rightTab === 'redactions' && (
+              <RedactionsPanel
+                docId={doc.id}
+                redactions={red.redactions}
+                version={redactionVersion}
+                selectedId={red.selectedId}
+                onSelect={r => {
+                  if (isEmail || hasNative) setCenterTab('images');
+                  red.select(r.id);
+                  document.getElementById(`page-${r.page_num}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }}
               />
             )}
             {rightTab === 'metadata' && (
