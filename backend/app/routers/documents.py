@@ -1331,6 +1331,14 @@ async def stream_native(
     )
 
 
+def _imageable(doc) -> bool:
+    from app.services.imaging import imaging_kind
+    try:
+        return imaging_kind(doc) is not None
+    except AttributeError:  # partial test doubles
+        return False
+
+
 @router.get("/{doc_id}/text")
 async def get_text(
     doc_id: UUID,
@@ -1431,5 +1439,6 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         imaging_status=getattr(doc, "imaging_status", None),
         imaging_error=getattr(doc, "imaging_error", None),
         image_count=len(doc.image_paths or []),
+        imageable=_imageable(doc),
         **parent_fields(parents.get(doc.id)),
     )
