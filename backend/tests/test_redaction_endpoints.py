@@ -205,7 +205,7 @@ def test_create_and_update_refused_while_imaging(monkeypatch, status):
 
 
 def test_update_audit_records_production_and_before_after(monkeypatch):
-    _patch_common(monkeypatch, role="reviewer")
+    _patch_common(monkeypatch, role="reviewer", accessible=(7,))
     seen = _capture_log(monkeypatch)
     doc_id = uuid4()
     red = FakeRedaction(5, doc_id, created_by="u1")
@@ -217,7 +217,7 @@ def test_update_audit_records_production_and_before_after(monkeypatch):
 
 
 def test_delete_audit_records_production_and_box(monkeypatch):
-    _patch_common(monkeypatch, role="reviewer")
+    _patch_common(monkeypatch, role="reviewer", accessible=(7,))
     seen = _capture_log(monkeypatch)
     doc_id = uuid4()
     red = FakeRedaction(5, doc_id, created_by="u1")
