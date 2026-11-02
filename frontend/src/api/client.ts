@@ -899,12 +899,15 @@ export interface ValidationReport {
   privilege_produce: ValidationConflict[];
   no_images: ValidationConflict[];
   received_document: ValidationConflict[];
+  needs_pages?: ValidationConflict[];
+  redactions_overridden?: ValidationConflict[];
+  attachment_names_redacted?: ValidationConflict[];
   total: number;
 }
 
 export interface ManifestReport {
   production_set: Record<string, unknown>;
-  counts: Record<string, number>;
+  counts: Record<string, number | Record<string, number>>;
   bates_range: { begin: string | null; end: string | null };
   continuity: { ok: boolean; errors: string[] };
   artifacts: { bates_begin: string; path: string | null; sha256?: string; bytes?: number }[];

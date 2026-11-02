@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   addProductionSetDocuments, createProductionSet, deleteProductionSet, fetchProducedPdf,
   fetchProductionPackage, getProductionSet, getProductionSetManifest, getProductionSetMembers,
-  createTag, getProductionSetValidation, lockProductionSet, packageProductionSet, renderProductionSet,
+  createTag, getProductionSetValidation, lockProductionSet, packageProductionSet, preparePagesBulk,
+  renderProductionSet, unlockProductionSet,
   type ManifestReport, type ProductionSetInfo, type ProductionSetMember,
   type ValidationConflict, type ValidationReport,
 } from '../api/client';
@@ -21,9 +22,20 @@ interface Props {
 const CONFLICT_LABELS: Record<string, string> = {
   qc_pending: 'Redaction QC not approved',
   privilege_produce: 'Privileged document would be produced unredacted',
-  no_images: 'No page images',
+  no_images: "No page images — Word/Excel/PowerPoint can't be imaged yet",
   received_document: 'Received from another party',
+  needs_pages: 'Needs pages prepared (email/PDF/image)',
+  redactions_overridden: 'Has redactions but set to Produce (would ship unredacted)',
+  attachment_names_redacted: 'Attachment names are redacted on the parent email, but this attachment ships its filename',
 };
+
+/** Manifest counts, with the per-legend designation counts spelled out. */
+function countsLine(counts: Record<string, number | Record<string, number>>): string {
+  return Object.entries(counts).map(([k, v]) => (typeof v === 'number'
+    ? `${k}: ${v}`
+    : Object.entries(v).map(([legend, n]) => `${legend}: ${n}`).join(' · ')))
+    .filter(Boolean).join(' · ');
+}
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -84,6 +96,8 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
   const [excludeReceived, setExcludeReceived] = useState(true);
   const [lastAdd, setLastAdd] = useState('');
   const [overrideConflicts, setOverrideConflicts] = useState(false);
+  // Pages are being prepared for needs_pages members; validation is polled.
+  const [preparing, setPreparing] = useState(false);
 
   const currentSetId = set?.id ?? (typeof setId === 'number' ? setId : null);
 
@@ -150,7 +164,8 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
       volume_max_mb: volumeCap ? Number(volumeCap) : null,
     });
     setSet(s);
-    setValidation({ qc_pending: [], privilege_produce: [], no_images: [], received_document: [], total: 0 });
+    setValidation({ qc_pending: [], privilege_produce: [], no_images: [], received_document: [],
+                    needs_pages: [], redactions_overridden: [], attachment_names_redacted: [], total: 0 });
   });
 
   const handleAdd = (body: { document_ids?: string[]; tag_id?: number }) => run(async () => {
@@ -162,6 +177,31 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
       exclude_received: excludeReceived,
     });
     setLastAdd(`Added ${r.added} (skipped ${r.skipped_existing} existing, ${r.skipped_duplicates} duplicates, ${r.skipped_received} received; +${r.families_added} family members)`);
+    await refresh(currentSetId);
+  });
+
+  const needsPages = validation?.needs_pages ?? [];
+
+  const handlePreparePages = () => run(async () => {
+    await preparePagesBulk(productionId, { doc_ids: needsPages.map(c => c.document_id) });
+    setPreparing(true);
+  });
+
+  useEffect(() => {
+    if (!preparing || !currentSetId) return;
+    const timer = window.setInterval(() => {
+      getProductionSetValidation(currentSetId).then(v => {
+        setValidation(v);
+        if (!(v.needs_pages ?? []).length) setPreparing(false);
+      }).catch(e => console.warn('validation poll failed:', e));
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [preparing, currentSetId]);
+
+  const handleUnlock = () => run(async () => {
+    if (!currentSetId) return;
+    if (!window.confirm('Unlocking releases the Bates numbers and discards rendered pages. Continue?')) return;
+    await unlockProductionSet(currentSetId);
     await refresh(currentSetId);
   });
 
@@ -337,6 +377,19 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
                   Re-check
                 </button>
               </div>
+              {needsPages.length > 0 && (
+                <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)',
+                                            fontSize: 'var(--text-sm)', background: 'rgba(246,173,85,0.12)', padding: '6px 8px', borderRadius: 4 }}>
+                  {preparing ? (
+                    <><span className="spinner" /> Preparing pages for {needsPages.length} document{needsPages.length === 1 ? '' : 's'}…</>
+                  ) : (
+                    <>
+                      <span>{needsPages.length} document{needsPages.length === 1 ? ' needs' : 's need'} pages prepared before lock.</span>
+                      <button className="btn btn-secondary btn-xs" disabled={busy} onClick={handlePreparePages}>Prepare pages</button>
+                    </>
+                  )}
+                </div>
+              )}
               {conflictTotal === 0 ? (
                 <div style={{ color: '#1a7f37', fontSize: 'var(--text-sm)' }}>No conflicts — ready to lock.</div>
               ) : (
@@ -367,7 +420,9 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
 
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <button className="btn btn-ghost btn-sm" disabled={busy} onClick={handleDelete}>Delete draft</button>
-              <button className="btn btn-primary" disabled={busy || members.length === 0 || (conflictTotal > 0 && !overrideConflicts)}
+              <button className="btn btn-primary"
+                disabled={busy || members.length === 0 || needsPages.length > 0 || (conflictTotal > 0 && !overrideConflicts)}
+                title={needsPages.length > 0 ? 'Prepare pages first — this cannot be overridden' : undefined}
                 onClick={handleLock}>
                 Lock &amp; assign Bates
               </button>
@@ -393,13 +448,21 @@ export default function ProductionBuilder({ productionId, setId, tags, selectedI
 
             {manifest && (
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-neutral-600)' }}>
-                {Object.entries(manifest.counts).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                {countsLine(manifest.counts)}
                 <div style={{ color: manifest.continuity.ok ? '#1a7f37' : '#b00020' }}>
                   {manifest.continuity.ok ? 'Bates continuity verified — no gaps or overlaps.' : `Continuity errors: ${manifest.continuity.errors.join('; ')}`}
                 </div>
               </div>
             )}
 
+            {(set.package_status === 'not_started' || set.package_status === 'error') && set.render_status !== 'rendering' && (
+              <div>
+                <button className="btn btn-ghost btn-xs" disabled={busy} onClick={handleUnlock}
+                        title="Back to draft: releases the Bates numbers and discards rendered pages">
+                  Unlock
+                </button>
+              </div>
+            )}
             {set.render_status === 'not_started' && (
               <button className="btn btn-primary" disabled={busy} onClick={handleRender}>
                 Render production (burn redactions + stamp Bates)
