@@ -6,7 +6,7 @@ viewer and the production builder poll the document's imaging_status.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,16 +21,13 @@ from app.schemas import FolderAddDocuments as PreparePagesRequest
 from app.services import bulk_tagging as bt
 from app.services import tasks
 from app.services.audit import log_action
-from app.services.imaging import ImagingRefused, image_document, imaging_kind
+from app.services.imaging import STALE_IMAGING, ImagingRefused, image_document, imaging_kind
 from app.services.oidc import verify_cloud_tasks_request
 from app.services.sql_arrays import ids_match
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["imaging"])
 
-# A queued/running job older than this is treated as dead and may be re-queued
-# (Cloud Tasks' dispatch deadline is 30 minutes).
-STALE_IMAGING = timedelta(minutes=35)
 _IN_PROGRESS = ("queued", "running")
 _local_tasks: set = set()
 
@@ -55,9 +52,10 @@ async def _run_local(ids: list[str], user_id: str) -> None:
         await _image_all(db, ids, user_id)
 
 
-def _dispatch(ids: list[str], user_id: str) -> None:
+async def _dispatch(ids: list[str], user_id: str) -> None:
     if tasks.is_configured():
-        tasks.enqueue_imaging(ids, user_id)
+        # Thousands of blocking create_task calls: keep them off the event loop.
+        await asyncio.to_thread(tasks.enqueue_imaging, ids, user_id)
     else:  # local development: no Cloud Tasks
         task = asyncio.create_task(_run_local(ids, user_id))
         _local_tasks.add(task)
@@ -106,7 +104,7 @@ async def prepare_pages(
     # Commit before dispatch: the worker must see the queued row.
     await db.commit()
     try:
-        _dispatch([str(doc_id)], user.id)
+        await _dispatch([str(doc_id)], user.id)
     except Exception as e:
         logger.exception("Could not dispatch imaging for %s", doc_id)
         doc.imaging_status = "failed"
@@ -138,7 +136,8 @@ async def prepare_pages_bulk(
         raise HTTPException(status_code=422, detail=f"More than {bt.MAX_BULK_DOCS:,} documents — narrow the search")
 
     ids = list(targets)
-    counts = {"queued": 0, "already_imaged": 0, "in_progress": 0, "unsupported": 0, "has_redactions": 0}
+    counts = {"queued": 0, "already_imaged": 0, "in_progress": 0, "unsupported": 0,
+              "has_redactions": 0, "failed_to_start": 0}
     if not ids:
         return counts
     redacted = {d for d, n in (await db.execute(
@@ -165,7 +164,19 @@ async def prepare_pages_bulk(
                      production_id=production_id, details=counts)
     await db.commit()
     if to_queue:
-        _dispatch(to_queue, user.id)
+        try:
+            await _dispatch(to_queue, user.id)
+        except Exception as e:
+            # Don't leave documents queued with no task (it blocks lock and
+            # redaction until the stale timeout); a retry re-queues them.
+            logger.exception("Could not dispatch imaging for %d documents", len(to_queue))
+            queued = set(to_queue)
+            for doc in docs:
+                if str(doc.id) in queued:
+                    doc.imaging_status = "failed"
+                    doc.imaging_error = f"could not start: {e}"[:500]
+            await db.commit()
+            counts["failed_to_start"], counts["queued"] = len(to_queue), 0
     return counts
 
 

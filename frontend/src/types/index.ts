@@ -152,6 +152,7 @@ export interface PreparePagesResult {
   in_progress: number;
   unsupported: number;
   has_redactions: number;
+  failed_to_start: number;
 }
 
 export interface EmailAttachment {

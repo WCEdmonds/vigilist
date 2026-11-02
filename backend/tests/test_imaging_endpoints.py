@@ -46,7 +46,10 @@ def _patch(monkeypatch, *, role="reviewer", matched=None):
     monkeypatch.setattr(ri, "get_accessible_production_ids", fake_accessible)
     monkeypatch.setattr(ri, "get_user_role_for_production", fake_role)
     monkeypatch.setattr(ri, "log_action", fake_log)
-    monkeypatch.setattr(ri, "_dispatch", lambda ids, user_id: state["dispatched"].append(list(ids)))
+    async def fake_dispatch(ids, user_id):
+        state["dispatched"].append(list(ids))
+
+    monkeypatch.setattr(ri, "_dispatch", fake_dispatch)
     monkeypatch.setattr(ri.bt, "resolve_query_docs", fake_resolve_query)
     monkeypatch.setattr(ri.bt, "resolve_explicit_docs", fake_resolve_explicit)
     monkeypatch.setattr(ri.bt, "expand_attachments", fake_expand)
@@ -112,7 +115,7 @@ def test_prepare_bulk_counts_and_skips(monkeypatch):
     out = asyncio.run(ri.prepare_pages_bulk(4, FolderAddDocuments(doc_ids=[d.id for d in docs]),
                                             db=db, user=FakeUser()))
     assert out == {"queued": 1, "already_imaged": 1, "in_progress": 1, "unsupported": 1,
-                   "has_redactions": 1}
+                   "has_redactions": 1, "failed_to_start": 0}
     assert state["dispatched"] == [[str(todo.id)]]
     assert todo.imaging_status == "queued"
 
@@ -142,10 +145,25 @@ def test_worker_images_each_and_returns_200_on_refusal(monkeypatch):
     assert calls == [a, b] and out == {"processed": 2}
 
 
-def test_enqueue_imaging_batches_ten_per_task(monkeypatch):
+def test_enqueue_imaging_one_document_per_task(monkeypatch):
     import app.services.tasks as t
     sent = []
     monkeypatch.setattr(t, "_enqueue", lambda path, body, **kw: sent.append((path, body)))
-    t.enqueue_imaging([str(i) for i in range(23)], "u1")
-    assert [len(b["document_ids"]) for _, b in sent] == [10, 10, 3]
+    t.enqueue_imaging([str(i) for i in range(3)], "u1")
+    assert [b["document_ids"] for _, b in sent] == [["0"], ["1"], ["2"]]
     assert all(p == "/api/documents/imaging-worker" and b["requested_by"] == "u1" for p, b in sent)
+
+
+def test_bulk_dispatch_failure_marks_documents_failed(monkeypatch):
+    """I-6: a failed enqueue must not leave documents 'queued' with no task."""
+    todo = _doc()
+    _patch(monkeypatch, matched={todo.id: 4})
+
+    async def boom(ids, user_id):
+        raise RuntimeError("Cloud Tasks unavailable")
+
+    monkeypatch.setattr(ri, "_dispatch", boom)
+    db = FakeSession(responders=[("FROM documents", FakeResult(items=[todo]))])
+    out = asyncio.run(ri.prepare_pages_bulk(4, FolderAddDocuments(doc_ids=[todo.id]), db=db, user=FakeUser()))
+    assert todo.imaging_status == "failed" and "could not start" in todo.imaging_error
+    assert out["queued"] == 0 and out["failed_to_start"] == 1

@@ -16,10 +16,11 @@ import asyncio
 import io
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, update
 
 from app.models import Document, Redaction
 from app.services.email_pages import render_email_pages
@@ -29,6 +30,10 @@ from app.services.storage import get_download_bytes
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff"}
+# A queued/running job older than this is dead and may be claimed again
+# (Cloud Tasks' dispatch deadline is 30 minutes). Running jobs are timed
+# from when a worker claimed them, not from when they were queued.
+STALE_IMAGING = timedelta(minutes=35)
 Kind = Literal["email", "pdf", "image"]
 
 
@@ -94,6 +99,12 @@ async def image_document(db, doc_id: UUID) -> None:
     doc = await db.get(Document, doc_id)
     if doc is None:
         return
+    if doc.image_paths:
+        # Duplicate or retried task for a document that already has pages.
+        if doc.imaging_status in ("queued", "running"):
+            doc.imaging_status = "done"
+            await db.commit()
+        return
     kind = imaging_kind(doc)
     redactions = (await db.execute(
         select(func.count(Redaction.id)).where(Redaction.document_id == doc_id)
@@ -114,8 +125,22 @@ async def image_document(db, doc_id: UUID) -> None:
             .order_by(Document.bates_begin)
         )).all() if n]
 
-    doc.imaging_status = "running"
-    doc.imaging_error = None
+    # Claim the job: only one worker may move it to running.
+    now = datetime.now(timezone.utc)
+    claimed = (await db.execute(
+        update(Document)
+        .where(Document.id == doc_id, or_(
+            Document.imaging_status.is_(None),
+            Document.imaging_status.in_(("queued", "failed")),
+            and_(Document.imaging_status == "running",
+                 Document.imaging_requested_at < now - STALE_IMAGING),
+        ))
+        .values(imaging_status="running", imaging_error=None, imaging_requested_at=now)
+        .execution_options(synchronize_session=False)
+    )).rowcount
+    if not claimed:
+        return
+    doc.imaging_status, doc.imaging_error, doc.imaging_requested_at = "running", None, now
     # Release the connection before minutes of rendering/OCR: Neon kills
     # connections idling inside a transaction (PR #87/#88).
     await db.commit()
@@ -126,6 +151,16 @@ async def image_document(db, doc_id: UUID) -> None:
         logger.exception("Imaging failed for %s", doc.bates_begin)
         doc.imaging_status = "failed"
         doc.imaging_error = str(e)[:500] or e.__class__.__name__
+        await db.commit()
+        return
+    # A box saved while pages were being prepared was drawn on the old page
+    # numbering; never put new pages under it.
+    late = (await db.execute(
+        select(func.count(Redaction.id)).where(Redaction.document_id == doc_id)
+    )).scalar() or 0
+    if late:
+        doc.imaging_status = "failed"
+        doc.imaging_error = "redactions were added while pages were being prepared"
         await db.commit()
         return
     doc.image_paths = image_paths

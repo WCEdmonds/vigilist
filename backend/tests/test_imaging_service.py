@@ -95,6 +95,7 @@ def _session(doc, redactions=0):
     return FakeSession(
         get_objects={("Document", doc.id): doc},
         responders=[
+            ("UPDATE documents", FakeResult(rowcount=1)),
             ("count(redactions.id)", FakeResult(scalar=redactions)),
             ("documents.file_name", FakeResult(rows=[])),
         ],
@@ -137,3 +138,43 @@ def test_image_document_commits_before_heavy_work_and_writes_results(monkeypatch
     assert doc.image_paths == ["productions/4/converted/a.jpg"] and doc.page_count == 1
     assert doc.imaged_from == "email" and doc.header_regions == {"subject": {}}
     assert db.commits == 2
+
+
+def _claiming_session(doc, counts=(0, 0), claimed=1):
+    seq = list(counts)
+
+    def count(sql):
+        return FakeResult(scalar=seq.pop(0) if seq else 0)
+
+    return FakeSession(
+        get_objects={("Document", doc.id): doc},
+        responders=[
+            ("UPDATE documents", FakeResult(rowcount=claimed)),
+            ("count(redactions.id)", count),
+            ("documents.file_name", FakeResult(rows=[])),
+        ],
+    )
+
+
+def test_image_document_is_idempotent_once_imaged(monkeypatch):
+    """I-2: a duplicate/retried run must not overwrite a good result."""
+    doc = _doc(image_paths=["productions/4/converted/a.jpg"], imaging_status="done")
+    monkeypatch.setattr(im, "build_pages", lambda *a, **k: pytest.fail("must not rebuild"))
+    asyncio.run(im.image_document(_claiming_session(doc), doc.id))
+    assert doc.imaging_status == "done" and doc.imaging_error is None
+
+
+def test_image_document_skips_when_another_worker_claimed_it(monkeypatch):
+    doc = _doc(imaging_status="queued")
+    monkeypatch.setattr(im, "build_pages", lambda *a, **k: pytest.fail("must not rebuild"))
+    asyncio.run(im.image_document(_claiming_session(doc, claimed=0), doc.id))
+    assert doc.imaging_status == "queued"
+
+
+def test_image_document_refuses_redaction_added_while_imaging(monkeypatch):
+    """I-7: a box saved during imaging must never end up on new pages."""
+    doc = _doc(imaging_status="queued")
+    monkeypatch.setattr(im, "build_pages", lambda *a, **k: (["p.jpg"], ["p.json"], 1, None))
+    asyncio.run(im.image_document(_claiming_session(doc, counts=(0, 1)), doc.id))
+    assert doc.image_paths == [] and doc.imaging_status == "failed"
+    assert "redaction" in doc.imaging_error
