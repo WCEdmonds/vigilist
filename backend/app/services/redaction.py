@@ -18,6 +18,13 @@ def is_valid_reason_code(code: str) -> bool:
     return code in REDACTION_REASON_CODES
 
 
+def page_limit(doc) -> int:
+    """Pages a redaction may target: the page images when the document has
+    them (imaging can add pages beyond the ingest page_count)."""
+    images = getattr(doc, "image_paths", None) or []
+    return len(images) if images else doc.page_count
+
+
 def validate_rect(
     page_num: int,
     x_pct: float,

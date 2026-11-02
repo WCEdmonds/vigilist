@@ -18,7 +18,7 @@ from app.schemas import (
 )
 from app.services.audit import log_action
 from app.services.privilege import qc_status
-from app.services.redaction import is_valid_reason_code, validate_rect
+from app.services.redaction import is_valid_reason_code, page_limit, validate_rect
 
 router = APIRouter(prefix="/api", tags=["redactions"])
 
@@ -31,6 +31,16 @@ async def _load_accessible_doc(db: AsyncSession, user: User, doc_id: UUID) -> Do
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
     return doc
+
+
+def _refuse_while_imaging(doc) -> None:
+    if getattr(doc, "imaging_status", None) in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="Pages are being prepared; try again when they're ready")
+
+
+def _box(red) -> dict:
+    return {"page_num": red.page_num, "x_pct": red.x_pct, "y_pct": red.y_pct,
+            "w_pct": red.w_pct, "h_pct": red.h_pct, "reason_code": red.reason_code}
 
 
 def _validate_or_422(page_num, x_pct, y_pct, w_pct, h_pct, page_count, reason_code):
@@ -68,8 +78,9 @@ async def create_redaction(
     if role == "readonly":
         raise HTTPException(status_code=403, detail="Read-only access")
 
+    _refuse_while_imaging(doc)
     _validate_or_422(body.page_num, body.x_pct, body.y_pct, body.w_pct, body.h_pct,
-                     doc.page_count, body.reason_code)
+                     page_limit(doc), body.reason_code)
 
     red = Redaction(
         document_id=doc_id,
@@ -121,13 +132,15 @@ async def update_redaction(
     user: User = Depends(get_current_user),
 ):
     red, doc = await _load_redaction_for_write(db, user, redaction_id)
+    _refuse_while_imaging(doc)
+    before = _box(red)
 
     x = body.x_pct if body.x_pct is not None else red.x_pct
     y = body.y_pct if body.y_pct is not None else red.y_pct
     w = body.w_pct if body.w_pct is not None else red.w_pct
     h = body.h_pct if body.h_pct is not None else red.h_pct
     reason = body.reason_code if body.reason_code is not None else red.reason_code
-    _validate_or_422(red.page_num, x, y, w, h, doc.page_count, reason)
+    _validate_or_422(red.page_num, x, y, w, h, page_limit(doc), reason)
 
     red.x_pct, red.y_pct, red.w_pct, red.h_pct = x, y, w, h
     red.reason_code = reason
@@ -136,7 +149,8 @@ async def update_redaction(
 
     await log_action(
         db, user, "redaction_updated", "redaction", str(redaction_id),
-        details={"document_id": str(red.document_id)},
+        production_id=doc.production_id,
+        details={"document_id": str(red.document_id), "before": before, "after": _box(red)},
     )
     await db.commit()
     await db.refresh(red)
@@ -149,12 +163,15 @@ async def delete_redaction(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    red, _doc = await _load_redaction_for_write(db, user, redaction_id)
+    red, doc = await _load_redaction_for_write(db, user, redaction_id)
+    _refuse_while_imaging(doc)
     document_id = red.document_id
+    box = _box(red)
     await db.delete(red)
     await log_action(
         db, user, "redaction_deleted", "redaction", str(redaction_id),
-        details={"document_id": str(document_id)},
+        production_id=doc.production_id,
+        details={"document_id": str(document_id), "box": box},
     )
     await db.commit()
     return {"ok": True}

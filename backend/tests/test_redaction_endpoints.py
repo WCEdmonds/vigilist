@@ -161,3 +161,69 @@ def test_delete_allowed_for_creator(monkeypatch):
     out = asyncio.run(rr.delete_redaction(redaction_id=7, db=db, user=FakeUser("u1")))
     assert out == {"ok": True}
     assert db.deleted == [red]
+
+
+def _capture_log(monkeypatch):
+    seen = []
+
+    async def fake_log(db, user, action, resource_type, resource_id=None, **kwargs):
+        seen.append((action, kwargs))
+
+    monkeypatch.setattr(rr, "log_action", fake_log)
+    return seen
+
+
+def test_create_validates_against_image_count(monkeypatch):
+    _patch_common(monkeypatch, role="reviewer")
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, page_count=1)
+    doc.image_paths = ["a.jpg", "b.jpg", "c.jpg"]
+    db = FakeSession(get_objects={("Document", doc_id): doc})
+    ok = RedactionCreate(page_num=3, x_pct=10, y_pct=10, w_pct=10, h_pct=10, reason_code="pii")
+    assert asyncio.run(rr.create_redaction(doc_id=doc_id, body=ok, db=db, user=FakeUser("u1"))).page_num == 3
+    bad = RedactionCreate(page_num=4, x_pct=10, y_pct=10, w_pct=10, h_pct=10, reason_code="pii")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rr.create_redaction(doc_id=doc_id, body=bad, db=db, user=FakeUser("u1")))
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_create_and_update_refused_while_imaging(monkeypatch, status):
+    _patch_common(monkeypatch, role="manager")
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id)
+    doc.imaging_status = status
+    red = FakeRedaction(5, doc_id, created_by="u1")
+    db = FakeSession(get_objects={("Document", doc_id): doc, ("Redaction", 5): red})
+    body = RedactionCreate(page_num=1, x_pct=10, y_pct=10, w_pct=10, h_pct=10, reason_code="pii")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rr.create_redaction(doc_id=doc_id, body=body, db=db, user=FakeUser("u1")))
+    assert exc.value.status_code == 409 and "being prepared" in exc.value.detail
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rr.update_redaction(redaction_id=5, body=RedactionUpdate(x_pct=20), db=db, user=FakeUser("u1")))
+    assert exc.value.status_code == 409
+
+
+def test_update_audit_records_production_and_before_after(monkeypatch):
+    _patch_common(monkeypatch, role="reviewer")
+    seen = _capture_log(monkeypatch)
+    doc_id = uuid4()
+    red = FakeRedaction(5, doc_id, created_by="u1")
+    db = FakeSession(get_objects={("Redaction", 5): red, ("Document", doc_id): FakeDoc(doc_id, production_id=7)})
+    asyncio.run(rr.update_redaction(redaction_id=5, body=RedactionUpdate(x_pct=20), db=db, user=FakeUser("u1")))
+    action, kw = seen[0]
+    assert action == "redaction_updated" and kw["production_id"] == 7
+    assert kw["details"]["before"]["x_pct"] == 10.0 and kw["details"]["after"]["x_pct"] == 20
+
+
+def test_delete_audit_records_production_and_box(monkeypatch):
+    _patch_common(monkeypatch, role="reviewer")
+    seen = _capture_log(monkeypatch)
+    doc_id = uuid4()
+    red = FakeRedaction(5, doc_id, created_by="u1")
+    db = FakeSession(get_objects={("Redaction", 5): red, ("Document", doc_id): FakeDoc(doc_id, production_id=7)})
+    asyncio.run(rr.delete_redaction(redaction_id=5, db=db, user=FakeUser("u1")))
+    action, kw = seen[0]
+    assert action == "redaction_deleted" and kw["production_id"] == 7
+    assert kw["details"]["box"] == {"page_num": 1, "x_pct": 10.0, "y_pct": 10.0, "w_pct": 10.0,
+                                    "h_pct": 10.0, "reason_code": "pii"}
