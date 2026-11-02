@@ -1428,5 +1428,8 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         note_count=note_count,
         annotation_count=annotation_count,
         redaction_count=redaction_count,
+        imaging_status=getattr(doc, "imaging_status", None),
+        imaging_error=getattr(doc, "imaging_error", None),
+        image_count=len(doc.image_paths or []),
         **parent_fields(parents.get(doc.id)),
     )
