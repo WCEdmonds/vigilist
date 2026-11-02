@@ -342,7 +342,8 @@ def test_dat_blanks_header_fields_a_redaction_covers():
         ("FROM documents", FakeResult(items=[doc])),
     ])
     row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
-    assert row["SUBJECT"] == "" and row["REDACTEDFIELDS"] == "SUBJECT"
+    assert row["SUBJECT"] == "" and row["FILENAME"] == ""
+    assert row["REDACTEDFIELDS"] == "FILENAME; SUBJECT"
     assert row["FROM"] == "a@x.com" and row["BCC"] == "counsel@acme.example"
 
 
@@ -374,3 +375,28 @@ def test_package_set_refuses_on_redaction_drift(monkeypatch):
                      responders=[("FROM production_set_items", FakeResult(items=items))])
     asyncio.run(pe.package_set(db, 1))
     assert ps.package_status == "error" and "changed after lock" in ps.package_error
+
+
+def test_dat_blanking_covers_every_column_carrying_the_value():
+    """I-5: a covered Date also blanks DATERECEIVED; a covered Subject also
+    blanks an email's FILENAME (exports are often named after the subject)."""
+    from types import SimpleNamespace
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "redact_in_part", sort_order=1)]
+    doc = FakeDoc(d1, email_subject="ACME settlement", file_name="ACME settlement.msg", file_type="email")
+    doc.email_bcc = None
+    doc.date_received = TS
+    doc.header_regions = {
+        "date": [{"page": 1, "x": 10.0, "y": 11.0, "w": 80.0, "h": 2.0}],
+        "subject": [{"page": 1, "x": 10.0, "y": 14.0, "w": 80.0, "h": 2.0}],
+    }
+    reds = [SimpleNamespace(document_id=d1, page_num=1, x_pct=30.0, y_pct=y, w_pct=20.0, h_pct=1.0)
+            for y in (11.5, 14.5)]
+    db = FakeSession(responders=[
+        ("FROM redactions", FakeResult(items=reds)),
+        ("FROM documents", FakeResult(items=[doc])),
+    ])
+    row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
+    assert row["DATESENT"] == "" and row["DATERECEIVED"] == ""
+    assert row["SUBJECT"] == "" and row["FILENAME"] == ""
+    assert row["REDACTEDFIELDS"] == "DATERECEIVED; DATESENT; FILENAME; SUBJECT"

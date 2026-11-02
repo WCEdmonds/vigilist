@@ -99,11 +99,11 @@ async def build_dat_rows(db: AsyncSession, ps: ProductionSet, items,
                     and bool(doc.text_content))
         info = (doc_paths or {}).get(item.document_id, {})
         # Header lines covered by a redaction on the page are blanked here too.
-        blanked = sorted(
+        blanked = sorted({
             col for f in blanked_fields(getattr(doc, "header_regions", None),
                                         reds.get(item.document_id, []))
-            if (col := FIELD_COLUMNS.get(f))
-        ) if item.disposition == "redact_in_part" else []
+            for col in FIELD_COLUMNS.get(f, ())
+        }) if item.disposition == "redact_in_part" else []
         row = {
             "BEGBATES": item.bates_begin,
             "ENDBATES": item.bates_end,

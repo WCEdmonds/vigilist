@@ -9,9 +9,12 @@ still carry their filenames). Pure.
 
 from __future__ import annotations
 
-# Header field -> DAT column it blanks (attachments: none on the parent row).
-FIELD_COLUMNS = {"from": "FROM", "to": "TO", "cc": "CC", "bcc": "BCC",
-                 "date": "DATESENT", "subject": "SUBJECT", "attachments": None}
+# Header field -> every DAT column carrying its value (attachments: none on
+# the parent row). An email's FILENAME is often its subject (Outlook names
+# exports after it), so a covered Subject blanks it too.
+FIELD_COLUMNS = {"from": ("FROM",), "to": ("TO",), "cc": ("CC",), "bcc": ("BCC",),
+                 "date": ("DATESENT", "DATERECEIVED"), "subject": ("SUBJECT", "FILENAME"),
+                 "attachments": ()}
 
 
 def _overlaps(region: dict, red) -> bool:
