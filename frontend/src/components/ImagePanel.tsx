@@ -54,11 +54,9 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
     for (let i = 0; i < Math.min(CONCURRENCY, pageCount); i++) void worker();
     return () => {
       cancelled = true;
-      // Revoke old blob URLs
-      setBlobUrls(prev => {
-        Object.values(prev).forEach(url => URL.revokeObjectURL(url));
-        return {};
-      });
+      // Don't revoke: fetchImageBlob's cache still hands these URLs out (it
+      // revokes on eviction); revoking here left reopened documents blank.
+      setBlobUrls({});
     };
   }, [docId, pageCount]);
 
