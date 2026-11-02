@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, ProductionSet, ProductionSetItem, Redaction
 from app.services import storage
+from app.services.redaction_drift import drift_message, redaction_drift
 from app.services.redacted_metadata import FIELD_COLUMNS, blanked_fields
 from app.services.redacted_text import load_sidecars, produced_text
 from app.services.loadfile_export import (
@@ -195,6 +196,9 @@ async def package_set(db: AsyncSession, set_id: int) -> None:
         )).scalars().all()
         if not items:
             raise RuntimeError("Production set has no members")
+        drifted = await redaction_drift(db, ps, items)
+        if drifted:
+            raise RuntimeError(drift_message(drifted))
         docs = await _docs_by_id(db, items)
         redacted_ids = [i.document_id for i in items if i.disposition == "redact_in_part"]
         reds_by_doc: dict = {}

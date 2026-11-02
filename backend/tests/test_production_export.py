@@ -293,6 +293,11 @@ def _redacted_package(monkeypatch, ocr_paths):
 
     monkeypatch.setattr(pe.storage, "get_download_bytes", fake_download)
     monkeypatch.setattr(pe.storage, "upload_file", _capture_upload(captured))
+
+    async def no_drift(db, ps, items):
+        return []
+
+    monkeypatch.setattr(pe, "redaction_drift", no_drift)
     ps = FakePS()
     db = FakeSession(
         get_objects={("ProductionSet", 1): ps},
@@ -353,3 +358,19 @@ def test_dat_columns_include_bcc_and_redactedfields_in_order():
     from app.services.loadfile_export import DAT_COLUMNS
     assert DAT_COLUMNS.index("BCC") == DAT_COLUMNS.index("CC") + 1
     assert DAT_COLUMNS.index("REDACTEDFIELDS") == DAT_COLUMNS.index("REDACTED") + 1
+
+
+def test_package_set_refuses_on_redaction_drift(monkeypatch):
+    """C-1: packaging re-checks drift itself (tasks already queued)."""
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "redact_in_part", sort_order=1)]
+
+    async def fake_drift(db, ps, items):
+        return ["SMITH000001"]
+
+    monkeypatch.setattr(pe, "redaction_drift", fake_drift)
+    ps = FakePS()
+    db = FakeSession(get_objects={("ProductionSet", 1): ps},
+                     responders=[("FROM production_set_items", FakeResult(items=items))])
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "error" and "changed after lock" in ps.package_error

@@ -663,6 +663,14 @@ async def package_production_set(
         raise HTTPException(status_code=409, detail="Production set must be rendered before packaging")
     if ps.package_status == "packaging":
         raise HTTPException(status_code=409, detail="Packaging already in progress")
+    # Text and load-file fields are rebuilt from the current redactions, so a
+    # box changed after render would let its words out next to burned pages.
+    set_items = (await db.execute(
+        select(ProductionSetItem).where(ProductionSetItem.production_set_id == set_id)
+    )).scalars().all()
+    drifted = await redaction_drift(db, ps, set_items)
+    if drifted:
+        raise HTTPException(status_code=409, detail=drift_message(drifted))
     count = (await db.execute(
         select(func.count(ProductionSetItem.id))
         .where(ProductionSetItem.production_set_id == set_id)

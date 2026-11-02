@@ -187,3 +187,14 @@ def test_attachment_without_redacted_parent_line_is_fine():
                     info=[(child, "pdf", "productions/1/attachments/x/a.pdf", None, "C-1", None)],
                     parents=[(parent, "C-1", regions)], parent_reds=[]), [child])
     assert out["attachment_names_redacted"] == []
+
+
+def test_native_production_member_needs_no_pages():
+    """I-3: a PDF shipped natively gets a slip sheet; it needs no page images."""
+    d1 = uuid4()
+    ps = FakePS()
+    ps.native_file_types = ["pdf"]
+    db = _db2([(d1, "C-1 .0001", None, [], None, None)],
+              info=[(d1, "pdf", "productions/1/attachments/x/a.pdf", None, "C-1", None)])
+    out = asyncio.run(pv.compute_conflicts(db, ps, [d1]))
+    assert out["needs_pages"] == [] and out["no_images"] == []

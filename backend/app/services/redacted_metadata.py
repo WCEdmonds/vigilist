@@ -22,9 +22,14 @@ def _overlaps(region: dict, red) -> bool:
 
 
 def blanked_fields(header_regions: dict | None, redactions) -> set[str]:
+    """header_regions: field -> list of {page, x, y, w, h} (one per page the
+    line is on); a single dict is accepted too."""
     if not header_regions:
         return set()
-    return {
-        field for field, region in header_regions.items()
-        if any(r.page_num == region.get("page", 1) and _overlaps(region, r) for r in redactions)
-    }
+    blanked = set()
+    for field, boxes in header_regions.items():
+        for region in (boxes if isinstance(boxes, list) else [boxes]):
+            if any(r.page_num == region.get("page", 1) and _overlaps(region, r) for r in redactions):
+                blanked.add(field)
+                break
+    return blanked

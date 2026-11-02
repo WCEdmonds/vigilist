@@ -24,11 +24,13 @@ def test_header_regions_cover_each_present_field():
     pages = ep.render_email_pages(_email(), ["budget.xlsx", "notes.pdf"])
     regions = pages.header_regions
     assert set(regions) == {"from", "to", "date", "subject", "attachments"}
-    for r in regions.values():
+    for boxes in regions.values():
+        assert len(boxes) == 1
+        r = boxes[0]
         assert r["page"] == 1
         assert r["x"] >= 0 and r["y"] >= 0
         assert r["x"] + r["w"] <= 100 and r["y"] + r["h"] <= 100
-    assert regions["subject"]["y"] > regions["from"]["y"]
+    assert regions["subject"][0]["y"] > regions["from"][0]["y"]
 
 
 def test_long_body_spans_pages_and_has_text_layer():
@@ -68,3 +70,38 @@ def test_page_cap(monkeypatch):
 def test_non_ascii_subject_survives():
     pages = ep.render_email_pages(_email(email_subject="Café – Q3"), [])
     assert "Café – Q3" in fitz.open(stream=pages.pdf, filetype="pdf")[0].get_text()
+
+
+def test_header_spilling_onto_page_two_records_every_field():
+    """I-1: a long To list pushes Cc/Subject onto page 2; their lines are still recorded."""
+    to = "; ".join(f"person{i}@acme.example" for i in range(1500))
+    pages = ep.render_email_pages(_email(email_to=to, email_cc="carol@acme.example"), ["a.pdf"])
+    regions = pages.header_regions
+    assert {"from", "to", "cc", "subject", "attachments"} <= set(regions)
+    subject_pages = {r["page"] for r in regions["subject"]}
+    assert subject_pages and min(subject_pages) >= 2
+    assert len({r["page"] for r in regions["to"]}) >= 2   # the To line spans pages
+
+
+def _all_text(pages):
+    return "".join(p.get_text() for p in fitz.open(stream=pages.pdf, filetype="pdf"))
+
+
+def test_long_header_line_keeps_every_recipient():
+    to = "; ".join(f"person{i}@acme.example" for i in range(1500))
+    text = _all_text(ep.render_email_pages(_email(email_to=to), []))
+    assert all(f"person{i}@acme.example" in text for i in range(1500))
+
+
+def test_long_plain_text_body_is_not_truncated():
+    body = "\n".join(f"Line {i} of the ACME memo." for i in range(3000))
+    text = _all_text(ep.render_email_pages(_email(text_content=body), []))
+    assert "Line 0 of" in text and "Line 2999 of" in text
+    assert all(f"Line {i} of" in text for i in range(0, 3000, 97))
+
+
+def test_html_body_in_one_tall_block_is_laid_out_completely():
+    words = " ".join(f"word{i}" for i in range(20000))
+    html = f"<table><tr><td><div><p>{words}</p></div></td></tr></table>"
+    text = _all_text(ep.render_email_pages(_email(email_body_html=html, text_content=words), []))
+    assert "word0" in text and "word19999" in text

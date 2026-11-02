@@ -59,3 +59,16 @@ def test_redactions_on_a_produce_item():
 def test_pre_release_item_without_snapshot_skips_count_check():
     d = uuid4()
     assert _run([_item(d, "ACME000001", count=None)], [(d, 1, LOCKED - timedelta(hours=1))]) == []
+
+
+def test_overridden_produce_with_unchanged_redactions_is_not_drift():
+    """I-4: an audited 'produce' override of a redacted doc renders as overridden."""
+    d = uuid4()
+    items = [_item(d, "ACME000001", disposition="produce", count=2)]
+    assert _run(items, [(d, 2, LOCKED - timedelta(hours=1))]) == []
+
+
+def test_redactions_added_to_a_produce_item_after_lock_are_drift():
+    d = uuid4()
+    items = [_item(d, "ACME000001", disposition="produce", count=0)]
+    assert _run(items, [(d, 1, LOCKED + timedelta(minutes=1))]) == ["ACME000001"]

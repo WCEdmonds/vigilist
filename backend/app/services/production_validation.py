@@ -115,7 +115,10 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
                 "detail": "privilege-tagged document would be produced unredacted"})
         file_type, native_path, imaging_status, family_id, _hr = info.get(
             did, (None, None, None, None, None))
-        if disposition != "withhold" and not image_paths:
+        # Same predicate as lock: produce + native + chosen type ships natively.
+        ships_native = bool(disposition == "produce" and native_path
+                            and file_type in (getattr(ps, "native_file_types", None) or []))
+        if disposition != "withhold" and not image_paths and not ships_native:
             probe = type("D", (), dict(image_paths=[], file_type=file_type, native_path=native_path))
             if imaging_kind(probe) is not None or imaging_status in ("queued", "running"):
                 out["needs_pages"].append({

@@ -35,12 +35,13 @@ def test_email_redaction_pipeline(monkeypatch):
     images, ocrs, count, regions = im.build_pages(doc, "email", [], ocr_fn=lambda jpeg: None)
     sidecar = json.loads(stored[ocrs[0]])
     acct = next(w for w in sidecar["words"] if w["t"].startswith("4417"))
-    subj = regions["subject"]
+    subj = regions["subject"][0]
     reds = [_box(1, subj["x"], subj["y"], subj["w"], subj["h"]),
             _box(1, acct["x"], acct["y"], acct["w"], acct["h"])]
 
     page = burn_page(Image.open(io.BytesIO(stored[images[0]])), reds)
-    cx = int((acct["x"] + acct["w"] / 2) / 100 * page.width)
+    # Just inside the box's left edge: the centre carries the white reason label.
+    cx = int((acct["x"] + acct["w"] * 0.05) / 100 * page.width) + 2
     cy = int((acct["y"] + acct["h"] / 2) / 100 * page.height)
     assert page.convert("L").getpixel((cx, cy)) < 40
 

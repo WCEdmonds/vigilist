@@ -34,3 +34,10 @@ def test_tall_box_blanks_every_line_it_crosses():
 
 def test_no_regions():
     assert blanked_fields(None, [_red()]) == set()
+
+
+def test_field_spanning_pages_blanks_when_any_part_is_covered():
+    regions = {"to": [{"page": 1, "x": 10.0, "y": 80.0, "w": 80.0, "h": 15.0},
+                      {"page": 2, "x": 10.0, "y": 5.0, "w": 80.0, "h": 10.0}]}
+    assert blanked_fields(regions, [_red(page=2, x=20, y=6, w=10, h=2)]) == {"to"}
+    assert blanked_fields(regions, [_red(page=3, x=20, y=6, w=10, h=2)]) == set()

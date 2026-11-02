@@ -1035,3 +1035,20 @@ def test_unlock_requires_manager(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(rps.unlock_production_set(set_id=1, db=db, user=FakeUser()))
     assert exc.value.status_code == 403
+
+
+def test_package_refuses_on_redaction_drift(monkeypatch):
+    """C-1: a box deleted after render must not let packaging ship its text."""
+    _patch(monkeypatch)
+
+    async def fake_drift(db, ps, items):
+        return ["SMITH000001"]
+
+    monkeypatch.setattr(rps, "redaction_drift", fake_drift)
+    ps = FakePS(status="locked", render_status="rendered")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps},
+                     responders=[("production_set_items", FakeResult(items=[FakeItem(uuid4(), item_id=1)]))])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.package_production_set(set_id=1, background_tasks=None, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409 and "SMITH000001" in exc.value.detail
+    assert ps.package_status == "not_started"

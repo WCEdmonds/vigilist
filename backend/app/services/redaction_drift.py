@@ -32,7 +32,11 @@ async def redaction_drift(db, ps, items) -> list[str]:
     drifted = []
     for item in items:
         n, latest = current.get(item.document_id, (0, None))
-        if n and (item.disposition == "produce" or getattr(item, "produce_native", False)):
+        snapshot = getattr(item, "redaction_count", None)
+        produced_whole = item.disposition == "produce" or getattr(item, "produce_native", False)
+        # A produce item may carry redactions only through an audited override
+        # at lock (snapshot > 0); redactions it gained afterwards are drift.
+        if n and produced_whole and not snapshot:
             drifted.append(item.bates_begin)
         elif getattr(item, "redaction_count", None) is not None and n != item.redaction_count:
             drifted.append(item.bates_begin)
