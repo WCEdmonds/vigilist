@@ -526,11 +526,11 @@ def test_render_trigger_batches_and_fallback(monkeypatch):
     _patch(monkeypatch)
     monkeypatch.setattr(rps.tasks, "is_configured", lambda: False)
     ps = FakePS(status="locked")
-    doc_ids = [(uuid4(),) for _ in range(30)]
+    items = [FakeItem(uuid4(), item_id=n) for n in range(30)]
     bg = FakeBackgroundTasks()
     db = FakeSession(
         get_objects={("ProductionSet", 1): ps},
-        responders=[("production_set_items", FakeResult(rows=doc_ids))],
+        responders=[("production_set_items", FakeResult(items=items))],
     )
     out = asyncio.run(rps.render_production_set(
         set_id=1, background_tasks=bg, db=db, user=FakeUser()))
@@ -966,3 +966,72 @@ def test_lock_snapshots_redaction_count(monkeypatch):
                                         db=db, user=FakeUser()))
     by_doc = {i.document_id: i for i in items}
     assert by_doc[d1].redaction_count == 2 and by_doc[d2].redaction_count == 0
+
+
+def test_render_refuses_on_redaction_drift(monkeypatch):
+    _patch(monkeypatch)
+
+    async def fake_drift(db, ps, items):
+        return ["SMITH000001", "SMITH000004"]
+
+    monkeypatch.setattr(rps, "redaction_drift", fake_drift)
+    ps = FakePS(status="locked")
+    db = FakeSession(get_objects={("ProductionSet", 1): ps},
+                     responders=[("production_set_items", FakeResult(items=[FakeItem(uuid4(), item_id=1)]))])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.render_production_set(set_id=1, background_tasks=None, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+    assert "SMITH000001, SMITH000004" in exc.value.detail and "unlock" in exc.value.detail
+    assert ps.render_status == "not_started"
+
+
+def test_render_item_refuses_on_drift(monkeypatch):
+    import app.services.production_render as pr
+
+    async def fake_drift(db, ps, items):
+        return ["SMITH000001"]
+
+    monkeypatch.setattr(pr, "redaction_drift", fake_drift)
+    item = FakeItem(uuid4(), bates_begin="SMITH000001", disposition="redact_in_part")
+    item.redaction_count = 2
+    db = FakeSession(get_objects={("Document", item.document_id): object()})
+    with pytest.raises(RuntimeError, match="changed after lock"):
+        asyncio.run(pr.render_item(db, FakePS(status="locked"), item))
+
+
+def test_unlock_releases_bates_and_clears_render(monkeypatch):
+    _patch(monkeypatch)
+    deleted = []
+    monkeypatch.setattr(rps, "delete_prefix", lambda prefix: deleted.append(prefix) or 0)
+    ps = FakePS(status="locked", render_status="rendered")
+    ps.locked_by, ps.locked_at = "u1", TS
+    ps.conflicts_overridden_by = "u1"
+    item = FakeItem(uuid4(), item_id=1, sort_order=1, bates_begin="SMITH000001",
+                    bates_end="SMITH000003", pages=3, disposition="produce",
+                    output_path="productions/1/production_sets/1/SMITH000001.pdf")
+    item.redaction_count = 0
+    db = FakeSession(get_objects={("ProductionSet", 1): ps},
+                     responders=[("production_set_items", FakeResult(items=[item]))])
+    out = asyncio.run(rps.unlock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert ps.status == "draft" and ps.locked_at is None and ps.render_status == "not_started"
+    assert ps.conflicts_overridden_by is None
+    assert (item.bates_begin, item.pages, item.disposition, item.output_path, item.redaction_count) == \
+        (None, None, None, None, None)
+    assert deleted == ["productions/1/production_sets/1/"]
+    assert out.status == "draft"
+
+
+def test_unlock_refused_once_packaged(monkeypatch):
+    _patch(monkeypatch)
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="locked", package_status="packaged")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.unlock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+
+
+def test_unlock_requires_manager(monkeypatch):
+    _patch(monkeypatch, role="reviewer")
+    db = FakeSession(get_objects={("ProductionSet", 1): FakePS(status="locked")})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.unlock_production_set(set_id=1, db=db, user=FakeUser()))
+    assert exc.value.status_code == 403

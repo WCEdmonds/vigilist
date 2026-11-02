@@ -1,5 +1,6 @@
 """Production sets: deliverable volumes with draft->lock Bates assignment (P2-1)."""
 
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -39,7 +40,8 @@ from app.services.privilege import effective_disposition
 from app.services.production_export import compute_manifest, package_set
 from app.services.production_render import finalize_if_complete, render_batch
 from app.services.production_validation import NON_OVERRIDABLE, compute_conflicts
-from app.services.storage import get_signed_url
+from app.services.redaction_drift import drift_message, redaction_drift
+from app.services.storage import delete_prefix, get_signed_url
 from app.services.production_numbering import (
     SORT_KEYS,
     MemberInfo,
@@ -47,6 +49,8 @@ from app.services.production_numbering import (
     order_members,
     pages_for,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["production-sets"])
 
@@ -494,12 +498,15 @@ async def render_production_set(
     if ps.render_status == "rendering":
         raise HTTPException(status_code=409, detail="Render already in progress")
 
-    rows = (await db.execute(
-        select(ProductionSetItem.document_id)
+    items = (await db.execute(
+        select(ProductionSetItem)
         .where(ProductionSetItem.production_set_id == set_id)
         .order_by(ProductionSetItem.sort_order)
-    )).all()
-    doc_ids = [r[0] for r in rows]
+    )).scalars().all()
+    drifted = await redaction_drift(db, ps, items)
+    if drifted:
+        raise HTTPException(status_code=409, detail=drift_message(drifted))
+    doc_ids = [i.document_id for i in items]
     if not doc_ids:
         raise HTTPException(status_code=422, detail="Production set has no members")
 
@@ -535,6 +542,50 @@ async def _render_inline(set_id: int, batches):
         for batch in batches:
             await render_batch(db, set_id, batch)
         await finalize_if_complete(db, set_id)
+
+
+@router.post("/production-sets/{set_id}/unlock", response_model=ProductionSetOut)
+async def unlock_production_set(
+    set_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Back to draft: releases the Bates numbers and discards rendered pages.
+    Refused once packaged — a packaged volume may have been delivered."""
+    ps = await _load_set(db, user, set_id, require_manager=True)
+    if ps.status != "locked":
+        raise HTTPException(status_code=409, detail="Production set is not locked")
+    if ps.package_status not in (None, "not_started", "error"):
+        raise HTTPException(status_code=409,
+                            detail="This set has been packaged; build a new set instead")
+    if ps.render_status == "rendering":
+        raise HTTPException(status_code=409, detail="Render in progress; wait for it to finish")
+
+    items = (await db.execute(
+        select(ProductionSetItem).where(ProductionSetItem.production_set_id == set_id)
+        .order_by(ProductionSetItem.sort_order)
+    )).scalars().all()
+    released = ({"begin": items[0].bates_begin, "end": items[-1].bates_end}
+                if items and items[0].bates_begin else None)
+    for item in items:
+        for field in ("sort_order", "bates_begin", "bates_end", "pages", "disposition",
+                      "designation", "redaction_count", "output_path"):
+            setattr(item, field, None)
+        item.produce_native = False
+    ps.status = "draft"
+    ps.locked_by = ps.locked_at = None
+    ps.render_status, ps.render_error, ps.rendered_at = "not_started", None, None
+    ps.package_status, ps.package_error = "not_started", None
+    ps.conflicts_overridden_by = ps.conflicts_overridden_at = None
+    await log_action(db, user, "production_set_unlocked", "production_set", str(set_id),
+                     production_id=ps.production_id, details={"released": released})
+    await db.commit()
+    try:
+        delete_prefix(f"productions/{ps.production_id}/production_sets/{set_id}/")
+    except Exception:
+        # Orphaned under the set's prefix; re-render overwrites by Bates name.
+        logger.exception("Could not delete rendered files for set %s", set_id)
+    return await get_production_set(set_id, db=db, user=user)
 
 
 @router.post("/production-sets/render-batch")
