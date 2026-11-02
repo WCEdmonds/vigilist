@@ -919,3 +919,50 @@ def test_lock_takes_each_documents_designation_from_its_tags(monkeypatch):
     assert by_doc[d1].designation == "CONFIDENTIAL"
     assert by_doc[d2].designation == "CONFIDENTIAL – ATTORNEYS' EYES ONLY"
     assert by_doc[d3].designation is None   # falls back to the set's default at render
+
+
+def test_lock_refuses_needs_pages_even_with_override(monkeypatch):
+    _patch(monkeypatch)
+    from app.schemas import ProductionSetLockRequest
+    d1 = uuid4()
+
+    async def fake_conflicts(db, ps, doc_ids):
+        return {"needs_pages": [{"document_id": str(d1), "control_number": "C-1", "detail": "x"}],
+                "qc_pending": [], "total": 1}
+
+    monkeypatch.setattr(rps, "compute_conflicts", fake_conflicts)
+    ps = FakePS()
+    db = FakeSession(get_objects={("ProductionSet", 1): ps},
+                     responders=[("production_set_items", FakeResult(items=[FakeItem(d1, item_id=1)]))])
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(rps.lock_production_set(set_id=1, body=ProductionSetLockRequest(override_conflicts=True),
+                                            db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+    assert "Prepare pages for 1 document" in exc.value.detail
+    assert ps.status == "draft"
+
+
+def test_lock_snapshots_redaction_count(monkeypatch):
+    _patch(monkeypatch)
+    from app.schemas import ProductionSetLockRequest
+    d1, d2 = uuid4(), uuid4()
+    items = [FakeItem(d1, item_id=1), FakeItem(d2, item_id=2)]
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): FakePS()},
+        responders=[
+            ("coalesce", FakeResult(rows=[(d1, 2, TS)])),
+            ("redaction_qc_decisions", FakeResult()),
+            ("production_set_items", FakeResult(items=items)),
+            ("documents.image_paths", FakeResult(rows=[(d1, "C-1", None, ["p1.jpg"], None, None),
+                                                       (d2, "C-2", None, ["p1.jpg"], None, None)])),
+            ("is_privilege", FakeResult()),
+            ("redactions", FakeResult(rows=[(d1, 2)])),
+            ("documents.page_count", FakeResult(rows=[
+                (d1, "C-1", None, None, TS, None, 3, None, "email", None),
+                (d2, "C-2", None, None, TS, None, 1, None, "email", None)])),
+        ],
+    )
+    asyncio.run(rps.lock_production_set(set_id=1, body=ProductionSetLockRequest(override_conflicts=True),
+                                        db=db, user=FakeUser()))
+    by_doc = {i.document_id: i for i in items}
+    assert by_doc[d1].redaction_count == 2 and by_doc[d2].redaction_count == 0

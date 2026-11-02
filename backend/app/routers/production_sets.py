@@ -38,7 +38,7 @@ from app.services.oidc import verify_cloud_tasks_request
 from app.services.privilege import effective_disposition
 from app.services.production_export import compute_manifest, package_set
 from app.services.production_render import finalize_if_complete, render_batch
-from app.services.production_validation import compute_conflicts
+from app.services.production_validation import NON_OVERRIDABLE, compute_conflicts
 from app.services.storage import get_signed_url
 from app.services.production_numbering import (
     SORT_KEYS,
@@ -373,6 +373,11 @@ async def lock_production_set(
     doc_ids = [i.document_id for i in items]
 
     conflicts = await compute_conflicts(db, ps, doc_ids)
+    blocking = sum(len(conflicts.get(k) or []) for k in NON_OVERRIDABLE)
+    if blocking:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Prepare pages for {blocking} document{'' if blocking == 1 else 's'} before locking")
     if conflicts["total"]:
         counts = {k: len(v) for k, v in conflicts.items() if k != "total"}
         if not (body and body.override_conflicts):
@@ -452,6 +457,8 @@ async def lock_production_set(
         item.bates_begin = begin
         item.bates_end = end
         item.disposition, item.pages, item.produce_native = meta[did]
+        # Snapshot for render: redactions that change after lock are refused.
+        item.redaction_count = red_counts.get(did, 0)
         # None falls back to the set's default designation when rendering.
         item.designation = combine_designations(tag_designations.get(did, []))
 

@@ -18,13 +18,20 @@ from app.models import (
     RedactionQCDecision,
     Tag,
 )
+from app.services.families import is_attachment
+from app.services.imaging import imaging_kind
 from app.services.privilege import effective_disposition, qc_status
+from app.services.redacted_metadata import blanked_fields
+
+# Conflicts no override can wave through: lock must wait for them to clear.
+NON_OVERRIDABLE = frozenset({"needs_pages"})
 
 
 async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
                             doc_ids: list) -> dict:
     out: dict = {"qc_pending": [], "privilege_produce": [], "no_images": [],
-                 "received_document": [], "total": 0}
+                 "received_document": [], "needs_pages": [], "redactions_overridden": [],
+                 "attachment_names_redacted": [], "total": 0}
     if not doc_ids:
         return out
 
@@ -48,6 +55,31 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
         .group_by(Redaction.document_id)
     )).all()
     reds = {r[0]: (r[1], r[2]) for r in red_rows}
+
+    # Imaging state + family, kept out of doc_rows' fixed tuple.
+    info = {r[0]: r[1:] for r in (await db.execute(
+        select(Document.id, Document.file_type, Document.native_path,
+               Document.imaging_status, Document.family_id, Document.header_regions)
+        .where(Document.id.in_(doc_ids))
+    )).all()}
+    families = {fam for (_ft, _np, _st, fam, _hr) in info.values() if fam}
+    parents: dict = {}
+    if families:
+        parents = {bates: (pid, regions) for pid, bates, regions in (await db.execute(
+            select(Document.id, Document.bates_begin, Document.header_regions)
+            .where(Document.production_id == ps.production_id,
+                   Document.bates_begin.in_(families),
+                   Document.header_regions.is_not(None))
+        )).all()}
+    names_redacted: set = set()
+    if parents:
+        parent_reds: dict = {}
+        for red in (await db.execute(
+            select(Redaction).where(Redaction.document_id.in_([p for p, _ in parents.values()]))
+        )).scalars().all():
+            parent_reds.setdefault(red.document_id, []).append(red)
+        names_redacted = {bates for bates, (pid, regions) in parents.items()
+                          if "attachments" in blanked_fields(regions, parent_reds.get(pid, []))}
 
     latest: dict = {}
     for d in (await db.execute(
@@ -81,16 +113,33 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
             out["privilege_produce"].append({
                 "document_id": str(did), "control_number": control,
                 "detail": "privilege-tagged document would be produced unredacted"})
+        file_type, native_path, imaging_status, family_id, _hr = info.get(
+            did, (None, None, None, None, None))
         if disposition != "withhold" and not image_paths:
-            out["no_images"].append({
+            probe = type("D", (), dict(image_paths=[], file_type=file_type, native_path=native_path))
+            if imaging_kind(probe) is not None or imaging_status in ("queued", "running"):
+                out["needs_pages"].append({
+                    "document_id": str(did), "control_number": control,
+                    "detail": "pages must be prepared before lock"})
+            else:
+                out["no_images"].append({
+                    "document_id": str(did), "control_number": control,
+                    "detail": "no page images — Word/Excel/PowerPoint can't be imaged yet"})
+        if count and override == "produce":
+            out["redactions_overridden"].append({
                 "document_id": str(did), "control_number": control,
-                "detail": "no page images to produce"})
+                "detail": "has redactions but is set to Produce (would ship unredacted)"})
+        if (disposition != "withhold" and family_id and is_attachment(control, family_id)
+                and family_id in names_redacted):
+            out["attachment_names_redacted"].append({
+                "document_id": str(did), "control_number": control,
+                "detail": "attachment names are redacted on the parent email, "
+                          "but this attachment ships its filename"})
         if source_type == "received":
             out["received_document"].append({
                 "document_id": str(did), "control_number": control,
                 "detail": f"received from {source_party or 'another party'} — "
                           "not part of our collection"})
 
-    out["total"] = (len(out["qc_pending"]) + len(out["privilege_produce"])
-                    + len(out["no_images"]) + len(out["received_document"]))
+    out["total"] = sum(len(v) for k, v in out.items() if k != "total")
     return out
