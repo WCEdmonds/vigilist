@@ -20,8 +20,9 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, ProductionSet, ProductionSetItem
+from app.models import Document, ProductionSet, ProductionSetItem, Redaction
 from app.services import storage
+from app.services.redacted_text import load_sidecars, produced_text
 from app.services.loadfile_export import (
     check_continuity,
     dat_bytes,
@@ -176,6 +177,13 @@ async def package_set(db: AsyncSession, set_id: int) -> None:
         if not items:
             raise RuntimeError("Production set has no members")
         docs = await _docs_by_id(db, items)
+        redacted_ids = [i.document_id for i in items if i.disposition == "redact_in_part"]
+        reds_by_doc: dict = {}
+        if redacted_ids:
+            for red in (await db.execute(
+                select(Redaction).where(Redaction.document_id.in_(redacted_ids))
+            )).scalars().all():
+                reds_by_doc.setdefault(red.document_id, {}).setdefault(red.page_num, []).append(red)
         tiff_mode = getattr(ps, "image_format", "pdf") == "tiff"
         max_bytes = (ps.volume_max_mb * 1024 * 1024) if ps.volume_max_mb else None
 
@@ -248,6 +256,12 @@ async def package_set(db: AsyncSession, set_id: int) -> None:
                     if (item.disposition == "produce" and doc is not None
                             and doc.text_content):
                         text_blob = doc.text_content.encode("utf-8")
+                    elif item.disposition == "redact_in_part" and doc is not None:
+                        # Words under the boxes removed; None (no text at all)
+                        # when any page lacks the word positions to know.
+                        text = produced_text(load_sidecars(doc), reds_by_doc.get(item.document_id, {}))
+                        if text is not None:
+                            text_blob = text.encode("utf-8")
 
                     doc_size = (art_bytes + len(native_blob or b"")
                                 + len(text_blob or b""))

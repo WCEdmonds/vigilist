@@ -271,3 +271,51 @@ def test_package_volume_split(monkeypatch):
     manifest = json.loads(zf.read("manifest.json"))
     assert [v["label"] for v in manifest["volumes"]] == ["VOL001", "VOL002"]
     assert all(v["documents"] == 1 for v in manifest["volumes"])
+
+
+def _redacted_package(monkeypatch, ocr_paths):
+    import json as _json
+    from types import SimpleNamespace
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "redact_in_part", sort_order=1)]
+    doc = FakeDoc(d1, text_content="Pay account 4417 today")
+    doc.image_paths = ["productions/1/converted/p1.jpg"]
+    doc.ocr_paths = ocr_paths
+    words = [{"t": t, "x": x, "y": 10.0, "w": 8.0, "h": 2.0, "c": 1.0}
+             for t, x in (("Pay", 5), ("account", 15), ("4417", 25), ("today", 35))]
+    red = SimpleNamespace(document_id=d1, page_num=1, x_pct=24.0, y_pct=9.0, w_pct=10.0, h_pct=4.0)
+    captured = {}
+
+    def fake_download(path):
+        if path.endswith(".json"):
+            return _json.dumps({"v": 1, "words": words}).encode()
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(pe.storage, "get_download_bytes", fake_download)
+    monkeypatch.setattr(pe.storage, "upload_file", _capture_upload(captured))
+    ps = FakePS()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("FROM production_set_items", FakeResult(items=items)),
+            ("FROM redactions", FakeResult(items=[red])),
+            ("FROM documents", FakeResult(items=[doc])),
+        ],
+    )
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "packaged", ps.package_error
+    return zipfile.ZipFile(io.BytesIO(captured["zip"]))
+
+
+def test_package_ships_redacted_text_and_textpath(monkeypatch):
+    zf = _redacted_package(monkeypatch, ["productions/1/ocr/p1.json"])
+    assert zf.read("VOL001/TEXT/SMITH000001.txt").decode() == "Pay account [REDACTED] today"
+    dat = zf.read("DATA/SMITH.dat").decode("utf-8-sig")
+    assert "TEXT\SMITH000001.txt" in dat
+    assert "4417" not in zf.read("VOL001/TEXT/SMITH000001.txt").decode()
+
+
+def test_package_ships_no_text_when_a_sidecar_is_missing(monkeypatch):
+    zf = _redacted_package(monkeypatch, [""])
+    assert "VOL001/TEXT/SMITH000001.txt" not in zf.namelist()
+    assert "SMITH000001.txt" not in zf.read("DATA/SMITH.dat").decode("utf-8-sig")
