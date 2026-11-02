@@ -271,3 +271,132 @@ def test_package_volume_split(monkeypatch):
     manifest = json.loads(zf.read("manifest.json"))
     assert [v["label"] for v in manifest["volumes"]] == ["VOL001", "VOL002"]
     assert all(v["documents"] == 1 for v in manifest["volumes"])
+
+
+def _redacted_package(monkeypatch, ocr_paths):
+    import json as _json
+    from types import SimpleNamespace
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "redact_in_part", sort_order=1)]
+    doc = FakeDoc(d1, text_content="Pay account 4417 today")
+    doc.image_paths = ["productions/1/converted/p1.jpg"]
+    doc.ocr_paths = ocr_paths
+    words = [{"t": t, "x": x, "y": 10.0, "w": 8.0, "h": 2.0, "c": 1.0}
+             for t, x in (("Pay", 5), ("account", 15), ("4417", 25), ("today", 35))]
+    red = SimpleNamespace(document_id=d1, page_num=1, x_pct=24.0, y_pct=9.0, w_pct=10.0, h_pct=4.0)
+    captured = {}
+
+    def fake_download(path):
+        if path.endswith(".json"):
+            return _json.dumps({"v": 1, "words": words}).encode()
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(pe.storage, "get_download_bytes", fake_download)
+    monkeypatch.setattr(pe.storage, "upload_file", _capture_upload(captured))
+
+    async def no_drift(db, ps, items):
+        return []
+
+    monkeypatch.setattr(pe, "redaction_drift", no_drift)
+    ps = FakePS()
+    db = FakeSession(
+        get_objects={("ProductionSet", 1): ps},
+        responders=[
+            ("FROM production_set_items", FakeResult(items=items)),
+            ("FROM redactions", FakeResult(items=[red])),
+            ("FROM documents", FakeResult(items=[doc])),
+        ],
+    )
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "packaged", ps.package_error
+    return zipfile.ZipFile(io.BytesIO(captured["zip"]))
+
+
+def test_package_ships_redacted_text_and_textpath(monkeypatch):
+    zf = _redacted_package(monkeypatch, ["productions/1/ocr/p1.json"])
+    assert zf.read("VOL001/TEXT/SMITH000001.txt").decode() == "Pay account [REDACTED] today"
+    dat = zf.read("DATA/SMITH.dat").decode("utf-8-sig")
+    assert "TEXT\SMITH000001.txt" in dat
+    assert "4417" not in zf.read("VOL001/TEXT/SMITH000001.txt").decode()
+
+
+def test_package_ships_no_text_when_a_sidecar_is_missing(monkeypatch):
+    zf = _redacted_package(monkeypatch, [""])
+    assert "VOL001/TEXT/SMITH000001.txt" not in zf.namelist()
+    assert "SMITH000001.txt" not in zf.read("DATA/SMITH.dat").decode("utf-8-sig")
+
+
+def test_dat_blanks_header_fields_a_redaction_covers():
+    from types import SimpleNamespace
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000002", 2, "redact_in_part", sort_order=1)]
+    doc = FakeDoc(d1, email_subject="ACME settlement terms")
+    doc.email_bcc = "counsel@acme.example"
+    doc.header_regions = {
+        "from": {"page": 1, "x": 10.0, "y": 8.0, "w": 80.0, "h": 2.0},
+        "subject": {"page": 1, "x": 10.0, "y": 14.0, "w": 80.0, "h": 2.0},
+    }
+    red = SimpleNamespace(document_id=d1, page_num=1, x_pct=30.0, y_pct=14.5, w_pct=20.0, h_pct=1.0)
+    db = FakeSession(responders=[
+        ("FROM redactions", FakeResult(items=[red])),
+        ("FROM documents", FakeResult(items=[doc])),
+    ])
+    row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
+    assert row["SUBJECT"] == "" and row["FILENAME"] == ""
+    assert row["REDACTEDFIELDS"] == "FILENAME; SUBJECT"
+    assert row["FROM"] == "a@x.com" and row["BCC"] == "counsel@acme.example"
+
+
+def test_dat_unredacted_rows_keep_fields_and_empty_redactedfields():
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "produce", sort_order=1)]
+    db = FakeSession(responders=[("FROM documents", FakeResult(items=[FakeDoc(d1)]))])
+    row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
+    assert row["SUBJECT"] == "Secret subject" and row["REDACTEDFIELDS"] == ""
+
+
+def test_dat_columns_include_bcc_and_redactedfields_in_order():
+    from app.services.loadfile_export import DAT_COLUMNS
+    assert DAT_COLUMNS.index("BCC") == DAT_COLUMNS.index("CC") + 1
+    assert DAT_COLUMNS.index("REDACTEDFIELDS") == DAT_COLUMNS.index("REDACTED") + 1
+
+
+def test_package_set_refuses_on_redaction_drift(monkeypatch):
+    """C-1: packaging re-checks drift itself (tasks already queued)."""
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "redact_in_part", sort_order=1)]
+
+    async def fake_drift(db, ps, items):
+        return ["SMITH000001"]
+
+    monkeypatch.setattr(pe, "redaction_drift", fake_drift)
+    ps = FakePS()
+    db = FakeSession(get_objects={("ProductionSet", 1): ps},
+                     responders=[("FROM production_set_items", FakeResult(items=items))])
+    asyncio.run(pe.package_set(db, 1))
+    assert ps.package_status == "error" and "changed after lock" in ps.package_error
+
+
+def test_dat_blanking_covers_every_column_carrying_the_value():
+    """I-5: a covered Date also blanks DATERECEIVED; a covered Subject also
+    blanks an email's FILENAME (exports are often named after the subject)."""
+    from types import SimpleNamespace
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "redact_in_part", sort_order=1)]
+    doc = FakeDoc(d1, email_subject="ACME settlement", file_name="ACME settlement.msg", file_type="email")
+    doc.email_bcc = None
+    doc.date_received = TS
+    doc.header_regions = {
+        "date": [{"page": 1, "x": 10.0, "y": 11.0, "w": 80.0, "h": 2.0}],
+        "subject": [{"page": 1, "x": 10.0, "y": 14.0, "w": 80.0, "h": 2.0}],
+    }
+    reds = [SimpleNamespace(document_id=d1, page_num=1, x_pct=30.0, y_pct=y, w_pct=20.0, h_pct=1.0)
+            for y in (11.5, 14.5)]
+    db = FakeSession(responders=[
+        ("FROM redactions", FakeResult(items=reds)),
+        ("FROM documents", FakeResult(items=[doc])),
+    ])
+    row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
+    assert row["DATESENT"] == "" and row["DATERECEIVED"] == ""
+    assert row["SUBJECT"] == "" and row["FILENAME"] == ""
+    assert row["REDACTEDFIELDS"] == "DATERECEIVED; DATESENT; FILENAME; SUBJECT"

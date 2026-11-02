@@ -132,6 +132,15 @@ class Document(Base):
     raw_image_paths = Column(JSONB, nullable=False, default=list)
     # P1-6 — per-page word-box sidecar paths, index-aligned with image_paths
     ocr_paths = Column(JSONB, nullable=False, default=list)
+    # On-demand imaging for redaction (emails, PDF/image attachments):
+    # queued | running | done | failed; null = never imaged (or ingested with pages).
+    imaging_status = Column(String(20), nullable=True)
+    imaging_error = Column(String(500), nullable=True)
+    imaging_requested_at = Column(DateTime(timezone=True), nullable=True)
+    imaged_from = Column(String(20), nullable=True)  # email | pdf | image
+    # Emails: page-1 box of each header line, {field: {page, x, y, w, h}} in
+    # 0-100 page percentages; blanks load-file fields a redaction covers.
+    header_regions = Column(JSONB, nullable=True)
     processing_status = Column(String(20), nullable=False, default="pending")
     family_id = Column(String(255), nullable=True)
     thread_id = Column(String(255), nullable=True)
@@ -557,6 +566,7 @@ class ProductionSetItem(Base):
     pages = Column(Integer, nullable=True)          # snapshot: 1 for withhold, else page_count
     disposition = Column(String(20), nullable=True) # snapshot: 'produce' | 'redact_in_part' | 'withhold'
     designation = Column(String(100), nullable=True)  # per-item override of the set default
+    redaction_count = Column(Integer, nullable=True)  # snapshot at lock; render refuses on drift
     output_path = Column(String(500), nullable=True)  # GCS path of rendered PDF (or first TIFF page)
     produce_native = Column(Boolean, nullable=False, default=False)  # P2-5 snapshot at lock
 

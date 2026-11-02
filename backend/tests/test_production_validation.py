@@ -44,7 +44,8 @@ def test_clean_set_no_conflicts():
     out = _run(db, [d1])
     assert out["total"] == 0
     assert out == {"qc_pending": [], "privilege_produce": [],
-                   "no_images": [], "received_document": [], "total": 0}
+                   "no_images": [], "received_document": [], "needs_pages": [],
+                   "redactions_overridden": [], "attachment_names_redacted": [], "total": 0}
 
 
 def test_redactions_without_approval_conflict():
@@ -125,3 +126,75 @@ def test_null_source_type_not_flagged():
     db = _db([(d1, "C-1", None, ["p1.jpg"], None, None)])
     out = _run(db, [d1])
     assert out["received_document"] == []
+
+
+def _db2(doc_rows, info=(), parents=(), parent_reds=(), red_rows=()):
+    """info: (id, file_type, native_path, imaging_status, family_id, header_regions)."""
+    return FakeSession(responders=[
+        ("documents.image_paths", FakeResult(rows=list(doc_rows))),
+        ("is_privilege", FakeResult(rows=[])),
+        ("coalesce", FakeResult(rows=list(red_rows))),
+        ("redaction_qc_decisions", FakeResult(items=[])),
+        ("documents.imaging_status", FakeResult(rows=list(info))),
+        ("documents.header_regions", FakeResult(rows=list(parents))),
+        ("redactions.reason_code", FakeResult(items=list(parent_reds))),
+    ])
+
+
+def test_imageable_email_without_pages_needs_pages_not_no_images():
+    d1 = uuid4()
+    out = _run(_db2([(d1, "C-1", None, [], None, None)],
+                    info=[(d1, "email", None, None, "C-1", None)]), [d1])
+    assert [c["control_number"] for c in out["needs_pages"]] == ["C-1"]
+    assert out["no_images"] == []
+
+
+def test_office_file_stays_no_images():
+    d1 = uuid4()
+    out = _run(_db2([(d1, "C-1 .0001", None, [], None, None)],
+                    info=[(d1, "xlsx", "productions/1/attachments/x/b.xlsx", None, "C-1", None)]), [d1])
+    assert out["needs_pages"] == [] and len(out["no_images"]) == 1
+    assert "can't be imaged" in out["no_images"][0]["detail"]
+
+
+def test_queued_imaging_needs_pages():
+    d1 = uuid4()
+    out = _run(_db2([(d1, "C-1", None, [], None, None)],
+                    info=[(d1, "email", None, "running", "C-1", None)]), [d1])
+    assert len(out["needs_pages"]) == 1
+
+
+def test_redactions_with_produce_override_conflict():
+    d1 = uuid4()
+    out = _run(_db2([(d1, "C-1", "produce", ["p.jpg"], None, None)], red_rows=[(d1, 1, TS)]), [d1])
+    assert [c["control_number"] for c in out["redactions_overridden"]] == ["C-1"]
+
+
+def test_attachment_names_redacted_on_parent_conflicts_for_child():
+    parent, child = uuid4(), uuid4()
+    regions = {"attachments": {"page": 1, "x": 10.0, "y": 17.0, "w": 80.0, "h": 2.0}}
+    red = type("R", (), dict(document_id=parent, page_num=1, x_pct=20.0, y_pct=17.5, w_pct=30.0, h_pct=1.0))
+    out = _run(_db2([(child, "C-1 .0001", None, ["p.jpg"], None, None)],
+                    info=[(child, "pdf", "productions/1/attachments/x/a.pdf", None, "C-1", None)],
+                    parents=[(parent, "C-1", regions)], parent_reds=[red]), [child])
+    assert [c["control_number"] for c in out["attachment_names_redacted"]] == ["C-1 .0001"]
+
+
+def test_attachment_without_redacted_parent_line_is_fine():
+    parent, child = uuid4(), uuid4()
+    regions = {"attachments": {"page": 1, "x": 10.0, "y": 17.0, "w": 80.0, "h": 2.0}}
+    out = _run(_db2([(child, "C-1 .0001", None, ["p.jpg"], None, None)],
+                    info=[(child, "pdf", "productions/1/attachments/x/a.pdf", None, "C-1", None)],
+                    parents=[(parent, "C-1", regions)], parent_reds=[]), [child])
+    assert out["attachment_names_redacted"] == []
+
+
+def test_native_production_member_needs_no_pages():
+    """I-3: a PDF shipped natively gets a slip sheet; it needs no page images."""
+    d1 = uuid4()
+    ps = FakePS()
+    ps.native_file_types = ["pdf"]
+    db = _db2([(d1, "C-1 .0001", None, [], None, None)],
+              info=[(d1, "pdf", "productions/1/attachments/x/a.pdf", None, "C-1", None)])
+    out = asyncio.run(pv.compute_conflicts(db, ps, [d1]))
+    assert out["needs_pages"] == [] and out["no_images"] == []

@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchImageBlob } from '../api/client';
-import type { Annotation } from '../types';
+import type { Annotation, Redaction, RedactionBox, RedactionReason } from '../types';
 import AnnotationOverlay from './AnnotationOverlay';
+import RedactionLayer, { type Box } from './RedactionLayer';
+
+export interface RedactionProps {
+  redactions: Redaction[];
+  mode: 'view' | 'redact';
+  reason: RedactionReason;
+  selectedId: number | null;
+  onSelect: (id: number | null) => void;
+  onCreate: (box: RedactionBox) => void;
+  onUpdate: (id: number, box: Box) => void;
+}
 
 interface Props {
   docId: string;
@@ -10,9 +21,15 @@ interface Props {
   onPinClick?: (annotation: Annotation, rect: DOMRect) => void;
   onPageClick?: (pageNum: number, xPct: number, yPct: number, rect: DOMRect) => void;
   onRotationChange?: (rotation: number) => void;
+  /** Boxes to draw over the pages, and the editing callbacks in redact mode. */
+  redaction?: RedactionProps;
+  /** Show the pages as produced (boxes burned in by the server). */
+  preview?: boolean;
+  /** Changes whenever the redactions do, so the preview refetches. */
+  previewVersion?: number;
 }
 
-export default function ImagePanel({ docId, pageCount, annotations, onPinClick, onPageClick, onRotationChange }: Props) {
+export default function ImagePanel({ docId, pageCount, annotations, onPinClick, onPageClick, onRotationChange, redaction, preview = false, previewVersion = 0 }: Props) {
   const [zoom, setZoom] = useState(0.5);
   const [rotation, setRotation] = useState(0);
   const [vpWidth, setVpWidth] = useState(800);
@@ -44,7 +61,7 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
         const p = nextPage++;
         if (cancelled || p > pageCount) return;
         try {
-          const url = await fetchImageBlob(docId, p, 1200);
+          const url = await fetchImageBlob(docId, p, 1200, preview, previewVersion);
           if (!cancelled) setBlobUrls(prev => ({ ...prev, [p]: url }));
         } catch (e) {
           if (!cancelled) console.warn(`fetchImageBlob page ${p} failed:`, e);
@@ -54,13 +71,11 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
     for (let i = 0; i < Math.min(CONCURRENCY, pageCount); i++) void worker();
     return () => {
       cancelled = true;
-      // Revoke old blob URLs
-      setBlobUrls(prev => {
-        Object.values(prev).forEach(url => URL.revokeObjectURL(url));
-        return {};
-      });
+      // Don't revoke: fetchImageBlob's cache still hands these URLs out (it
+      // revokes on eviction); revoking here left reopened documents blank.
+      setBlobUrls({});
     };
-  }, [docId, pageCount]);
+  }, [docId, pageCount, preview, previewVersion]);
 
   // Track viewport width for zoom calculations
   useEffect(() => {
@@ -126,13 +141,25 @@ export default function ImagePanel({ docId, pageCount, annotations, onPinClick, 
                 <span className="spinner spinner-sm" /> Loading page {i + 1}…
               </div>
             )}
-            <AnnotationOverlay
+            {redaction && !preview && rotation === 0 && (
+              <RedactionLayer
+                pageNum={i + 1}
+                redactions={redaction.redactions}
+                mode={redaction.mode}
+                reason={redaction.reason}
+                selectedId={redaction.selectedId}
+                onSelect={redaction.onSelect}
+                onCreate={redaction.onCreate}
+                onUpdate={redaction.onUpdate}
+              />
+            )}
+            {redaction?.mode !== 'redact' && <AnnotationOverlay
               annotations={annotations || []}
               pageNum={i + 1}
               rotation={rotation}
               onPinClick={(ann, rect) => onPinClick?.(ann, rect)}
               onPageClick={(pn, x, y, rect) => onPageClick?.(pn, x, y, rect)}
-            />
+            />}
           </div>
         ))}
       </div>

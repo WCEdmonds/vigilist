@@ -167,3 +167,32 @@ def test_qc_queue_latest_decision_wins(monkeypatch):
     assert out[0].qc_status == "rejected"
     assert out[0].latest_decision.decision == "rejected"
     assert out[0].latest_decision.id == 9
+
+
+def _doc_with_bates(d1):
+    doc = FakeDoc(d1)
+    doc.bates_begin = "DOC-001"
+    return doc
+
+
+def test_document_qc_status(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(
+        get_objects={("Document", d1): _doc_with_bates(d1)},
+        responders=[
+            ("FROM redaction_qc_decisions", FakeResult(items=[FakeDecision(d1, "approved", TS + timedelta(hours=1), 2)])),
+            ("FROM redactions", FakeResult(rows=[(2, TS)])),
+        ])
+    out = asyncio.run(rr.document_redaction_qc(doc_id=d1, db=db, user=FakeUser()))
+    assert out.qc_status == "approved" and out.redaction_count == 2
+    assert out.latest_decision.decision == "approved"
+
+
+def test_document_qc_status_not_applicable_without_redactions(monkeypatch):
+    _patch(monkeypatch)
+    d1 = uuid4()
+    db = FakeSession(get_objects={("Document", d1): _doc_with_bates(d1)},
+                     responders=[("FROM redactions", FakeResult(rows=[(0, None)]))])
+    out = asyncio.run(rr.document_redaction_qc(doc_id=d1, db=db, user=FakeUser()))
+    assert out.qc_status == "not_applicable" and out.latest_decision is None

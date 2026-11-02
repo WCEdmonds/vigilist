@@ -20,8 +20,11 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, ProductionSet, ProductionSetItem
+from app.models import Document, ProductionSet, ProductionSetItem, Redaction
 from app.services import storage
+from app.services.redaction_drift import drift_message, redaction_drift
+from app.services.redacted_metadata import FIELD_COLUMNS, blanked_fields
+from app.services.redacted_text import load_sidecars, produced_text
 from app.services.loadfile_export import (
     check_continuity,
     dat_bytes,
@@ -76,6 +79,13 @@ async def build_dat_rows(db: AsyncSession, ps: ProductionSet, items,
     layout for direct callers/tests."""
     docs = await _docs_by_id(db, items)
     fam_ranges = _family_ranges(items, docs)
+    redacted_ids = [i.document_id for i in items if i.disposition == "redact_in_part"]
+    reds: dict = {}
+    if redacted_ids:
+        for red in (await db.execute(
+            select(Redaction).where(Redaction.document_id.in_(redacted_ids))
+        )).scalars().all():
+            reds.setdefault(red.document_id, []).append(red)
     rows = []
     for item in items:
         doc = docs.get(item.document_id)
@@ -88,7 +98,13 @@ async def build_dat_rows(db: AsyncSession, ps: ProductionSet, items,
         has_text = (item.disposition == "produce" and doc is not None
                     and bool(doc.text_content))
         info = (doc_paths or {}).get(item.document_id, {})
-        rows.append({
+        # Header lines covered by a redaction on the page are blanked here too.
+        blanked = sorted({
+            col for f in blanked_fields(getattr(doc, "header_regions", None),
+                                        reds.get(item.document_id, []))
+            for col in FIELD_COLUMNS.get(f, ())
+        }) if item.disposition == "redact_in_part" else []
+        row = {
             "BEGBATES": item.bates_begin,
             "ENDBATES": item.bates_end,
             "BEGATTACH": beg_att,
@@ -97,6 +113,7 @@ async def build_dat_rows(db: AsyncSession, ps: ProductionSet, items,
             "FROM": getattr(doc, "email_from", None),
             "TO": getattr(doc, "email_to", None),
             "CC": getattr(doc, "email_cc", None),
+            "BCC": "" if withheld else getattr(doc, "email_bcc", None),
             "DATESENT": doc.date_sent.date().isoformat()
                         if doc is not None and doc.date_sent else "",
             "DATERECEIVED": doc.date_received.date().isoformat()
@@ -109,13 +126,17 @@ async def build_dat_rows(db: AsyncSession, ps: ProductionSet, items,
             "SHA256HASH": getattr(doc, "file_hash_sha256", None),
             "PAGECOUNT": item.pages,
             "REDACTED": "Y" if item.disposition == "redact_in_part" else "N",
+            "REDACTEDFIELDS": "; ".join(blanked),
             "WITHHELD": "Y" if withheld else "N",
             "CONFIDENTIALITY": item.designation or ps.designation or "",
             "TEXTPATH": info.get(
                 "textpath",
                 f".\\TEXT\\{item.bates_begin}.txt" if has_text else ""),
             "NATIVELINK": info.get("nativelink", ""),
-        })
+        }
+        for col in blanked:
+            row[col] = ""
+        rows.append(row)
     return rows
 
 
@@ -175,7 +196,17 @@ async def package_set(db: AsyncSession, set_id: int) -> None:
         )).scalars().all()
         if not items:
             raise RuntimeError("Production set has no members")
+        drifted = await redaction_drift(db, ps, items)
+        if drifted:
+            raise RuntimeError(drift_message(drifted))
         docs = await _docs_by_id(db, items)
+        redacted_ids = [i.document_id for i in items if i.disposition == "redact_in_part"]
+        reds_by_doc: dict = {}
+        if redacted_ids:
+            for red in (await db.execute(
+                select(Redaction).where(Redaction.document_id.in_(redacted_ids))
+            )).scalars().all():
+                reds_by_doc.setdefault(red.document_id, {}).setdefault(red.page_num, []).append(red)
         tiff_mode = getattr(ps, "image_format", "pdf") == "tiff"
         max_bytes = (ps.volume_max_mb * 1024 * 1024) if ps.volume_max_mb else None
 
@@ -248,6 +279,12 @@ async def package_set(db: AsyncSession, set_id: int) -> None:
                     if (item.disposition == "produce" and doc is not None
                             and doc.text_content):
                         text_blob = doc.text_content.encode("utf-8")
+                    elif item.disposition == "redact_in_part" and doc is not None:
+                        # Words under the boxes removed; None (no text at all)
+                        # when any page lacks the word positions to know.
+                        text = produced_text(load_sidecars(doc), reds_by_doc.get(item.document_id, {}))
+                        if text is not None:
+                            text_blob = text.encode("utf-8")
 
                     doc_size = (art_bytes + len(native_blob or b"")
                                 + len(text_blob or b""))

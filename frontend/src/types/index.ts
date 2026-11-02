@@ -87,6 +87,72 @@ export interface DocumentDetail {
   parent_bates?: string | null;
   parent_title?: string | null;
   parent_is_email?: boolean | null;
+  redaction_count?: number;
+  /** Imaging for redaction: queued | running | done | failed (null = never). */
+  imaging_status?: ImagingStatus | null;
+  imaging_error?: string | null;
+  /** Can be imaged now (email, PDF or image without pages). */
+  imageable?: boolean;
+  image_count?: number;
+}
+
+export type ImagingStatus = 'queued' | 'running' | 'done' | 'failed';
+
+export type RedactionReason =
+  | 'attorney_client' | 'work_product' | 'pii' | 'phi'
+  | 'confidential' | 'trade_secret' | 'non_responsive' | 'other';
+
+export const REDACTION_REASON_LABELS: Record<RedactionReason, string> = {
+  attorney_client: 'Attorney-Client',
+  work_product: 'Work Product',
+  pii: 'PII',
+  phi: 'PHI',
+  confidential: 'Confidential',
+  trade_secret: 'Trade Secret',
+  non_responsive: 'Non-Responsive',
+  other: 'Other',
+};
+
+/** A redaction box; coordinates are 0-100 percentages of the page image. */
+export interface Redaction {
+  id: number;
+  document_id: string;
+  page_num: number;
+  x_pct: number;
+  y_pct: number;
+  w_pct: number;
+  h_pct: number;
+  reason_code: RedactionReason;
+  note: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export type RedactionBox = Pick<Redaction, 'page_num' | 'x_pct' | 'y_pct' | 'w_pct' | 'h_pct' | 'reason_code'>;
+
+export type RedactionQcStatus = 'not_applicable' | 'pending' | 'approved' | 'rejected';
+
+export interface RedactionQc {
+  document_id: string;
+  bates_begin: string;
+  redaction_count: number;
+  qc_status: RedactionQcStatus;
+  latest_decision: {
+    decision: 'approved' | 'rejected';
+    note: string | null;
+    decided_by: string;
+    decided_at: string;
+  } | null;
+}
+
+export interface PreparePagesResult {
+  queued: number;
+  already_imaged: number;
+  in_progress: number;
+  unsupported: number;
+  has_redactions: number;
+  failed_to_start: number;
 }
 
 export interface EmailAttachment {

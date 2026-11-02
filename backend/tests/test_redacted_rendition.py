@@ -406,3 +406,19 @@ def test_image_does_not_release_the_connection_before_access_is_checked(monkeypa
                                  db=db, user=FakeUser()))
     assert exc.value.status_code == 403
     assert db.commits == 0
+
+
+def test_text_redacted_returns_text_minus_covered_words(monkeypatch):
+    import json
+    import app.services.redacted_text as rt
+    _patch_access(monkeypatch)
+    doc_id = uuid4()
+    doc = FakeDoc(doc_id, ["p1.jpg"], text_content="secret words")
+    doc.ocr_paths = ["productions/1/ocr/p1.json"]
+    words = [{"t": "secret", "x": 12.0, "y": 12.0, "w": 10.0, "h": 2.0, "c": 1.0},
+             {"t": "words", "x": 60.0, "y": 12.0, "w": 10.0, "h": 2.0, "c": 1.0}]
+    monkeypatch.setattr(rt.storage, "get_download_bytes",
+                        lambda path: json.dumps({"v": 1, "words": words}).encode())
+    db = FakeSession(docs={doc_id: doc}, redactions=[FakeRedaction()])
+    out = asyncio.run(dd.get_text(doc_id=doc_id, redacted=True, db=db, user=FakeUser()))
+    assert out == {"text": "[REDACTED] words", "withheld": False}

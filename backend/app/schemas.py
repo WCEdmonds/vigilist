@@ -235,6 +235,10 @@ class DocumentDetail(BaseModel):
     note_count: int = 0
     annotation_count: int = 0
     redaction_count: int = 0
+    imaging_status: str | None = None
+    imaging_error: str | None = None
+    imageable: bool = False                # can be imaged for redaction now
+    image_count: int = 0
     parent_id: UUID | None = None          # set when this is an attachment
     parent_bates: str | None = None
     parent_title: str | None = None

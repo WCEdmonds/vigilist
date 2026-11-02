@@ -137,3 +137,17 @@ def enqueue_package(set_id: int) -> None:
     """Enqueue a Cloud Task to package one production set into its ZIP."""
     _enqueue("/api/production-sets/package-worker", {"set_id": set_id})
     logger.info("Enqueued packaging for production set %d", set_id)
+
+
+# One document per task (spec §4.2): a large scanned PDF can take most of the
+# 30-minute dispatch deadline on its own.
+IMAGING_BATCH = 1
+
+
+def enqueue_imaging(document_ids: list[str], requested_by: str | None = None) -> None:
+    """Enqueue Cloud Tasks that image documents for redaction, one per task."""
+    for i in range(0, len(document_ids), IMAGING_BATCH):
+        batch = document_ids[i:i + IMAGING_BATCH]
+        _enqueue("/api/documents/imaging-worker",
+                 {"document_ids": batch, "requested_by": requested_by})
+    logger.info("Enqueued imaging for %d documents", len(document_ids))

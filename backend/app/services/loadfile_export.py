@@ -12,10 +12,10 @@ FIELD_WRAPPER = "þ"   # thorn
 FIELD_SEPARATOR = "\x14"   # DC4
 
 DAT_COLUMNS = ["BEGBATES", "ENDBATES", "BEGATTACH", "ENDATTACH", "CUSTODIAN",
-               "FROM", "TO", "CC", "DATESENT", "DATERECEIVED", "SUBJECT",
+               "FROM", "TO", "CC", "BCC", "DATESENT", "DATERECEIVED", "SUBJECT",
                "FILENAME", "FILETYPE", "MD5HASH", "SHA256HASH", "PAGECOUNT",
-               "REDACTED", "WITHHELD", "CONFIDENTIALITY", "TEXTPATH",
-               "NATIVELINK"]
+               "REDACTED", "REDACTEDFIELDS", "WITHHELD", "CONFIDENTIALITY",
+               "TEXTPATH", "NATIVELINK"]
 
 
 def _clean(value) -> str:

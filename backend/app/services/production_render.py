@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Document, ProductionSet, ProductionSetItem, Redaction
 from app.services import storage
 from app.services.endorse import page_bates_numbers, slip_sheet, stamp_page
+from app.services.redaction_drift import drift_message, redaction_drift
 from app.services.redaction_render import burn_page
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,11 @@ def _load_page(raw_path: str) -> Image.Image | None:
 async def render_item(db: AsyncSession, ps: ProductionSet,
                       item: ProductionSetItem) -> str:
     doc = await db.get(Document, item.document_id)
+    # Belt and braces for batches already queued when redactions changed.
+    drifted = (await redaction_drift(db, ps, [item])
+               if getattr(item, "redaction_count", None) is not None else [])
+    if drifted:
+        raise RuntimeError(drift_message(drifted))
     designation = item.designation or ps.designation
 
     if item.disposition == "withhold":

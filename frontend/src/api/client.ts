@@ -7,6 +7,7 @@ import type {
   SearchResponse, SearchResult, Tag, TimelinePage, TimelineReviewStatus,
   SearchExtras, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied,
   PrivilegeDisposition, PrivilegeLogRow, FolderInfo, FolderAddResult, BulkTagQuery,
+  Redaction, RedactionBox, RedactionQc, ImagingStatus, PreparePagesResult,
 } from '../types';
 
 /**
@@ -76,6 +77,42 @@ export function listDocuments(page = 1, perPage = 50, productionId?: number, tag
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
 
+// ── Redactions ──
+
+export const listRedactions = (docId: string) =>
+  request<Redaction[]>(`/api/documents/${docId}/redactions`);
+
+export const createRedaction = (docId: string, box: RedactionBox & { note?: string | null }) =>
+  request<Redaction>(`/api/documents/${docId}/redactions`, json(box));
+
+export const updateRedaction = (
+  id: number,
+  patch: Partial<Pick<Redaction, 'x_pct' | 'y_pct' | 'w_pct' | 'h_pct' | 'reason_code' | 'note'>>,
+) => request<Redaction>(`/api/redactions/${id}`, { ...json(patch), method: 'PUT' });
+
+export const deleteRedaction = (id: number) =>
+  request<{ ok: boolean }>(`/api/redactions/${id}`, { method: 'DELETE' });
+
+export const getRedactionQc = (docId: string) =>
+  request<RedactionQc>(`/api/documents/${docId}/redaction-qc`);
+
+export const decideRedactionQc = (docId: string, decision: 'approved' | 'rejected', note?: string) =>
+  request(`/api/documents/${docId}/redaction-qc`, json({ decision, note: note || null }));
+
+// ── Imaging (prepare pages for redaction) ──
+
+export const preparePages = (docId: string) =>
+  request<{ imaging_status: ImagingStatus }>(`/api/documents/${docId}/prepare-pages`, json({}));
+
+export const preparePagesBulk = (
+  productionId: number,
+  target: { doc_ids: string[] } | { query: BulkTagQuery },
+) => request<PreparePagesResult>(`/api/productions/${productionId}/prepare-pages`,
+  json({ ...target, include_attachments: true }));
+
+export const unlockProductionSet = (setId: number) =>
+  request<ProductionSetInfo>(`/api/production-sets/${setId}/unlock`, json({}));
+
 // ── Folders ──
 
 export const listFolders = (productionId: number) =>
@@ -137,8 +174,10 @@ export function getByBates(bates: string, productionId?: number) {
 
 const _imageBlobCache = new Map<string, string>();
 
-export async function fetchImageBlob(docId: string, pageNum: number, width?: number): Promise<string> {
-  const key = `${docId}:${pageNum}:${width || 'full'}`;
+/** redacted: the page as it will be produced (boxes burned in by the server). */
+/** version: bump when the document's redactions change, so a cached burn-in isn't reused. */
+export async function fetchImageBlob(docId: string, pageNum: number, width?: number, redacted = false, version = 0): Promise<string> {
+  const key = `${docId}:${pageNum}:${width || 'full'}:${redacted ? `r${version}` : 'o'}`;
   const cached = _imageBlobCache.get(key);
   if (cached) return cached;
 
@@ -148,7 +187,10 @@ export async function fetchImageBlob(docId: string, pageNum: number, width?: num
     const token = await currentUser.getIdToken();
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const params = width ? `?w=${width}` : '';
+  const qs = new URLSearchParams();
+  if (width) qs.set('w', String(width));
+  if (redacted) qs.set('redacted', '1');
+  const params = qs.toString() ? `?${qs}` : '';
   const res = await fetch(`/api/documents/${docId}/image/${pageNum}${params}`, { headers });
   if (!res.ok) throw new Error(`Image fetch failed: ${res.status}`);
   const blob = await res.blob();
@@ -857,12 +899,15 @@ export interface ValidationReport {
   privilege_produce: ValidationConflict[];
   no_images: ValidationConflict[];
   received_document: ValidationConflict[];
+  needs_pages?: ValidationConflict[];
+  redactions_overridden?: ValidationConflict[];
+  attachment_names_redacted?: ValidationConflict[];
   total: number;
 }
 
 export interface ManifestReport {
   production_set: Record<string, unknown>;
-  counts: Record<string, number>;
+  counts: Record<string, number | Record<string, number>>;
   bates_range: { begin: string | null; end: string | null };
   continuity: { ok: boolean; errors: string[] };
   artifacts: { bates_begin: string; path: string | null; sha256?: string; bytes?: number }[];

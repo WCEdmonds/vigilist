@@ -1331,6 +1331,14 @@ async def stream_native(
     )
 
 
+def _imageable(doc) -> bool:
+    from app.services.imaging import imaging_kind
+    try:
+        return imaging_kind(doc) is not None
+    except AttributeError:  # partial test doubles
+        return False
+
+
 @router.get("/{doc_id}/text")
 async def get_text(
     doc_id: UUID,
@@ -1345,15 +1353,24 @@ async def get_text(
     if doc.production_id not in accessible:
         raise HTTPException(status_code=403, detail="Access denied")
     if redacted:
-        # Flat text_content has no word coordinates, so region-level removal
-        # is impossible — the as-produced text for a redacted doc is withheld
-        # entirely (re-OCR of burned images is Phase 2).
+        # As produced: the page word boxes minus the words under redactions
+        # (redacted_text); no text at all when any page lacks word boxes.
         count = (await db.execute(
             select(func.count(Redaction.id)).where(Redaction.document_id == doc_id)
         )).scalar() or 0
-        if count:
+        if not count:
+            return {"text": doc.text_content or "", "withheld": False}
+        from app.services.redacted_text import load_sidecars, produced_text
+        by_page: dict = {}
+        for red in (await db.execute(
+            select(Redaction).where(Redaction.document_id == doc_id)
+        )).scalars().all():
+            by_page.setdefault(red.page_num, []).append(red)
+        await db.commit()  # release the connection before the sidecar downloads
+        text = produced_text(load_sidecars(doc), by_page)
+        if text is None:
             return {"text": "", "withheld": True}
-        return {"text": doc.text_content or "", "withheld": False}
+        return {"text": text, "withheld": False}
     return {"text": doc.text_content or ""}
 
 
@@ -1428,5 +1445,9 @@ async def _doc_detail(doc: Document, db: AsyncSession) -> DocumentDetail:
         note_count=note_count,
         annotation_count=annotation_count,
         redaction_count=redaction_count,
+        imaging_status=getattr(doc, "imaging_status", None),
+        imaging_error=getattr(doc, "imaging_error", None),
+        image_count=len(doc.image_paths or []),
+        imageable=_imageable(doc),
         **parent_fields(parents.get(doc.id)),
     )
