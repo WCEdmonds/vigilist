@@ -319,3 +319,37 @@ def test_package_ships_no_text_when_a_sidecar_is_missing(monkeypatch):
     zf = _redacted_package(monkeypatch, [""])
     assert "VOL001/TEXT/SMITH000001.txt" not in zf.namelist()
     assert "SMITH000001.txt" not in zf.read("DATA/SMITH.dat").decode("utf-8-sig")
+
+
+def test_dat_blanks_header_fields_a_redaction_covers():
+    from types import SimpleNamespace
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000002", 2, "redact_in_part", sort_order=1)]
+    doc = FakeDoc(d1, email_subject="ACME settlement terms")
+    doc.email_bcc = "counsel@acme.example"
+    doc.header_regions = {
+        "from": {"page": 1, "x": 10.0, "y": 8.0, "w": 80.0, "h": 2.0},
+        "subject": {"page": 1, "x": 10.0, "y": 14.0, "w": 80.0, "h": 2.0},
+    }
+    red = SimpleNamespace(document_id=d1, page_num=1, x_pct=30.0, y_pct=14.5, w_pct=20.0, h_pct=1.0)
+    db = FakeSession(responders=[
+        ("FROM redactions", FakeResult(items=[red])),
+        ("FROM documents", FakeResult(items=[doc])),
+    ])
+    row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
+    assert row["SUBJECT"] == "" and row["REDACTEDFIELDS"] == "SUBJECT"
+    assert row["FROM"] == "a@x.com" and row["BCC"] == "counsel@acme.example"
+
+
+def test_dat_unredacted_rows_keep_fields_and_empty_redactedfields():
+    d1 = uuid4()
+    items = [FakeItem(d1, "SMITH000001", "SMITH000001", 1, "produce", sort_order=1)]
+    db = FakeSession(responders=[("FROM documents", FakeResult(items=[FakeDoc(d1)]))])
+    row = asyncio.run(pe.build_dat_rows(db, FakePS(), items))[0]
+    assert row["SUBJECT"] == "Secret subject" and row["REDACTEDFIELDS"] == ""
+
+
+def test_dat_columns_include_bcc_and_redactedfields_in_order():
+    from app.services.loadfile_export import DAT_COLUMNS
+    assert DAT_COLUMNS.index("BCC") == DAT_COLUMNS.index("CC") + 1
+    assert DAT_COLUMNS.index("REDACTEDFIELDS") == DAT_COLUMNS.index("REDACTED") + 1
