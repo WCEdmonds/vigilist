@@ -175,8 +175,9 @@ export function getByBates(bates: string, productionId?: number) {
 const _imageBlobCache = new Map<string, string>();
 
 /** redacted: the page as it will be produced (boxes burned in by the server). */
-export async function fetchImageBlob(docId: string, pageNum: number, width?: number, redacted = false): Promise<string> {
-  const key = `${docId}:${pageNum}:${width || 'full'}:${redacted ? 'r' : 'o'}`;
+/** version: bump when the document's redactions change, so a cached burn-in isn't reused. */
+export async function fetchImageBlob(docId: string, pageNum: number, width?: number, redacted = false, version = 0): Promise<string> {
+  const key = `${docId}:${pageNum}:${width || 'full'}:${redacted ? `r${version}` : 'o'}`;
   const cached = _imageBlobCache.get(key);
   if (cached) return cached;
 

@@ -9,6 +9,8 @@ import MetadataPanel from './MetadataPanel';
 import NotesPanel from './NotesPanel';
 import TagBar from './TagBar';
 import PreparePages from './PreparePages';
+import RedactionToolbar from './RedactionToolbar';
+import { useRedactions } from '../hooks/useRedactions';
 import TextPanel from './TextPanel';
 import AnnotationPopover from './AnnotationPopover';
 import AnnotationSidebar from './AnnotationSidebar';
@@ -47,6 +49,12 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [openEntityId, setOpenEntityId] = useState<string | null>(null);
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [imageRotation, setImageRotation] = useState(0);
+  // Redaction: boxes, Redact mode, and the as-produced preview.
+  const [redactionVersion, setRedactionVersion] = useState(0);
+  const bumpRedactions = useCallback(() => setRedactionVersion(v => v + 1), []);
+  const red = useRedactions(docId, bumpRedactions);
+  const [redactMode, setRedactMode] = useState(false);
+  const [redactPreview, setRedactPreview] = useState(false);
   const [mediaTime, setMediaTime] = useState<number | null>(null);
   const mediaRef = useRef<MediaPlayerHandle>(null);
   // Tracks an entity focus that is *about to* land on the next docId change because
@@ -76,6 +84,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     setSummary(null);
     setCenterTab('images');
     setJustPrepared(false);
+    setRedactMode(false);
+    setRedactPreview(false);
     setAnnotations([]);
     setDuplicates([]);
     setEntities([]);
@@ -234,6 +244,58 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     else setCenterTab('images');
   }, [docId, hasNative, hasImages, isEmail, justPrepared]);
 
+  const pagesShown = hasImages && (centerTab === 'images' || !(isEmail || hasNative));
+  const redactBlocked = imageRotation !== 0 ? 'Rotate back to 0° to redact' : null;
+
+  const redactPageNearestCentre = useCallback(() => {
+    let best: { page: number; dist: number } | null = null;
+    for (let n = 1; ; n++) {
+      const el = document.getElementById(`page-${n}`);
+      if (!el) break;
+      const r = el.getBoundingClientRect();
+      const dist = Math.abs(r.top + r.height / 2 - window.innerHeight / 2);
+      if (!best || dist < best.dist) best = { page: n, dist };
+    }
+    if (best) {
+      red.create({ page_num: best.page, x_pct: 0, y_pct: 0, w_pct: 100, h_pct: 100, reason_code: red.reason });
+    }
+  }, [red]);
+
+  // Shift+R toggles Redact mode; in it, Esc leaves, Delete removes the
+  // selected box and the arrow keys nudge it 0.2 %.
+  useEffect(() => {
+    if (!pagesShown) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.key === 'R' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setRedactMode(m => !m);
+        return;
+      }
+      if (!redactMode) return;
+      if (e.key === 'Escape') { setRedactMode(false); red.select(null); return; }
+      const sel = red.redactions.find(r => r.id === red.selectedId);
+      if (!sel) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        red.remove(sel.id);
+        return;
+      }
+      const step = 0.2;
+      const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      if (d) {
+        e.preventDefault();
+        red.update(sel.id, {
+          x_pct: Math.max(0, Math.min(100 - sel.w_pct, sel.x_pct + d[0])),
+          y_pct: Math.max(0, Math.min(100 - sel.h_pct, sel.y_pct + d[1])),
+        });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pagesShown, redactMode, red]);
+
   const handlePagesReady = useCallback((fresh: DocumentDetail) => {
     setDoc(prev => (prev ? { ...fresh, tags: prev.tags } : fresh));
     setJustPrepared(true);
@@ -274,7 +336,16 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
 
     // Native tab selected, or native-only doc
     if (!isEmail && hasNative && (centerTab === 'native' || !hasImages)) {
-      return <NativeViewer ref={mediaRef} docId={doc.id} nativePath={doc.native_path!} onTimeUpdate={setMediaTime} />;
+      const viewer = <NativeViewer ref={mediaRef} docId={doc.id} nativePath={doc.native_path!} onTimeUpdate={setMediaTime} />;
+      if (hasImages || doc.imageable || showPreparePages) return viewer;
+      return (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ padding: '4px var(--space-3)', fontSize: 'var(--text-xs)', color: 'var(--color-neutral-500)' }}>
+            Word, Excel and PowerPoint files can't be redacted yet — withhold or produce in full.
+          </div>
+          {viewer}
+        </div>
+      );
     }
 
     // Images still being converted (Phase B pending)
@@ -294,7 +365,38 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
 
     // Has images (default)
     if (hasImages) {
-      return <ImagePanel docId={doc.id} pageCount={doc.page_count} annotations={annotations} onPinClick={handlePinClick} onPageClick={handlePageClick} onRotationChange={setImageRotation} />;
+      return (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <RedactionToolbar
+            active={redactMode}
+            onToggle={() => { setRedactMode(m => !m); red.select(null); }}
+            reason={red.reason}
+            onReason={r => {
+              red.setReason(r);
+              if (red.selectedId !== null) red.update(red.selectedId, { reason_code: r });
+            }}
+            onRedactPage={redactPageNearestCentre}
+            preview={redactPreview}
+            onPreview={on => { setRedactPreview(on); if (on) setRedactMode(false); }}
+            blockedBy={redactMode ? redactBlocked : null}
+          />
+          <ImagePanel
+            docId={doc.id} pageCount={doc.image_count || doc.page_count} annotations={annotations}
+            onPinClick={handlePinClick} onPageClick={handlePageClick} onRotationChange={setImageRotation}
+            preview={redactPreview}
+            previewVersion={redactionVersion}
+            redaction={{
+              redactions: red.redactions,
+              mode: redactMode && !redactBlocked ? 'redact' : 'view',
+              reason: red.reason,
+              selectedId: red.selectedId,
+              onSelect: red.select,
+              onCreate: red.create,
+              onUpdate: (id, b) => red.update(id, { x_pct: b.x, y_pct: b.y, w_pct: b.w, h_pct: b.h }),
+            }}
+          />
+        </div>
+      );
     }
 
     return (
