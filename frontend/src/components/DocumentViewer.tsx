@@ -8,6 +8,7 @@ import EmailViewer from './EmailViewer';
 import MetadataPanel from './MetadataPanel';
 import NotesPanel from './NotesPanel';
 import TagBar from './TagBar';
+import PreparePages from './PreparePages';
 import TextPanel from './TextPanel';
 import AnnotationPopover from './AnnotationPopover';
 import AnnotationSidebar from './AnnotationSidebar';
@@ -32,6 +33,8 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const [error, setError] = useState('');
   const [rightTab, setRightTab] = useState<RightTab>('text');
   const [centerTab, setCenterTab] = useState<CenterTab>('images');
+  // Pages were just prepared here: show them instead of the email view.
+  const [justPrepared, setJustPrepared] = useState(false);
   const [nextId, setNextId] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -72,6 +75,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     setError('');
     setSummary(null);
     setCenterTab('images');
+    setJustPrepared(false);
     setAnnotations([]);
     setDuplicates([]);
     setEntities([]);
@@ -222,10 +226,18 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
   const hasImages = (doc?.page_count ?? 0) > 0 && (doc?.image_paths?.length ?? 0) > 0;
 
   // Auto-default to native tab when doc has native but no real images
+  const isEmail = doc?.file_type === 'email';
   useEffect(() => {
-    if (hasNative && !hasImages) setCenterTab('native');
+    // For emails the 'native' tab is the email view; pages are for redaction.
+    if (isEmail) setCenterTab(hasImages && justPrepared ? 'images' : 'native');
+    else if (hasNative && !hasImages) setCenterTab('native');
     else setCenterTab('images');
-  }, [docId, hasNative, hasImages]);
+  }, [docId, hasNative, hasImages, isEmail, justPrepared]);
+
+  const handlePagesReady = useCallback((fresh: DocumentDetail) => {
+    setDoc(prev => (prev ? { ...fresh, tags: prev.tags } : fresh));
+    setJustPrepared(true);
+  }, []);
 
   if (error) return <div style={{ padding: 32, color: 'var(--color-danger-600)' }}>Error: {error}</div>;
   if (!doc) return (
@@ -235,19 +247,33 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
     </div>
   );
 
-  const showCenterTabs = hasNative && hasImages && doc.file_type !== 'email';
+  const showCenterTabs = hasImages && (hasNative || isEmail);
+  const showPreparePages = !hasImages && (!!doc.imageable
+    || ['queued', 'running', 'failed'].includes(doc.imaging_status ?? ''));
 
   const isProcessing = doc.processing_status !== 'complete';
 
   const renderCenterPanel = () => {
+    const panel = renderCenterContent();
+    if (!showPreparePages) return panel;
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <PreparePages key={doc.id} doc={doc} onReady={handlePagesReady} />
+        {panel}
+      </div>
+    );
+  };
+
+  const renderCenterContent = () => {
     // Email messages render as an email; their native_path is the whole
     // mbox/pst container they came from, which the native viewer can't show.
-    if (doc.file_type === 'email') {
+    // Once imaged for redaction they also have a Pages view.
+    if (isEmail && !(hasImages && centerTab === 'images')) {
       return <EmailViewer key={doc.id} docId={doc.id} onOpenAttachment={onNavigate} />;
     }
 
     // Native tab selected, or native-only doc
-    if (hasNative && (centerTab === 'native' || !hasImages)) {
+    if (!isEmail && hasNative && (centerTab === 'native' || !hasImages)) {
       return <NativeViewer ref={mediaRef} docId={doc.id} nativePath={doc.native_path!} onTimeUpdate={setMediaTime} />;
     }
 
@@ -504,18 +530,28 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
           {showCenterTabs && (
             <div className="viewer-center-tabs">
+              {isEmail && (
+                <button
+                  className={`viewer-center-tab ${centerTab === 'native' ? 'active' : ''}`}
+                  onClick={() => setCenterTab('native')}
+                >
+                  Email
+                </button>
+              )}
               <button
                 className={`viewer-center-tab ${centerTab === 'images' ? 'active' : ''}`}
                 onClick={() => setCenterTab('images')}
               >
-                Images
+                {isEmail ? 'Pages' : 'Images'}
               </button>
-              <button
-                className={`viewer-center-tab ${centerTab === 'native' ? 'active' : ''}`}
-                onClick={() => setCenterTab('native')}
-              >
-                Native
-              </button>
+              {!isEmail && (
+                <button
+                  className={`viewer-center-tab ${centerTab === 'native' ? 'active' : ''}`}
+                  onClick={() => setCenterTab('native')}
+                >
+                  Native
+                </button>
+              )}
             </div>
           )}
           {renderCenterPanel()}
