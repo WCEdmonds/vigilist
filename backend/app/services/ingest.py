@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect as sa_inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -170,6 +170,8 @@ async def ingest_production(
         _apply_metadata(doc, record, None)
         documents.append(doc)
 
+    for _d in documents:
+        _clamp_string_columns(_d)
     db.add_all(documents)
     await db.flush()
 
@@ -516,19 +518,45 @@ def tsvector_sql(source: str = "text_content") -> str:
     return f"to_tsvector('english', left(COALESCE({source}, ''), {TSVECTOR_TEXT_CAP}))"
 
 
-def _clamp_string_columns(doc: Document) -> None:
-    """Truncate values that overflow a bounded ``String(n)`` column.
+_NUL = chr(0)
 
-    One over-long header (e.g. a 722-char From) would otherwise raise on flush
-    and roll back every message in its container.
+
+def _strip_nul(value):
+    """Recursively remove NUL characters from strings, dict keys/values and lists.
+
+    Postgres rejects NUL in both text and jsonb columns.
     """
-    for col in Document.__table__.columns:
-        length = getattr(col.type, "length", None)
-        if not length:
-            continue
-        value = getattr(doc, col.key, None)
-        if isinstance(value, str) and len(value) > length:
-            setattr(doc, col.key, value[:length])
+    if isinstance(value, str):
+        return value.replace(_NUL, "") if _NUL in value else value
+    if isinstance(value, dict):
+        return {_strip_nul(k): _strip_nul(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_nul(v) for v in value]
+    return value
+
+
+def _clamp_string_columns(doc: Document) -> None:
+    """Sanitize a Document's columns before flush.
+
+    1. Strip NUL characters from every string column and from strings inside
+       JSON column values (Postgres rejects them, failing the whole container).
+    2. Truncate values that overflow a bounded ``String(n)`` column, measured
+       after stripping. One over-long header (e.g. a 722-char From) would
+       otherwise raise on flush and roll back every message in its container.
+    """
+    # Iterate mapped attributes (not table column keys): ``metadata_`` is the
+    # attribute for the DB column named ``metadata``.
+    for attr in sa_inspect(Document).column_attrs:
+        key = attr.key
+        value = getattr(doc, key, None)
+        if isinstance(value, (str, dict, list)):
+            cleaned = _strip_nul(value)
+            if cleaned != value:
+                setattr(doc, key, cleaned)
+                value = cleaned
+        length = getattr(attr.columns[0].type, "length", None)
+        if length and isinstance(value, str) and len(value) > length:
+            setattr(doc, key, value[:length])
 
 
 # Guarded, idempotent "this source file is finished" marker. Native containers
