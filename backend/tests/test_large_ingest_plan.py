@@ -330,3 +330,12 @@ def test_enqueue_chunk_targets_process_chunk(monkeypatch):
     monkeypatch.setattr(task_service, "_enqueue", lambda path, body, **kw: calls.append((path, body)))
     task_service.enqueue_chunk("c1")
     assert calls == [("/api/ingest/process-chunk", {"chunk_id": "c1"})]
+
+
+def test_apply_selection_counts_a_failed_survey_as_settled(sample_survey, env):
+    """C1: a container given up on during survey must not hold the job in
+    awaiting_selection after the other container's selection."""
+    job = _job(sample_survey, containers=(BIG, "productions/1/raw/loads/L1/bad.pst"))
+    job.field_mapping["survey_failed"] = {"productions/1/raw/loads/L1/bad.pst": "OSError: x"}
+    asyncio.run(apply_selection(_db(job), "j1", BIG, ["email"], True))
+    assert job.status == "processing"

@@ -450,3 +450,72 @@ def test_failures_not_recorded_when_done_transition_loses(monkeypatch):
     env.db.responders.insert(0, ("status = 'done'", FakeResult(rowcount=0)))
     env.run()
     assert env.errors_appended() == [] and env.sql_params("items_failed = items_failed +") == []
+
+
+# --- C1: pre-claim failures are capped --------------------------------------
+
+
+class _DownSession(RollbackSession):
+    """The claim UPDATE raises, as with the database unavailable."""
+
+    async def execute(self, stmt, params=None):
+        if "RETURNING attempts" in str(stmt):
+            raise OSError("connection refused")
+        return await super().execute(stmt, params)
+
+
+def _down_db():
+    chunk = SimpleNamespace(id="c1", job_id="j1")
+    return _DownSession(get_objects={("IngestChunk", "c1"): chunk})
+
+
+def test_claim_failure_is_a_claim_error():
+    with pytest.raises(large_ingest_chunk.ChunkClaimError):
+        asyncio.run(run_chunk(_down_db(), "c1"))
+
+
+def test_process_chunk_claim_failure_retries_below_the_cap():
+    for retry in ("0", "1"):
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(ri.process_chunk_handler(body={"chunk_id": "c1"}, db=_down_db(),
+                                                 retry_count=retry))
+        assert e.value.status_code == 500
+
+
+def test_process_chunk_claim_failure_is_dropped_past_the_cap():
+    db = _down_db()
+    out = asyncio.run(ri.process_chunk_handler(body={"chunk_id": "c1"}, db=db, retry_count="2"))
+    assert out == {"ok": False, "dropped": True}
+    (new,) = [json.loads(p["new"]) for s, p in zip(db.executed, db.executed_params) if "errors ||" in s]
+    assert new[0].startswith("Chunk c1: could not be started after 3 attempts")
+    assert "connection refused" in new[0]
+
+
+def test_poll_batch_pre_claim_failure_is_capped(monkeypatch):
+    from app.services import pipeline
+
+    async def broken(production_id, stage):
+        raise pipeline.BatchPollClaimError("db down")
+
+    monkeypatch.setattr(pipeline, "poll_batch_stage", broken)
+    body = {"production_id": 1, "stage": "summaries"}
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ri.poll_batch_handler(body, None, retry_count="1"))
+    assert e.value.status_code == 500
+    assert asyncio.run(ri.poll_batch_handler(body, None, retry_count="2")) == {
+        "ok": False, "dropped": True}
+
+
+def test_poll_batch_stage_wraps_failures_before_the_claim(monkeypatch):
+    from app.services import pipeline
+
+    class Broken:
+        async def __aenter__(self):
+            raise OSError("db down")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(pipeline, "async_session", lambda: Broken())
+    with pytest.raises(pipeline.BatchPollClaimError):
+        asyncio.run(pipeline.poll_batch_stage(1, "summaries"))

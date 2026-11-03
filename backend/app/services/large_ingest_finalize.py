@@ -27,7 +27,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.models import IngestChunk, IngestJob
-from app.services.large_ingest import large_source_key
+from app.services.large_ingest import large_source_key, survey_failed_paths
 from app.services.pst_reader import ITEM_TYPES
 
 logger = logging.getLogger(__name__)
@@ -231,9 +231,16 @@ async def _phase_a(db, job, large: list[str]) -> None:
         await db.rollback()
         return  # another caller claimed it
     try:
+        failed = survey_failed_paths(job)
+        lines = []
         for path in large:
+            if path in failed:
+                # Counted skipped when its survey was given up on.
+                lines.append(f"{os.path.basename(path)}: not loaded; the mailbox could not be "
+                             f"read (survey failed: {failed[path]})")
+                continue
             await db.execute(text(_MARK_SOURCE_DONE_SQL), {"key": large_source_key(path), "jid": job_id})
-        lines = [await _reconciliation_line(db, job, path) for path in large]
+            lines.append(await _reconciliation_line(db, job, path))
         await append_job_errors(db, job_id, lines, commit=False)
         await db.execute(text(_AI_HOLD_SQL), {"pid": job.production_id})
         doc_ids = await _embed_doc_ids(db, job.production_id)

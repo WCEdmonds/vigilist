@@ -3,7 +3,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 import re
 
 from sqlalchemy import select, text
@@ -319,6 +319,39 @@ async def _skip_large_containers_inline(db, job, production_id: int, load_prefix
         await _incr_skipped(db, str(job.id), large_source_key(it["storage_path"]))
 
 
+# A Cloud Tasks request that fails before its chunk/stage claim (e.g. the
+# database is unavailable) has no persisted attempt counter, so the task's
+# own retry count caps it: past this many attempts it is logged (and recorded
+# on the job where one can be found) and acknowledged with 200, instead of
+# crash-looping for days under the queue's maxAttempts 100. A dropped chunk
+# task is re-sent by finalize's orphan sweep once the chunk sits pending.
+PRE_CLAIM_MAX_ATTEMPTS = 3
+_RETRY_HEADER = "X-CloudTasks-TaskRetryCount"
+
+
+def _task_attempt(retry_count) -> int:
+    """1-based attempt number from the X-CloudTasks-TaskRetryCount header."""
+    try:
+        return int(retry_count) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+async def _record_chunk_claim_failure(db, chunk_id: str, attempt: int, error: str) -> None:
+    """Best-effort: append the dropped claim to the chunk's job errors."""
+    from app.models import IngestChunk
+    from app.services.ingest import append_job_errors
+
+    try:
+        await db.rollback()
+        chunk = await db.get(IngestChunk, chunk_id)
+        if chunk is not None:
+            await append_job_errors(db, str(chunk.job_id), [
+                f"Chunk {chunk_id}: could not be started after {attempt} attempts: {error[:300]}"])
+    except Exception:
+        logger.exception("Could not record the claim failure of chunk %s", chunk_id)
+
+
 @router.post("/ingest/process-batch")
 async def process_batch_handler(
     body: dict,
@@ -355,7 +388,12 @@ async def survey_container_handler(
     db: AsyncSession = Depends(get_db),
     _verified: None = Depends(verify_cloud_tasks_request),
 ):
-    """Cloud Tasks worker: survey one large mailbox container (read-only)."""
+    """Cloud Tasks worker: survey one large mailbox container (read-only).
+
+    ``run_survey`` counts attempts on the job and gives the container up after
+    ``MAX_SURVEY_ATTEMPTS`` (returning normally, so this answers 200 and Cloud
+    Tasks stops); earlier failures answer 500 so Cloud Tasks retries.
+    """
     from app.services.large_ingest import run_survey
 
     job_id = body.get("job_id")
@@ -375,6 +413,7 @@ async def process_chunk_handler(
     body: dict,
     db: AsyncSession = Depends(get_db),
     _verified: None = Depends(verify_cloud_tasks_request),
+    retry_count: str | None = Header(None, alias=_RETRY_HEADER),
 ):
     """Cloud Tasks worker: process one large-container chunk of any kind
     (``items`` load, ``embed`` search embeddings, ``post`` threading/titles and
@@ -390,6 +429,15 @@ async def process_chunk_handler(
         raise HTTPException(status_code=400, detail="Missing required fields")
     try:
         await large_ingest_chunk.run_chunk(db, str(chunk_id))
+    except large_ingest_chunk.ChunkClaimError as e:
+        attempt = _task_attempt(retry_count)
+        if attempt < PRE_CLAIM_MAX_ATTEMPTS:
+            logger.exception("Ingest chunk %s could not be claimed (attempt %d)", chunk_id, attempt)
+            raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
+        logger.error("Ingest chunk %s could not be claimed after %d attempts; dropping the task: %s",
+                     chunk_id, attempt, e)
+        await _record_chunk_claim_failure(db, str(chunk_id), attempt, str(e))
+        return {"ok": False, "dropped": True}
     except large_ingest_chunk.ChunkBusy as e:
         # Another live attempt holds the chunk: Cloud Tasks backs off and
         # retries; the claim succeeds once that attempt is done or stale.
@@ -472,6 +520,7 @@ async def run_pipeline_handler(
 async def poll_batch_handler(
     body: dict,
     _verified: None = Depends(verify_cloud_tasks_request),
+    retry_count: str | None = Header(None, alias=_RETRY_HEADER),
 ):
     """Cloud Tasks worker: poll one pipeline stage's Message Batch; apply the
     results and continue the pipeline once it has ended."""
@@ -481,7 +530,19 @@ async def poll_batch_handler(
     stage = body.get("stage")
     if not production_id or stage not in pipeline.BATCHED_STAGES:
         raise HTTPException(status_code=400, detail="production_id and a batched stage required")
-    await pipeline.poll_batch_stage(int(production_id), stage)
+    try:
+        await pipeline.poll_batch_stage(int(production_id), stage)
+    except pipeline.BatchPollClaimError as e:
+        attempt = _task_attempt(retry_count)
+        if attempt < PRE_CLAIM_MAX_ATTEMPTS:
+            logger.exception("Batch poll for production %s %s failed (attempt %d)",
+                             production_id, stage, attempt)
+            raise HTTPException(status_code=500, detail=str(e))
+        # No ingest job here. The stage stays 'waiting': once it is older than
+        # BATCH_STALE_HOURS the next pipeline run resubmits it.
+        logger.error("Batch poll for production %s %s failed %d times; dropping the task: %s",
+                     production_id, stage, attempt, e)
+        return {"ok": False, "dropped": True}
     return {"ok": True}
 
 

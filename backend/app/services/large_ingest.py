@@ -12,6 +12,8 @@ import logging
 import os
 import uuid
 
+from sqlalchemy import text
+
 from app.config import settings
 from app.models import IngestChunk, IngestJob, Production
 from app.services import pst_reader
@@ -43,19 +45,75 @@ def _survey_container(storage_path: str) -> dict:
     return result.to_json()
 
 
+# Survey attempts per container before it is given up on. Counted in the
+# job's field_mapping (not the Cloud Tasks retry header, which resets if the
+# task is re-created); every claim counts, so a worker that dies outright
+# (OOM, timeout) also uses one up.
+MAX_SURVEY_ATTEMPTS = 3
+
+# Atomic per-container attempt counter; only while the job is surveying.
+_BUMP_SURVEY_ATTEMPTS_SQL = (
+    "UPDATE ingest_jobs SET field_mapping = jsonb_set(field_mapping, '{survey_attempts}', "
+    "coalesce(field_mapping -> 'survey_attempts', cast('{}' as jsonb)) || jsonb_build_object("
+    "cast(:path as text), coalesce(cast(field_mapping -> 'survey_attempts' ->> cast(:path as text) "
+    "as integer), 0) + 1)) "
+    "WHERE id = :jid AND status = 'surveying' "
+    "RETURNING cast(field_mapping -> 'survey_attempts' ->> cast(:path as text) as integer)"
+)
+
+
+def survey_failed_paths(job) -> dict:
+    """``{storage_path: short error}`` for large containers whose survey was
+    given up on."""
+    return dict((job.field_mapping or {}).get("survey_failed") or {})
+
+
+def _short_error(e: BaseException) -> str:
+    text_ = " ".join(f"{type(e).__name__}: {e}".split())
+    return text_[:300]
+
+
+def _now_naive():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 async def run_survey(db, job_id: str, storage_path: str) -> None:
     """Survey one container and record it on the job.
 
-    When every large container in the job has a survey, the job moves to
-    ``awaiting_selection``.
+    When every large container in the job has a survey (or was given up on),
+    the job moves to ``awaiting_selection``. A container whose survey fails
+    ``MAX_SURVEY_ATTEMPTS`` times is given up on (``_give_up_survey``) and this
+    returns normally, so Cloud Tasks stops retrying.
     """
     job = await db.get(IngestJob, job_id)
     if not job:
         return
-    # Release the connection for the (minutes-long) container walk.
+    if storage_path in (job.survey or {}) or storage_path in survey_failed_paths(job):
+        await db.commit()
+        return  # a redelivered task for a container already settled
+    attempts = (await db.execute(text(_BUMP_SURVEY_ATTEMPTS_SQL),
+                                 {"jid": job_id, "path": storage_path})).scalar()
+    # Commits the counter and releases the connection for the (minutes-long)
+    # container walk.
     await db.commit()
+    if attempts is None:
+        return  # the job is no longer surveying
+    if attempts > MAX_SURVEY_ATTEMPTS:
+        # The previous attempts never got to record a failure: the worker died.
+        await _give_up_survey(db, job_id, storage_path, attempts - 1,
+                              "the worker stopped before the survey finished")
+        return
 
-    survey_json = await asyncio.to_thread(_survey_container, storage_path)
+    try:
+        survey_json = await asyncio.to_thread(_survey_container, storage_path)
+    except Exception as e:
+        if attempts < MAX_SURVEY_ATTEMPTS:
+            raise
+        logger.exception("Survey of %s failed %d times; giving up", storage_path, attempts)
+        await _give_up_survey(db, job_id, storage_path, attempts, _short_error(e))
+        return
 
     # Re-read under a row lock so two surveys finishing together can't lose
     # each other's write or both miss the "all surveyed" transition.
@@ -66,9 +124,63 @@ async def run_survey(db, job_id: str, storage_path: str) -> None:
     surveys[storage_path] = survey_json
     job.survey = surveys
     expected = (job.field_mapping or {}).get("large_containers") or []
-    if all(p in surveys for p in expected) and job.status == "surveying":
+    failed = survey_failed_paths(job)
+    if all(p in surveys or p in failed for p in expected) and job.status == "surveying":
         job.status = "awaiting_selection"
     await db.commit()
+
+
+async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, error: str) -> None:
+    """Record a container that could not be surveyed and let the job go on
+    without it.
+
+    Appends an error line, counts the container's source key as skipped and
+    records it in ``field_mapping["survey_failed"]`` (finalize reports it).
+    Once every large container is surveyed or given up on: with at least one
+    surveyed, the job awaits selection as usual; with none surveyed but other
+    files in the load, it continues to finalize; with nothing else at all, the
+    job is ``failed``.
+    """
+    from app.services.ingest import _INCR_SKIPPED_SQL, append_job_errors
+
+    job = await db.get(IngestJob, job_id, with_for_update=True, populate_existing=True)
+    if job is None or job.status != "surveying":
+        await db.rollback()
+        return
+    fm = dict(job.field_mapping or {})
+    failed = dict(fm.get("survey_failed") or {})
+    surveys = job.survey or {}
+    if storage_path in failed or storage_path in surveys:
+        await db.rollback()
+        return
+    failed[storage_path] = error
+    fm["survey_failed"] = failed
+    job.field_mapping = fm
+
+    expected = fm.get("large_containers") or []
+    finalize = False
+    if all(p in surveys or p in failed for p in expected):
+        if any(p in surveys for p in expected):
+            job.status = "awaiting_selection"
+        elif int(job.total_files or 0) > len(expected):
+            # Only normal files remain: finalize once they are attempted.
+            job.status = "processing"
+            finalize = True
+        else:
+            job.status = "failed"
+            job.completed_at = _now_naive()
+
+    name = os.path.basename(storage_path)
+    msg = f"{name}: mailbox could not be read (survey failed {attempts} times): {error}"
+    await append_job_errors(db, job_id, [msg], commit=False)
+    await db.execute(text(_INCR_SKIPPED_SQL), {"key": large_source_key(storage_path), "jid": job_id})
+    # Failure record, error line, skipped key and status commit together.
+    await db.commit()
+    logger.warning("Job %s: gave up surveying %s after %d attempts", job_id, storage_path, attempts)
+    if finalize:
+        # Normal batches that already finished saw a 'surveying' job and did
+        # not finalize; nudge it now.
+        await maybe_finalize(db, job_id)
 
 
 # Selected items per chunk. Provisional until the U1 throughput spike sizes it
@@ -271,7 +383,8 @@ async def apply_selection(db, job_id: str, storage_path: str, types: list[str],
     }
     job.selection = selection
     job.items_total = int(job.items_total or 0) + selected
-    if all(p in selection for p in fm.get("large_containers") or []):
+    failed = survey_failed_paths(job)
+    if all(p in selection or p in failed for p in fm.get("large_containers") or []):
         job.status = "processing"
 
     chunks = [

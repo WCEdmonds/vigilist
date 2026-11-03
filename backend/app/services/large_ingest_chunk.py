@@ -58,6 +58,11 @@ class ChunkBusy(Exception):
     """Another live attempt holds this chunk; the task should retry later."""
 
 
+class ChunkClaimError(Exception):
+    """The claim itself failed (e.g. the database was unavailable), so no
+    attempt was counted on the chunk row."""
+
+
 _CHUNK_DONE_SQL = (
     "UPDATE ingest_chunks SET status = 'done', error = NULL, updated_at = now() "
     "WHERE id = :id AND status = 'running'"
@@ -323,9 +328,12 @@ async def run_chunk(db, chunk_id: str) -> None:
 
     Raises ``ChunkBusy`` when another live attempt holds the chunk.
     """
-    attempts = (await db.execute(
-        text(_CLAIM_CHUNK_SQL), {"id": chunk_id, "stale": CHUNK_STALE_S})).scalar()
-    await db.commit()
+    try:
+        attempts = (await db.execute(
+            text(_CLAIM_CHUNK_SQL), {"id": chunk_id, "stale": CHUNK_STALE_S})).scalar()
+        await db.commit()
+    except Exception as e:
+        raise ChunkClaimError(f"could not claim chunk {chunk_id}: {e}") from e
     if attempts is None:
         chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
         if chunk is None:

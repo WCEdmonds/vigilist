@@ -710,3 +710,20 @@ def test_generate_missing_titles_timeout_keeps_filename_fallback(monkeypatch):
     asyncio.run(ingest_mod.generate_missing_titles(db, 1, errors, ai_limit=10, ai_timeout_s=0.01))
     assert doc.title == "memo"
     assert any("deferred" in e for e in errors)
+
+
+def test_finalize_reports_a_container_whose_survey_failed(env):
+    """C1: the failed container is reported, not counted done or reconciled."""
+    bad = "productions/1/raw/bad.pst"
+    s = env(total_files=2)
+    s.job.field_mapping["large_containers"] = [PST, bad]
+    s.job.field_mapping["survey_failed"] = {bad: "OSError: bad block"}
+    s.job.skipped_keys = [large_source_key(bad)]
+    s.add_chunk("items", "done")
+    _finalize(s)
+    assert s.claims_finalizing == 1
+    assert large_source_key(bad) not in s.job.done_keys
+    assert large_source_key(PST) in s.job.done_keys
+    assert ("bad.pst: not loaded; the mailbox could not be read (survey failed: OSError: bad block)"
+            in s.job.errors)
+    assert any(e.startswith("big.pst: 10 of 10 loaded") for e in s.job.errors)
