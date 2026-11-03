@@ -572,6 +572,22 @@ async def _persist_job_errors(db: AsyncSession, job_id: str, errors: list[str]) 
     await db.commit()
 
 
+# Appends in one statement: parallel chunks each add their own messages and
+# never overwrite another writer's (unlike _persist_job_errors' snapshot).
+_APPEND_JOB_ERRORS_SQL = (
+    "UPDATE ingest_jobs SET errors = COALESCE(errors, cast('[]' as jsonb)) || cast(:new as jsonb) "
+    "WHERE id = :jid"
+)
+
+
+async def append_job_errors(db: AsyncSession, job_id: str, messages: list[str]) -> None:
+    """Atomically append ``messages`` to the job's errors."""
+    if not messages:
+        return
+    await db.execute(text(_APPEND_JOB_ERRORS_SQL), {"new": json.dumps(list(messages)), "jid": job_id})
+    await db.commit()
+
+
 async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]) -> None:
     """Persist a group of Documents atomically: one flush + one commit for all.
 

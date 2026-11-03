@@ -370,6 +370,47 @@ async def survey_container_handler(
     return {"ok": True}
 
 
+@router.post("/ingest/{job_id}/selection")
+async def apply_container_selection(
+    job_id: UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The uploader's item-type choice for one surveyed large container.
+
+    Body: ``{"storage_path": str, "types": [item types], "include_recoverable": bool}``.
+    Plans the selected items into chunks and starts loading them.
+    """
+    from app.services.large_ingest import SelectionError, apply_selection
+    from app.services.pst_reader import ITEM_TYPES
+
+    job = await db.get(IngestJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    storage_path = body.get("storage_path")
+    types = body.get("types")
+    include_recoverable = body.get("include_recoverable", True)
+    if not isinstance(storage_path, str) or not storage_path:
+        raise HTTPException(status_code=422, detail="storage_path is required")
+    if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+        raise HTTPException(status_code=422, detail="types must be a list of item types")
+    unknown = sorted(set(types) - set(ITEM_TYPES))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown item types: {', '.join(unknown)}")
+    if not isinstance(include_recoverable, bool):
+        raise HTTPException(status_code=422, detail="include_recoverable must be a boolean")
+
+    try:
+        estimate = await apply_selection(db, str(job_id), storage_path, types, include_recoverable)
+    except SelectionError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"job_id": str(job_id), "storage_path": storage_path, "estimate": estimate}
+
+
 @router.post("/ingest/run-pipeline")
 async def run_pipeline_handler(
     body: dict,

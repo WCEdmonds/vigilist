@@ -103,6 +103,19 @@ def enqueue_survey(job_id: str, storage_path: str) -> None:
     logger.info("Enqueued container survey for job %s: %s", job_id, storage_path)
 
 
+def enqueue_chunk(chunk_id: str) -> None:
+    """Enqueue one large-container chunk (``ingest_chunks`` row)."""
+    _enqueue(
+        "/api/ingest/process-chunk",
+        {"chunk_id": chunk_id},
+        not_configured=(
+            "Cloud Tasks not configured — set VIGILIST_CLOUD_RUN_SERVICE_URL, "
+            "VIGILIST_GCP_PROJECT_ID, VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT"
+        ),
+    )
+    logger.info("Enqueued ingest chunk %s", chunk_id)
+
+
 def enqueue_pipeline(production_id: int, force: bool = False,
                      job: str | None = None) -> None:
     """Enqueue one ambient-pipeline run (clustering -> summaries -> brief).

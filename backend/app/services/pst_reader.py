@@ -59,6 +59,10 @@ class FolderSurvey:
     recoverable: bool
     counts: dict[str, int] = field(default_factory=dict)
     bytes: dict[str, int] = field(default_factory=dict)
+    # Item types by position, run-length encoded: [[type, n], ...] in folder
+    # order. Lets a chunk plan exact raw ranges in a folder that mixes
+    # selected and unselected types.
+    runs: list[list] = field(default_factory=list)
 
 
 @dataclass
@@ -83,6 +87,7 @@ class ContainerSurvey:
                     "recoverable": f.recoverable,
                     "counts": f.counts,
                     "bytes": f.bytes,
+                    "runs": f.runs,
                 }
                 for f in self.folders
             ],
@@ -198,17 +203,28 @@ def _item_size(item) -> int:
     return _prop_int(item, PR_MESSAGE_SIZE) or 0
 
 
+def item_kind(item) -> str:
+    """Item type of one pypff item. The survey and every chunk reader use this
+    same helper, so planned positions and read-time filtering agree."""
+    return item_type(_prop_str(item, PR_MESSAGE_CLASS) or None)
+
+
 def survey(handle) -> ContainerSurvey:
     result = ContainerSurvey(storage_path=getattr(handle, "storage_path", ""))
     for idx, (path, folder) in enumerate(_folders(handle)):
         counts = {t: 0 for t in ITEM_TYPES}
         sizes = {t: 0 for t in ITEM_TYPES}
+        runs: list[list] = []
         for i in range(folder.get_number_of_sub_messages()):
             item = folder.get_sub_message(i)
-            kind = item_type(_prop_str(item, PR_MESSAGE_CLASS) or None)
+            kind = item_kind(item)
             counts[kind] += 1
             sizes[kind] += _item_size(item)
-        result.folders.append(FolderSurvey(idx, path, is_recoverable(path), counts, sizes))
+            if runs and runs[-1][0] == kind:
+                runs[-1][1] += 1
+            else:
+                runs.append([kind, 1])
+        result.folders.append(FolderSurvey(idx, path, is_recoverable(path), counts, sizes, runs))
     return result
 
 

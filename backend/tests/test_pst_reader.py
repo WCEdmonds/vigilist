@@ -210,3 +210,13 @@ def test_contact_renders_only_non_empty_mapi_fields():
     c = Item("IPM.Contact", subject="Dana", props={0x3001: "Dana Example", 0x3A16: "ACME"})
     body = to_parsed(c, "contact").body_text
     assert body == "Name: Dana Example\nCompany: ACME"
+
+
+def test_survey_records_type_positions_as_runs(fake_pst):
+    s = survey(fake_pst)
+    runs = {f.path: f.runs for f in s.folders}
+    assert runs["Top/Inbox"] == [["email", 4]]
+    assert runs["Top/Calendar"] == [["calendar", 2]]
+    assert runs["Top/Recoverable Items"] == [["email", 1], ["contact", 1]]
+    assert runs["Top"] == []
+    assert ContainerSurvey.from_json(s.to_json()).folders[-1].runs == [["email", 1], ["contact", 1]]
