@@ -33,16 +33,29 @@ export default function AiActivityIndicator({ productionId }: { productionId: nu
       } catch {
         // Transient: try again on the idle cadence.
       }
-      if (!cancelled && mine === ticket) timer = window.setTimeout(poll, next);
+      // A hidden tab stops here; visibilitychange restarts the loop.
+      if (!cancelled && mine === ticket && document.visibilityState !== 'hidden') {
+        timer = window.setTimeout(poll, next);
+      }
     };
 
     const onRunStarted = () => { void poll(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        window.clearTimeout(timer);
+        ticket += 1; // drop any in-flight poll's reschedule
+      } else {
+        void poll();
+      }
+    };
     window.addEventListener(AI_RUN_STARTED_EVENT, onRunStarted);
-    void poll();
+    document.addEventListener('visibilitychange', onVisibility);
+    if (document.visibilityState !== 'hidden') void poll();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
       window.removeEventListener(AI_RUN_STARTED_EVENT, onRunStarted);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [productionId]);
 

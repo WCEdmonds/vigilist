@@ -19,7 +19,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.metadata_report import METADATA_HEADERS, metadata_row
 from app.services.privilege_log import build_privilege_log_rows
-from app.services.search import mentions_entity
+from app.services.search import mentions_entity, require_entity_in_scope
 from app.services.sql_arrays import ids_match
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -50,6 +50,7 @@ async def export_documents_csv(
     if tag_id:
         query = query.where(Document.tags.any(DocumentTag.tag_id == tag_id))
     if entity_id:
+        await require_entity_in_scope(db, entity_id, accessible)
         query = query.where(mentions_entity(entity_id))
 
     result = await db.execute(query)
@@ -128,6 +129,7 @@ async def export_search_csv(
             raise HTTPException(status_code=400, detail="Invalid metadata JSON")
 
     accessible = await get_accessible_production_ids(db, user)
+    await require_entity_in_scope(db, entity_id, accessible)
     try:
         results, total = await search_svc.search_documents(
             db, q, page=1, per_page=10000, sort=sort,

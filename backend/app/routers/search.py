@@ -12,7 +12,7 @@ from app.dependencies import get_accessible_production_ids
 from app.services.audit import log_action
 from app.schemas import SearchResponse, SearchResult
 from app.services.families import parent_fields, parent_refs_for_ids
-from app.services.search import resolve_tz, search_documents
+from app.services.search import require_entity_in_scope, resolve_tz, search_documents
 from app.services.semantic_search import semantic_search
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -36,7 +36,7 @@ async def search(
     date_to: date | None = Query(None, description="Inclusive end date (YYYY-MM-DD)"),
     tz: str | None = Query(None, max_length=64, description="Reviewer's IANA timezone for date bounds"),
     folder_id: int | None = Query(None, description="Only documents in this folder"),
-    entity_id: UUID | None = Query(None, description="Only documents that mention this person/org"),
+    entity_id: UUID | None = None,  # only documents that mention this person/org
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -54,6 +54,7 @@ async def search(
         raise HTTPException(status_code=422, detail=str(e))
 
     accessible = await get_accessible_production_ids(db, user)
+    await require_entity_in_scope(db, entity_id, accessible)
 
     results: list[dict] = []
     total = 0
@@ -96,4 +97,5 @@ async def search(
         total=total,
         page=page,
         per_page=per_page,
+        entity_id=entity_id,
     )

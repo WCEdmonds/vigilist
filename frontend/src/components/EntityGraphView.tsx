@@ -10,7 +10,7 @@ interface Props {
   openEntityId?: string | null;
   onViewDocument: (docId: string) => void;
   /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
-  onViewEntityDocuments?: (entityId: string, name: string) => void;
+  onViewEntityDocuments?: (entityId: string, name: string, documentCount: number) => void;
   onBack: () => void;
   onOpenEntityChange?: (id: string | null) => void;
 }

@@ -51,7 +51,7 @@ interface Props {
   onDeleted?: (entityId: string) => void;
   /** Opens the matter's review document list filtered to every document
    * that mentions this entity. Omitted where there's no list to go to. */
-  onViewAllDocuments?: (entityId: string, name: string) => void;
+  onViewAllDocuments?: (entityId: string, name: string, documentCount: number) => void;
 }
 
 /** Mention snippet with the entity's surface text marker-highlighted. */
@@ -366,7 +366,7 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
                 type="button"
                 className="btn btn-secondary btn-xs"
                 style={{ marginTop: 6 }}
-                onClick={() => onViewAllDocuments(entityId, entityDisplayName(currentProfile.canonical_name))}
+                onClick={() => onViewAllDocuments(entityId, entityDisplayName(currentProfile.canonical_name), currentMentions.total)}
               >
                 View all {currentMentions.total.toLocaleString()} document{currentMentions.total === 1 ? '' : 's'}
               </button>

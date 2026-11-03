@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload, undefer
 
 from app.database import get_db
 from app.models import (
-    Annotation, Document, DocumentTag, Entity, FolderDocument, Note, Redaction, User,
+    Annotation, Document, DocumentTag, FolderDocument, Note, Redaction, User,
 )
 from app.models_review import ReviewProject, AIReviewResult
 
@@ -29,7 +29,7 @@ from app.dependencies import get_accessible_production_ids, get_user_role_for_pr
 from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
 from app.services.families import parent_fields, parent_refs_for_ids
-from app.services.search import date_order, mentions_entity
+from app.services.search import date_order, mentions_entity, require_entity_in_scope
 from app.schemas import (
     BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
     DocumentTagOut, EmailAttachmentOut, EmailViewOut, PaginatedDocuments, TagOut,
@@ -101,10 +101,7 @@ async def list_documents(
         count_query = count_query.where(in_folder)
 
     if entity_id:
-        # 404 unless the entity lives in a production this user can open.
-        entity = await db.get(Entity, entity_id)
-        if entity is None or entity.production_id not in accessible:
-            raise HTTPException(status_code=404, detail="Entity not found")
+        await require_entity_in_scope(db, entity_id, accessible)
         # Same predicate as search / bulk-by-query / export (one EXISTS).
         query = query.where(mentions_entity(entity_id))
         count_query = count_query.where(mentions_entity(entity_id))
@@ -308,6 +305,7 @@ async def list_documents(
         total=total,
         page=page,
         per_page=per_page,
+        entity_id=entity_id,
     )
 
 

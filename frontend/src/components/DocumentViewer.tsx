@@ -27,7 +27,7 @@ interface Props {
   onSimilarResults?: (label: string, results: import('../types').SearchResult[]) => void;
   docIds?: string[];
   /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
-  onViewEntityDocuments?: (entityId: string, name: string) => void;
+  onViewEntityDocuments?: (entityId: string, name: string, documentCount: number) => void;
 }
 
 type RightTab = 'text' | 'metadata' | 'summary' | 'redactions';

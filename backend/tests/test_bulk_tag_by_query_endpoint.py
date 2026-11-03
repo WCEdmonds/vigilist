@@ -124,6 +124,7 @@ def test_dry_run_returns_counts_and_writes_nothing(monkeypatch):
                    conflicts={B: {1}}, conflict_names={1: "Responsive"})
     out, db = _run(_query_body(dry_run=True), FakeTag())
     assert out == {
+        "entity_id": None,
         "matched": 2, "attachments_added": 1, "total": 3, "already_tagged": 1,
         "conflicts": 1, "conflict_tags": [{"tag_id": 1, "name": "Responsive", "count": 1}],
         "existing_overrides": 0,
@@ -142,8 +143,8 @@ def test_apply_with_unresolved_conflicts_409(monkeypatch):
 def test_apply_switch_commits_and_audits(monkeypatch):
     state = _patch(monkeypatch, conflicts={B: {1}}, conflict_names={1: "Responsive"})
     out, db = _run(_query_body(conflict_action="switch"), FakeTag())
-    assert out == {"total": 2, "tagged": 2, "already_tagged": 0, "switched": 1, "left": 0,
-                   "overridden": 0, "skipped_existing_overrides": 0}
+    assert out == {"entity_id": None, "total": 2, "tagged": 2, "already_tagged": 0, "switched": 1,
+                   "left": 0, "overridden": 0, "skipped_existing_overrides": 0}
     assert db.commits == 1
     plan, tag_id, user_id, override = state["apply"]
     assert plan.switch == {B: {1}} and tag_id == 5 and user_id == "u1" and override == {}

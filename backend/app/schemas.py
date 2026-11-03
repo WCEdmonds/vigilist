@@ -294,6 +294,9 @@ class SearchResponse(BaseModel):
     total: int
     page: int
     per_page: int
+    # Echo of the applied "Mentions" filter: the UI enables select-all-matching
+    # and filtered export under the chip only when this matches.
+    entity_id: UUID | None = None
 
 
 class PaginatedDocuments(BaseModel):
@@ -301,6 +304,7 @@ class PaginatedDocuments(BaseModel):
     total: int
     page: int
     per_page: int
+    entity_id: UUID | None = None  # echo of the applied "Mentions" filter
 
 
 class ProposedMappingItem(BaseModel):

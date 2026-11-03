@@ -19,7 +19,7 @@ from sqlalchemy.orm import aliased
 
 from app.models import Document, DocumentTag, Tag
 from app.schemas import BulkTagQuery
-from app.services.search import build_search_conditions
+from app.services.search import build_search_conditions, require_entity_in_scope
 from app.services.sql_arrays import ids_match
 
 # Categories where a document should carry at most one tag — applying one
@@ -36,7 +36,9 @@ async def resolve_query_docs(
     db, query: BulkTagQuery, accessible_production_ids: list[int]
 ) -> dict[UUID, int]:
     """Every document the equivalent /api/search would return (unpaged),
-    capped at MAX_BULK_DOCS + 1 so the caller can detect overflow."""
+    capped at MAX_BULK_DOCS + 1 so the caller can detect overflow. An
+    entity filter outside the caller's scope is a 404, never ignored."""
+    await require_entity_in_scope(db, query.entity_id, accessible_production_ids)
     conditions, _tsquery, has_criteria = build_search_conditions(
         query.q,
         production_id=query.production_id,

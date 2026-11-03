@@ -198,6 +198,8 @@ export interface SearchResponse {
   total: number;
   page: number;
   per_page: number;
+  /** Echo of the applied "Mentions" filter (absent from servers that predate it). */
+  entity_id?: string | null;
 }
 
 export interface PaginatedDocuments {
@@ -205,6 +207,8 @@ export interface PaginatedDocuments {
   total: number;
   page: number;
   per_page: number;
+  /** Echo of the applied "Mentions" filter (absent from servers that predate it). */
+  entity_id?: string | null;
 }
 
 export interface ProductionInfo {

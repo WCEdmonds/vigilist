@@ -167,6 +167,19 @@ def mentions_entity(entity_id):
     )
 
 
+async def require_entity_in_scope(db, entity_id, accessible_production_ids) -> None:
+    """404 unless the entity exists in a production the caller can open.
+    Every path that takes the "Mentions" filter calls this, so an entity it
+    can't apply is rejected rather than silently matching nothing."""
+    if entity_id is None:
+        return
+    from fastapi import HTTPException
+    from app.models import Entity
+    entity = await db.get(Entity, entity_id)
+    if entity is None or entity.production_id not in accessible_production_ids:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+
 def build_search_conditions(
     query: str = "",
     *,

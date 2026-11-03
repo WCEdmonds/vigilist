@@ -67,7 +67,7 @@ def test_add_by_date_range_search_includes_attachments_and_skips_existing(monkey
                                                  production_id=99))
     out = asyncio.run(rf.add_folder_documents(9, body, db=db, user=FakeUser()))
     assert out == {"matched": 2, "attachments_added": 1, "added": 2, "already_in_folder": 1,
-                   "document_count": 3}
+                   "document_count": 3, "entity_id": None}
     query, acc = state["query"]
     assert query.production_id == 4 and acc == [4]   # pinned to the folder's matter
     assert query.date_from == date(2026, 3, 1)
