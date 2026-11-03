@@ -147,3 +147,39 @@ def test_tar_validation_tag_members_query_in_batches():
     ids = [str(uuid.uuid4()) for _ in range(12_001)]
     asyncio.run(tv._tag_members(db, 3, ids))
     _assert_batched(db.statements, 12_001)
+
+
+def test_production_set_exclude_received_binds_candidates_as_one_array(monkeypatch):
+    """Tag-based adds can make the candidate set production-sized."""
+    import app.routers.production_sets as rps
+    from types import SimpleNamespace
+    from app.schemas import ProductionSetAddDocuments
+
+    ids = [uuid.uuid4() for _ in range(40_000)]
+    stmts = []
+
+    class _Session:
+        async def execute(self, stmt, params=None):
+            stmts.append(stmt)
+            sql = str(stmt)
+            if "documents.family_id" in sql.split("FROM")[0]:  # the candidate info lookup
+                return FakeResult(rows=[(i, 1, None, None) for i in ids])
+            return FakeResult(rows=[])
+
+    async def fake_load(db, user, set_id, require_manager=False):
+        return SimpleNamespace(id=set_id, production_id=1, status="draft")
+
+    class _Stop(Exception):
+        pass
+
+    def stop(*a, **k):
+        raise _Stop
+    monkeypatch.setattr(rps, "_load_set", fake_load)
+    body = ProductionSetAddDocuments(document_ids=ids, exclude_received=True)
+    try:
+        asyncio.run(rps.add_documents(set_id=1, body=body, db=_Session(), user=None))
+    except Exception:
+        pass
+    received = [s for s in stmts if "documents.source_type =" in str(s)]
+    assert received, "exclude_received query must run"
+    assert all(_bind_count(s) < 10 for s in received)

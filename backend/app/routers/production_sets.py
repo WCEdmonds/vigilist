@@ -273,7 +273,7 @@ async def add_documents(
     if body.exclude_received:
         rec_rows = (await db.execute(
             select(Document.id)
-            .where(Document.id.in_(candidates),
+            .where(ids_match(Document.id, candidates),
                    Document.source_type == "received")
         )).all()
         for (rdid,) in rec_rows:
