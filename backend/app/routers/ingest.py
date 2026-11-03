@@ -468,6 +468,23 @@ async def run_pipeline_handler(
     return {"ok": True}
 
 
+@router.post("/ingest/poll-batch")
+async def poll_batch_handler(
+    body: dict,
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker: poll one pipeline stage's Message Batch; apply the
+    results and continue the pipeline once it has ended."""
+    from app.services import pipeline
+
+    production_id = body.get("production_id")
+    stage = body.get("stage")
+    if not production_id or stage not in pipeline.BATCHED_STAGES:
+        raise HTTPException(status_code=400, detail="production_id and a batched stage required")
+    await pipeline.poll_batch_stage(int(production_id), stage)
+    return {"ok": True}
+
+
 @router.post("/productions/{production_id}/extract-entities")
 async def trigger_entity_extraction(
     production_id: int,

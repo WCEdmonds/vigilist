@@ -7,14 +7,19 @@ a failure marks that stage "failed" and the pipeline moves on — ingest and
 document availability are never affected.
 """
 
+import json
 import logging
-from datetime import datetime, timezone
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.database import async_session
 from app.models import Document, Production
-from app.services.ai import generate_summaries_batch
+from app.services import claude_batch
+from app.services import tasks as task_service
+from app.services.ai import generate_summaries_batch, summary_request_params
 from app.services.audit import log_action, resolve_audit_actor
 from app.services.brief import generate_brief
 from app.services.clustering import cluster_production
@@ -24,6 +29,29 @@ logger = logging.getLogger(__name__)
 STAGES = ("clustering", "summaries", "entities", "timeline_review", "brief")
 SUMMARY_BATCH_SIZE = 25
 ENTITY_BATCH_SIZE = 10
+
+# ── Message Batches for large per-document runs ──
+# A summaries/entities run with more pending documents than this goes through
+# the Message Batches API (half price) instead of synchronous calls.
+BATCH_THRESHOLD_DOCS = 500
+# Delay between polls of a submitted batch.
+BATCH_POLL_SECONDS = 300
+# One batch round holds at most this many requests / this much request JSON
+# (the API allows 100,000 / 256 MB; these keep the submit and the apply pass
+# well inside one Cloud Tasks request). A run with more pending documents
+# continues in further rounds.
+BATCH_MAX_REQUESTS = 10_000
+BATCH_MAX_BYTES = 64_000_000
+BATCH_LOAD_PAGE = 500
+# Batches expire after 24 h. A waiting stage older than this lost its poll
+# chain; the next run resubmits instead of waiting forever.
+BATCH_STALE_HOURS = 30
+# Applying results stops here and re-polls immediately to continue, so one
+# poll request stays inside the dispatch deadline.
+BATCH_APPLY_BUDGET_S = 1200
+BATCH_APPLY_GROUP = 100
+BATCHED_STAGES = ("summaries", "entities")
+WAITING = "waiting"
 
 
 def stages_to_run(status: dict | None, force: bool) -> list[str]:
@@ -43,6 +71,32 @@ def merge_stage(status: dict | None, stage: str, state: str, error: str | None =
     out["errors"] = errors
     out["updated_at"] = datetime.now(timezone.utc).isoformat()
     return out
+
+
+def _is_live_wait(entry) -> bool:
+    """True for a stage waiting on a Message Batch that can still finish."""
+    if not (isinstance(entry, dict) and entry.get("status") == WAITING):
+        return False
+    try:
+        submitted = datetime.fromisoformat(entry.get("submitted_at") or "")
+    except ValueError:
+        return False
+    if submitted.tzinfo is None:
+        submitted = submitted.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - submitted < timedelta(hours=BATCH_STALE_HOURS)
+
+
+async def _set_stage_waiting(production_id: int, stage: str, batch_id: str, more: bool) -> None:
+    """Record that ``stage`` waits on Message Batch ``batch_id``."""
+    async with async_session() as db:
+        prod = await db.get(Production, production_id)
+        if prod is None:
+            return
+        out = merge_stage(prod.ai_pipeline_status, stage, WAITING)
+        out[stage] = {"status": WAITING, "batch_id": batch_id, "more": more,
+                      "submitted_at": datetime.now(timezone.utc).isoformat()}
+        prod.ai_pipeline_status = out
+        await db.commit()
 
 
 async def _set_stage(production_id: int, stage: str, state: str, error: str | None = None) -> None:
@@ -95,8 +149,19 @@ async def _log_summary_batch_completed(db, production_id: int, written_count: in
         logger.exception("summary_batch_completed audit logging failed for production %s", production_id)
 
 
-async def _run_summaries(production_id: int) -> None:
-    """Summarize documents that don't have a summary yet, in DB batches."""
+def _apply_summary(doc, summary: str | None) -> bool:
+    """Persist one document's summary (sync and batch paths). True if written."""
+    if not summary:
+        return False
+    doc.summary = summary
+    return True
+
+
+async def _run_summaries(production_id: int):
+    """Summarize documents that don't have a summary yet, in DB batches.
+    A large run is submitted as a Message Batch instead (returns WAITING)."""
+    if await _maybe_submit_batch(production_id, "summaries"):
+        return WAITING
     written_count = 0
     while True:
         async with async_session() as db:
@@ -122,8 +187,7 @@ async def _run_summaries(production_id: int) -> None:
             for doc_id, summary in results.items():
                 if summary:
                     doc = await db.get(Document, doc_id)
-                    if doc is not None:
-                        doc.summary = summary
+                    if doc is not None and _apply_summary(doc, summary):
                         wrote_any = True
                         written_count += 1
             await db.commit()
@@ -150,31 +214,40 @@ async def _pending_extraction_docs(production_id: int, limit: int):
         ).scalars().all()
 
 
+async def _persist_document_entities(db, doc, parsed: dict) -> None:
+    """Persist one document's parsed extraction and mark it done (sync and
+    batch paths). Caller commits."""
+    from app.services import entity_extraction as ee
+
+    headers = ee.header_candidates(doc)
+    if headers:
+        parsed = ee.merge_parsed([parsed, {"entities": headers, "events": [], "relationships": []}])
+    await ee.persist_extraction(db, doc.production_id, doc.id, doc.text_content or "", parsed)
+    doc.entities_extracted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 async def _extract_one_document(db, doc) -> bool:
     """Extract + persist one document. True = marked done. False = left
     unmarked for a later pipeline run (LLM failure). Never raises."""
-    from app.services.entity_extraction import (
-        extract_document_entities, header_candidates, merge_parsed, persist_extraction,
-    )
+    from app.services.entity_extraction import extract_document_entities
     try:
         parsed = await extract_document_entities(doc.text_content or "")
         if parsed is None:
             return False
-        headers = header_candidates(doc)
-        if headers:
-            parsed = merge_parsed([parsed, {"entities": headers, "events": [], "relationships": []}])
-        await persist_extraction(db, doc.production_id, doc.id, doc.text_content or "", parsed)
-        doc.entities_extracted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await _persist_document_entities(db, doc, parsed)
         return True
     except Exception:
         logger.exception("Entity extraction failed for document %s", doc.id)
         return False
 
 
-async def _run_entities(production_id: int) -> None:
+async def _run_entities(production_id: int):
     """Extract entities for documents not yet processed, in small batches,
     one commit per document. A batch where every document fails aborts the
-    stage (rather than spinning); unmarked docs retry on the next run."""
+    stage (rather than spinning); unmarked docs retry on the next run.
+    A large run is submitted as a Message Batch instead (returns WAITING)."""
+    if await _maybe_submit_batch(production_id, "entities"):
+        return WAITING
     while True:
         pending = await _pending_extraction_docs(production_id, ENTITY_BATCH_SIZE)
         if not pending:
@@ -200,6 +273,196 @@ async def _run_entities(production_id: int) -> None:
             raise RuntimeError("entity extraction: entire batch failed (no API key or persistent errors)")
 
 
+def _pending_condition(stage: str):
+    if stage == "summaries":
+        return Document.summary.is_(None)
+    return Document.entities_extracted_at.is_(None)
+
+
+async def _count_pending(production_id: int, stage: str) -> int:
+    async with async_session() as db:
+        return int((await db.execute(
+            select(func.count()).select_from(Document).where(
+                Document.production_id == production_id,
+                Document.text_content.isnot(None),
+                _pending_condition(stage),
+            )
+        )).scalar() or 0)
+
+
+async def _load_batch_docs(production_id: int, stage: str, offset: int, limit: int):
+    async with async_session() as db:
+        return (await db.execute(
+            select(Document).where(
+                Document.production_id == production_id,
+                Document.text_content.isnot(None),
+                _pending_condition(stage),
+            ).order_by(Document.bates_begin, Document.id).offset(offset).limit(limit)
+        )).scalars().all()
+
+
+def _batch_requests_for(stage: str, doc) -> list[tuple[str, dict]]:
+    """Requests for one document, built by the same helpers as the sync
+    calls. Summaries use the document id as ``custom_id``; entity slices use
+    ``{document id}_{slice index}``."""
+    if stage == "summaries":
+        params = summary_request_params(doc.text_content)
+        return [(str(doc.id), params)] if params else []
+    from app.services.entity_extraction import extraction_request_params, slice_text
+    return [(f"{doc.id}_{i}", extraction_request_params(chunk))
+            for i, chunk in enumerate(slice_text(doc.text_content or ""))]
+
+
+async def _maybe_submit_batch(production_id: int, stage: str) -> bool:
+    """Submit this stage's pending documents as one Message Batch when the
+    run is large. True = submitted (stage now waiting, poll enqueued).
+
+    Needs Cloud Tasks: without it nothing could poll, so the run stays
+    synchronous.
+    """
+    if stage not in BATCHED_STAGES or not task_service.is_configured():
+        return False
+    if await _count_pending(production_id, stage) <= BATCH_THRESHOLD_DOCS:
+        return False
+
+    requests: list[tuple[str, dict]] = []
+    size = 0
+    offset = 0
+    more = False
+    while not more:
+        page = await _load_batch_docs(production_id, stage, offset, BATCH_LOAD_PAGE)
+        if not page:
+            break
+        offset += len(page)
+        for doc in page:
+            reqs = _batch_requests_for(stage, doc)
+            req_size = sum(len(json.dumps(params)) for _, params in reqs)
+            if requests and (len(requests) + len(reqs) > BATCH_MAX_REQUESTS
+                             or size + req_size > BATCH_MAX_BYTES):
+                more = True
+                break
+            requests.extend(reqs)
+            size += req_size
+    if not requests:
+        return False
+
+    batch_id = await claude_batch.submit(requests)
+    logger.info("Pipeline %s for production %s: batch %s (%d requests, more=%s)",
+                stage, production_id, batch_id, len(requests), more)
+    await _set_stage_waiting(production_id, stage, batch_id, more)
+    task_service.enqueue_batch_poll(production_id, stage, BATCH_POLL_SECONDS)
+    return True
+
+
+def _as_uuid(value: str):
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
+async def _apply_summary_results(production_id: int, results: dict, deadline: float) -> tuple[int, bool]:
+    """Apply summary results. Returns (usable results, finished)."""
+    ids = sorted(cid for cid, text in results.items() if text)
+    for start in range(0, len(ids), BATCH_APPLY_GROUP):
+        if time.monotonic() > deadline:
+            return len(ids), False
+        async with async_session() as db:
+            for cid in ids[start:start + BATCH_APPLY_GROUP]:
+                key = _as_uuid(cid)
+                doc = await db.get(Document, key) if key else None
+                # Skip documents summarized since (or by an earlier pass).
+                if doc is None or doc.production_id != production_id or doc.summary is not None:
+                    continue
+                _apply_summary(doc, results[cid])
+            await db.commit()
+    return len(ids), True
+
+
+async def _apply_entity_results(production_id: int, results: dict, deadline: float) -> tuple[int, bool]:
+    """Apply entity results; a document with any failed slice is left
+    unprocessed. Returns (usable documents, finished)."""
+    from app.services.entity_extraction import merge_parsed, parse_extraction_response, slice_text
+
+    by_doc: dict[str, dict[int, str | None]] = {}
+    for cid, text in results.items():
+        doc_id, _, idx = cid.rpartition("_")
+        if not doc_id or not idx.isdigit():
+            continue
+        by_doc.setdefault(doc_id, {})[int(idx)] = text
+    usable = sorted(d for d, slices in by_doc.items() if all(slices.values()))
+    for doc_id in usable:
+        if time.monotonic() > deadline:
+            return len(usable), False
+        key = _as_uuid(doc_id)
+        if key is None:
+            continue
+        async with async_session() as db:
+            doc = await db.get(Document, key)
+            if doc is None or doc.production_id != production_id or doc.entities_extracted_at is not None:
+                continue
+            slices = by_doc[doc_id]
+            if sorted(slices) != list(range(len(slice_text(doc.text_content or "")))):
+                continue  # text changed since submit: re-extract on a later run
+            try:
+                parsed = merge_parsed([parse_extraction_response(slices[i]) for i in sorted(slices)])
+                await _persist_document_entities(db, doc, parsed)
+                await db.commit()
+            except Exception:
+                logger.exception("Applying batched extraction failed for document %s", doc_id)
+    return len(usable), True
+
+
+async def _continue_pipeline(production_id: int) -> None:
+    if task_service.is_configured():
+        task_service.enqueue_pipeline(production_id)
+    else:
+        await run_ambient_pipeline(production_id)
+
+
+async def poll_batch_stage(production_id: int, stage: str) -> None:
+    """Cloud Tasks poll of a waiting stage's Message Batch.
+
+    Still processing: poll again in BATCH_POLL_SECONDS. Ended: apply the
+    results through the same persistence code as the synchronous path, mark
+    the stage done (or pending, when more documents remain for another
+    round), and continue the pipeline. Errored items stay unprocessed; the
+    next run picks them up.
+    """
+    async with async_session() as db:
+        prod = await db.get(Production, production_id)
+        entry = (prod.ai_pipeline_status or {}).get(stage) if prod is not None else None
+    if not (isinstance(entry, dict) and entry.get("status") == WAITING and entry.get("batch_id")):
+        logger.info("Batch poll for production %s %s: stage not waiting, nothing to do",
+                    production_id, stage)
+        return
+
+    results = await claude_batch.fetch_if_done(entry["batch_id"])
+    if results is None:
+        task_service.enqueue_batch_poll(production_id, stage, BATCH_POLL_SECONDS)
+        return
+
+    deadline = time.monotonic() + BATCH_APPLY_BUDGET_S
+    apply = _apply_summary_results if stage == "summaries" else _apply_entity_results
+    usable, finished = await apply(production_id, results, deadline)
+    if not finished:
+        # Out of time: re-poll now; already-applied documents are skipped.
+        task_service.enqueue_batch_poll(production_id, stage, 0)
+        return
+
+    if results and usable == 0:
+        await _set_stage(production_id, stage, "failed",
+                         error=f"batch {entry['batch_id']}: no request succeeded")
+    elif entry.get("more"):
+        await _set_stage(production_id, stage, "pending")
+    else:
+        await _set_stage(production_id, stage, "done")
+        if stage == "summaries":
+            async with async_session() as db:
+                await _log_summary_batch_completed(db, production_id, usable)
+    await _continue_pipeline(production_id)
+
+
 async def _run_timeline_review(production_id: int) -> None:
     """AI review of the extracted timeline (spec:
     docs/superpowers/specs/2026-07-24-timeline-review-design.md). Runs after
@@ -216,7 +479,14 @@ async def _run_timeline_review(production_id: int) -> None:
             logger.warning("Timeline review skipped for production %s: "
                            "no owner to attribute audit rows to", production_id)
             return
-        await run_timeline_review(db, production_id, actor)
+        summary = await run_timeline_review(db, production_id, actor)
+        if isinstance(summary, dict) and "sampled" in summary:
+            # Record the cap in the stage status, next to the stage state.
+            prod.ai_pipeline_status = {
+                **(prod.ai_pipeline_status or {}),
+                "timeline_review_sampling": {
+                    k: summary[k] for k in ("sampled", "events_total", "events_reviewed")},
+            }
         await db.commit()
 
 
@@ -295,21 +565,30 @@ async def run_ambient_pipeline(production_id: int, force: bool = False) -> None:
     Callers must serialize invocations per production: each stage's status
     write is read-modify-write against `Production.ai_pipeline_status`, so
     two concurrent runs for the same production can race and clobber state.
+
+    A stage waiting on a Message Batch stops the run (later stages depend on
+    it); the batch poll resumes the pipeline once the results are applied.
     """
     async with async_session() as db:
         prod = await db.get(Production, production_id)
         if prod is None:
             return
-        pending = stages_to_run(prod.ai_pipeline_status, force)
+        status = dict(prod.ai_pipeline_status or {})
+        pending = stages_to_run(status, force)
 
     for stage in pending:
+        if _is_live_wait(status.get(stage)):
+            logger.info("Pipeline for production %s waits on the %s batch", production_id, stage)
+            return
         await _set_stage(production_id, stage, "running")
         try:
-            await _STAGE_RUNNERS[stage](production_id)
+            outcome = await _STAGE_RUNNERS[stage](production_id)
         except Exception as exc:  # never let one stage kill the rest
             logger.exception("Pipeline stage %s failed for production %s", stage, production_id)
             await _set_stage(production_id, stage, "failed", error=str(exc)[:300])
         else:
+            if outcome == WAITING:
+                return
             await _set_stage(production_id, stage, "done")
 
 

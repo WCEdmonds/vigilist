@@ -13,7 +13,7 @@ import json
 import logging
 
 from google.cloud import tasks_v2
-from google.protobuf import duration_pb2
+from google.protobuf import duration_pb2, timestamp_pb2
 
 from app.config import settings
 
@@ -34,8 +34,12 @@ def is_configured() -> bool:
     )
 
 
-def _enqueue(path: str, body: dict, not_configured: str = "Cloud Tasks not configured") -> None:
-    """Create one OIDC-signed POST task for ``path`` on the task target."""
+def _enqueue(path: str, body: dict, not_configured: str = "Cloud Tasks not configured",
+             delay_s: int = 0) -> None:
+    """Create one OIDC-signed POST task for ``path`` on the task target.
+
+    ``delay_s > 0`` schedules the task that many seconds from now.
+    """
     if not is_configured():
         raise RuntimeError(not_configured)
 
@@ -60,6 +64,11 @@ def _enqueue(path: str, body: dict, not_configured: str = "Cloud Tasks not confi
         ),
         dispatch_deadline=duration_pb2.Duration(seconds=MAX_DISPATCH_DEADLINE_S),
     )
+    if delay_s > 0:
+        when = timestamp_pb2.Timestamp()
+        when.GetCurrentTime()
+        when.seconds += int(delay_s)
+        task.schedule_time = when
 
     client.create_task(parent=queue_path, task=task)
 
@@ -130,6 +139,14 @@ def enqueue_pipeline(production_id: int, force: bool = False,
         body["job"] = job
     _enqueue("/api/ingest/run-pipeline", body)
     logger.info("Enqueued ambient pipeline run for production %d", production_id)
+
+
+def enqueue_batch_poll(production_id: int, stage: str, delay_s: int) -> None:
+    """Enqueue a poll of a pipeline stage's Message Batch, ``delay_s`` from now."""
+    _enqueue("/api/ingest/poll-batch",
+             {"production_id": production_id, "stage": stage}, delay_s=delay_s)
+    logger.info("Enqueued %s batch poll for production %d in %ds",
+                stage, production_id, delay_s)
 
 
 def enqueue_reocr_batch(

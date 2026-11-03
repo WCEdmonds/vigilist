@@ -148,6 +148,24 @@ def build_chat_system_prompt(documents: list) -> str:
     )
 
 
+# ── Per-document model ──
+
+# Per-document stages (summaries, entity extraction, AI titles). Thinking is
+# off and effort low: these are short, high-volume calls. No temperature /
+# top_p / top_k: the API rejects sampling parameters (400).
+PER_DOC_MODEL = "claude-haiku-5-5"
+PER_DOC_REQUEST_OPTIONS = {
+    "thinking": {"type": "disabled"},
+    "output_config": {"effort": "low"},
+}
+
+
+def per_doc_params(**params) -> dict:
+    """Message params for one per-document request on ``PER_DOC_MODEL``."""
+    return {"model": PER_DOC_MODEL, **params,
+            **{k: dict(v) for k, v in PER_DOC_REQUEST_OPTIONS.items()}}
+
+
 # ── Per-document AI cost estimate ──
 
 # Haiku 5.5 Message Batches pricing (half of the $0.10 / $0.50 per MTok
@@ -182,23 +200,31 @@ Be precise and objective. Use language suitable for a legal professional reviewi
 Respond with ONLY the summary, no preamble."""
 
 
+def summary_request_params(text: str | None) -> dict | None:
+    """Message params summarizing one document, or None for empty text.
+    Shared by the synchronous call and the Message Batches path."""
+    # Use more text for summaries than titles — first ~3000 tokens
+    truncated = (text or "")[:SUMMARY_INPUT_CHARS].strip()
+    if not truncated:
+        return None
+    return per_doc_params(
+        max_tokens=SUMMARY_OUTPUT_TOKENS,
+        messages=[{"role": "user", "content": f"{SUMMARY_PROMPT}\n\n---\n\n{truncated}"}],
+    )
+
+
 async def generate_summary(text: str) -> str | None:
     """Generate a summary for a document from its extracted text."""
     client = _get_client()
     if not client or not text or not text.strip():
         return None
 
-    # Use more text for summaries than titles — first ~3000 tokens
-    truncated = text[:SUMMARY_INPUT_CHARS].strip()
-    if not truncated:
+    params = summary_request_params(text)
+    if params is None:
         return None
 
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=300,
-            messages=[{"role": "user", "content": f"{SUMMARY_PROMPT}\n\n---\n\n{truncated}"}],
-        )
+        response = await client.messages.create(**params)
         return _extract_text(response)
     except Exception:
         logger.warning("Failed to generate summary", exc_info=True)
@@ -305,11 +331,10 @@ async def generate_title(text: str) -> str | None:
         return None
 
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
+        response = await client.messages.create(**per_doc_params(
             max_tokens=120,
             messages=[{"role": "user", "content": f"{TITLE_PROMPT}\n\n---\n\n{truncated}"}],
-        )
+        ))
         title = _extract_text(response)
         if not title:
             return None
