@@ -323,6 +323,38 @@ estimate alongside cost. Status: approved by the user 2026-11-03.
   client data.
 - Timeline review's degradation strategy.
 
+## Addendum (2026-11-03): reader = unpack once
+
+**Measured on the real 11.2 GB PST.**
+- Streaming pypff reads from Cloud Storage is unusable. Two gcs_stream runs received about 110 GB in 60 minutes and about 85 GB in 25 minutes, roughly 8–10× read amplification, and neither finished the survey. FUSE was not tested.
+- Copying the file into a 32 GiB instance's memory works well:
+  - download takes 207 s, at about 1× read amplification;
+  - the full survey takes 104 s and finds 50,272 items (44,568 email, 966 calendar, 1,313 contact, 3,425 other);
+  - reading runs at about 524 items/s;
+  - RSS is 285 MiB on top of the file itself.
+
+**The user's decision: unpack once.** This replaces §1's "chunk workers stream the PST" with the following.
+
+- **One Cloud Run Job per large container** (`vigilist-pst-explode`).
+  - It uses the same image as the backend, with 8 vCPU and 32 GiB memory, a multi-hour task timeout and 1 retry.
+  - The start endpoint triggers it through the Cloud Run Admin API, in place of the survey Cloud Task.
+- **What the Job does:**
+  1. Download the PST into in-memory `/tmp` using a sliced download.
+  2. Run `survey()` locally and write `job.survey[path]` exactly as `run_survey` does today, including the attempt/failure handling.
+  3. Explode **every** item of every type to Storage, keyed by traversal position: `productions/{pid}/exploded/{job_id}/{container_key}/{folder_index:05d}/{position:07d}.json`.
+     - Each item file is a serialized `ParsedMessage` plus its kind and folder path.
+     - Attachments are stored as sibling objects, not inlined.
+     - A per-folder manifest lists each position's kind and any read errors.
+  4. Move the job on to `awaiting_selection` once every large container has been exploded.
+- **Read errors are never dropped.**
+  - A partially readable item is written with what could be read. An unreadable attachment becomes an error-status attachment Document.
+  - A wholly unreadable item is recorded in the manifest, then reported by the chunk worker as failed, with its folder and position.
+  - Embedded-message (method 5) and OLE (method 6) attachments must be read by their proper method, not `read_buffer`.
+- **What stays the same:** selection, `plan_chunks` and `split_chunk` (slices remain `[folder_index, start, end)`), control numbering, finalize, the hold and the UI.
+- **What changes in the chunk worker:** it reads the exploded objects for its slice in place of the PST, and builds `ParsedMessage` from JSON. Workers stay at 4 GiB, concurrency 1, 30 instances.
+- **Cleanup:** the exploded prefix is deleted when the job completes, at the post chunk.
+- **Cost:** about $1–2 of Job compute per mailbox. Explode time is a few minutes.
+
 ## Rollout
 
 1. Ship behind the size threshold. Small loads are untouched.

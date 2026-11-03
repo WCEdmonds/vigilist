@@ -586,6 +586,48 @@ async def test_status_exposes_items_and_container_survey(...):
 
 ---
 
+### Task 13: Unpack once — explode Job + chunk worker reads exploded items (spec Addendum)
+
+**Files:**
+- Create: `backend/app/jobs/__init__.py`, `backend/app/jobs/explode_pst.py` (CLI entry: `python -m app.jobs.explode_pst --job-id J --storage-path P`)
+- Create: `backend/app/services/pst_explode.py` (download, survey and explode logic; pure parts testable)
+- Create: `backend/app/services/exploded_reader.py` (`iter_slice` / `item_kind` / `to_parsed` over exploded objects)
+- Modify: `backend/app/services/pst_reader.py` (local-file open; embedded-message (method 5) and OLE (method 6) attachment reads; per-field read-error capture)
+- Modify: `backend/app/services/large_ingest.py` (start → trigger Job instead of the survey Cloud Task; `run_survey` semantics reused by the Job)
+- Modify: `backend/app/services/large_ingest_chunk.py` (read via exploded_reader; `_read_subject_at` via a single GET)
+- Modify: `backend/app/services/large_ingest_finalize.py` (post chunk deletes the exploded prefix)
+- Modify: `backend/app/services/storage.py` (sliced download to a local path)
+- Modify: `.github/workflows/backend-deploy.yml` (deploy/update the `vigilist-pst-explode` Cloud Run Job from the worker's image: 8 vCPU, 32Gi, `--task-timeout 4h`, `--max-retries 1`; grant the compute SA permission to run it with overrides)
+- Test: `backend/tests/test_pst_explode.py`, `backend/tests/test_exploded_reader.py`, plus updates to the chunk/survey tests
+
+**Interfaces:**
+- Produces:
+  - `EXPLODE_PREFIX = "productions/{pid}/exploded/{job_id}/{container_key}"`, where `container_key = sha1(storage_path)[:12]`
+  - Object layout:
+    - `{prefix}/{folder_index:05d}/{position:07d}.json` holds `{"kind", "folder_path", "parsed": <ParsedMessage fields without attachment bytes>, "attachments": [{"name", "inline", "object": "<path>" | null, "error": str | null}], "read_errors": [..]}`
+    - attachment bytes go in `{prefix}/{folder_index:05d}/{position:07d}.att{k}`
+    - `{prefix}/{folder_index:05d}/_manifest.json` holds `{"positions": {"<pos>": {"kind", "ok": bool, "error": str | null}}}`
+  - `trigger_explode_job(job_id: str, storage_path: str) -> None` (Cloud Run Admin API `jobs.run` with arg overrides). In inline (no Cloud Tasks) mode, keep the existing "requires Cloud Tasks" behaviour.
+  - `exploded_reader.iter_slice(job_id, production_id, storage_path, slices) -> Iterator[(local_seq, FolderSurvey, item_index, ExplodedItem)]`, plus `item_kind(item)` and `to_parsed(item, kind) -> ParsedMessage`. Signatures mirror `pst_reader`, so `_load_items` changes only its imports and the open call.
+
+- [ ] **Step 0:** Read the U1 read-error classification (`unit-1-report.md`, section "Read-error classification"). Make the reader handle every bucket it lists, either correctly or as a recorded per-field error. No bucket may be silently dropped.
+- [ ] **Step 1: Write the failing tests.** Cover:
+  - an explode of a fake PST tree writes one JSON per item plus manifests, keyed by position;
+  - a partially readable item keeps its readable fields and records the failed field;
+  - a method-5 attachment is read as an embedded message;
+  - exploded_reader returns the same `ParsedMessage` as `pst_reader.to_parsed` for the same fake item (parity);
+  - a chunk over exploded objects produces the same documents and control numbers as before;
+  - the post chunk deletes the prefix;
+  - start triggers the Job, not a survey task.
+- [ ] **Step 2:** Run the tests. Expected: FAIL.
+- [ ] **Step 3:** Implement.
+  - Explode with a thread pool of 32 uploads.
+  - The Job reuses `run_survey`'s attempt/failure handling (final-fix C1), and on a fatal error records a job error and exits non-zero.
+- [ ] **Step 4:** Run the tests. Expected: PASS. Run the full suite. Run the workflow YAML through a linter, or at least `python -c "import yaml; yaml.safe_load(open(...))"`.
+- [ ] **Step 5:** Commit. `git commit -m "feat(ingest): unpack large PSTs once in a Cloud Run Job; chunk workers read exploded items"`
+
+---
+
 ### Task 12: Worker sizing + rollout
 
 **Files:**
