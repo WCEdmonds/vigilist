@@ -15,7 +15,8 @@ import app.services.tasks as task_service
 from app.models import Document
 from app.services import large_ingest, pst_reader
 from app.services.ingest import append_job_errors, incr_job_items
-from app.services.large_ingest import MAX_CHUNK_ATTEMPTS, message_control, run_chunk
+from app.services import large_ingest_chunk
+from app.services.large_ingest_chunk import MAX_CHUNK_ATTEMPTS, message_control, run_chunk
 from app.services.oidc import verify_cloud_tasks_request
 from tests.fakes import FakeResult, FakeSession
 from tests.test_pst_reader import Folder, Item
@@ -83,6 +84,7 @@ class Env:
                 ("documents.bates_begin IN", FakeResult(rows=[(c,) for c in existing])),
                 ("status = 'split'", FakeResult(rowcount=1)),
                 ("status = 'failed'", FakeResult(rowcount=1)),
+                ("status = 'done'", FakeResult(rowcount=1)),
             ],
         )
 
@@ -324,7 +326,7 @@ def test_process_chunk_endpoint_runs_chunk(monkeypatch):
     async def fake_run(db, chunk_id):
         calls.append(chunk_id)
 
-    monkeypatch.setattr(large_ingest, "run_chunk", fake_run)
+    monkeypatch.setattr(large_ingest_chunk, "run_chunk", fake_run)
     assert asyncio.run(ri.process_chunk_handler(body={"chunk_id": "c9"}, db=FakeSession())) == {"ok": True}
     assert calls == ["c9"]
 
@@ -357,3 +359,61 @@ def test_integrity_error_without_a_duplicate_is_recorded_failed(monkeypatch):
     (msg,) = env.errors_appended()
     assert msg.startswith(f"{CONTROL} -0001") and "duplicate key" in msg
     assert [p["f"] for p in env.sql_params("items_failed = items_failed +")] == [1]
+
+
+def _crash_then_retry(monkeypatch, fail_on_retry):
+    """Attempt 1: item 1 fails, then the worker dies at item 3 (as an OOM
+    would). Attempt 2 re-runs the chunk; item 2 is already loaded."""
+    real_parse = pst_reader.to_parsed
+    real_iter = pst_reader.iter_slice
+    state = {"attempt": 1}
+
+    def flaky(item, kind):
+        if item.subject == "Msg 1" and (state["attempt"] == 1 or fail_on_retry):
+            raise RuntimeError("bad body")
+        return real_parse(item, kind)
+
+    def crashing_iter(handle, slices):
+        for n, row in enumerate(real_iter(handle, slices)):
+            if state["attempt"] == 1 and n == 2:
+                raise MemoryError("worker died")
+            yield row
+
+    monkeypatch.setattr(pst_reader, "to_parsed", flaky)
+    monkeypatch.setattr(pst_reader, "iter_slice", crashing_iter)
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 0, 3]], 3))
+    with pytest.raises(MemoryError):
+        env.run()
+    # Nothing failed was recorded by the crashed attempt.
+    assert env.errors_appended() == [] and env.sql_params("items_failed = items_failed +") == []
+    state["attempt"] = 2
+    loaded = [d.bates_begin for d in env.parents()]
+    assert loaded == [f"{CONTROL} -0002"]
+    env.db.responders.insert(0, ("documents.bates_begin IN", FakeResult(rows=[(c,) for c in loaded])))
+    env.run()
+    return env
+
+
+def test_failure_then_crash_then_failure_again_is_recorded_once(monkeypatch):
+    env = _crash_then_retry(monkeypatch, fail_on_retry=True)
+    failed = [p["f"] for p in env.sql_params("items_failed = items_failed +")]
+    assert sum(failed) == 1
+    (msg,) = env.errors_appended()
+    assert msg.startswith(f"{CONTROL} -0001")
+    assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0002", f"{CONTROL} -0003"]
+
+
+def test_transient_failure_loaded_on_retry_is_not_recorded(monkeypatch):
+    env = _crash_then_retry(monkeypatch, fail_on_retry=False)
+    assert env.sql_params("items_failed = items_failed +") == []
+    assert env.errors_appended() == []
+    assert sorted(d.bates_begin for d in env.parents()) == [f"{CONTROL} -000{i}" for i in (1, 2, 3)]
+
+
+def test_failures_not_recorded_when_done_transition_loses(monkeypatch):
+    """A concurrent dispatch already finished the chunk: its failures are its own."""
+    monkeypatch.setattr(pst_reader, "to_parsed", lambda item, kind: (_ for _ in ()).throw(RuntimeError("x")))
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1))
+    env.db.responders.insert(0, ("status = 'done'", FakeResult(rowcount=0)))
+    env.run()
+    assert env.errors_appended() == [] and env.sql_params("items_failed = items_failed +") == []

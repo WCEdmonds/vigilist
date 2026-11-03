@@ -381,13 +381,13 @@ async def process_chunk_handler(
     Non-2xx makes Cloud Tasks retry; the chunk's attempt counter splits a range
     that keeps failing, so retries can't crash-loop forever.
     """
-    from app.services import large_ingest
+    from app.services import large_ingest_chunk
 
     chunk_id = body.get("chunk_id")
     if not chunk_id:
         raise HTTPException(status_code=400, detail="Missing required fields")
     try:
-        await large_ingest.run_chunk(db, str(chunk_id))
+        await large_ingest_chunk.run_chunk(db, str(chunk_id))
     except Exception as e:
         logger.exception("Ingest chunk %s failed", chunk_id)
         raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")

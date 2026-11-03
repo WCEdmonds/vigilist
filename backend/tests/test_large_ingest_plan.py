@@ -195,8 +195,15 @@ def env(monkeypatch):
     return SimpleNamespace(enqueued=enq, finalized=fin)
 
 
+class RollbackSession(FakeSession):
+    rollbacks = 0
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+
 def _db(job):
-    return FakeSession(get_objects={
+    return RollbackSession(get_objects={
         ("IngestJob", "j1"): job,
         ("Production", 1): SimpleNamespace(id=1, name="Acme Corp"),
     })
@@ -225,9 +232,22 @@ def test_apply_selection_writes_chunks_selection_and_enqueues(sample_survey, env
 
 def test_apply_selection_twice_is_409(sample_survey, env):
     job = _job(sample_survey, selection={BIG: {"types": ["email"], "include_recoverable": True}})
+    db = _db(job)
     with pytest.raises(SelectionError) as e:
-        asyncio.run(apply_selection(_db(job), "j1", BIG, ["email"], True))
+        asyncio.run(apply_selection(db, "j1", BIG, ["email"], True))
     assert e.value.status == 409
+    assert db.rollbacks == 1  # row lock released before raising
+
+
+def test_apply_selection_survey_without_positions_is_409(env):
+    legacy = ContainerSurvey(BIG, [FolderSurvey(0, "Top/Inbox", False, {"email": 3, "contact": 1}, {})])
+    job = _job(legacy)
+    db = _db(job)
+    with pytest.raises(SelectionError) as e:
+        asyncio.run(apply_selection(db, "j1", BIG, ["email"], True))
+    assert e.value.status == 409 and "re-survey" in e.value.detail
+    assert db.rollbacks == 1
+    assert job.selection == {} and env.enqueued == []
 
 
 def test_apply_selection_requires_awaiting_selection(sample_survey, env):
