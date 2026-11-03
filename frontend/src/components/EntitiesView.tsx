@@ -160,6 +160,8 @@ function errText(e: unknown): string {
 interface Props {
   productionId: number;
   onViewDocument: (docId: string) => void;
+  /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
+  onViewEntityDocuments?: (entityId: string, name: string) => void;
   onBack: () => void;
   openEntityId?: string | null;
   onOpenEntityChange?: (id: string | null) => void;
@@ -171,7 +173,7 @@ const TYPE_LENSES: { value: string; label: string }[] = [
   { value: 'org', label: 'Organizations' },
 ];
 
-export default function EntitiesView({ productionId, onViewDocument, onBack, openEntityId, onOpenEntityChange }: Props) {
+export default function EntitiesView({ productionId, onViewDocument, onViewEntityDocuments, onBack, openEntityId, onOpenEntityChange }: Props) {
   // ── Cast data (timeline's paging pattern: `loading` derives from the
   // highest settled page, so no effect ever flips a loading flag) ──
   const [entities, setEntities] = useState<EntityListItem[]>([]);
@@ -1076,6 +1078,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }}
           onRenamed={(id, name) => applyRename(id, name)}
           onDeleted={applyDelete}
+          onViewAllDocuments={onViewEntityDocuments}
         />
       )}
     </div>

@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
 from app.database import get_db
-from app.models import Annotation, Document, DocumentTag, FolderDocument, Note, Redaction, User
+from app.models import (
+    Annotation, Document, DocumentTag, Entity, EntityMention, FolderDocument, Note, Redaction, User,
+)
 from app.models_review import ReviewProject, AIReviewResult
 
 # Pin colors used by both the viewer overlay and the burned-in PDF pins.
@@ -76,6 +78,7 @@ async def list_documents(
     cluster_id: int | None = None,
     ai_decision: str | None = None,
     folder_id: int | None = None,
+    entity_id: UUID | None = Query(None, description="Only documents that mention this person/org"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -96,6 +99,23 @@ async def list_documents(
             select(FolderDocument.document_id).where(FolderDocument.folder_id == folder_id))
         query = query.where(in_folder)
         count_query = count_query.where(in_folder)
+
+    if entity_id:
+        # 404 unless the entity lives in a production this user can open.
+        entity = await db.get(Entity, entity_id)
+        if entity is None or entity.production_id not in accessible:
+            raise HTTPException(status_code=404, detail="Entity not found")
+        # EXISTS keeps one row per document (no join fan-out, so the count is
+        # exact) and never ships a Python list of ids. Entity merges re-point
+        # the loser's mentions to the winner, so the survivor's id covers both.
+        mentions_entity = (
+            select(EntityMention.id)
+            .where(EntityMention.entity_id == entity_id,
+                   EntityMention.document_id == Document.id)
+            .exists()
+        )
+        query = query.where(mentions_entity)
+        count_query = count_query.where(mentions_entity)
 
     if tag_id:
         query = query.where(Document.tags.any(DocumentTag.tag_id == tag_id))

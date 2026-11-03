@@ -9,6 +9,8 @@ interface Props {
   productionId: number;
   openEntityId?: string | null;
   onViewDocument: (docId: string) => void;
+  /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
+  onViewEntityDocuments?: (entityId: string, name: string) => void;
   onBack: () => void;
   onOpenEntityChange?: (id: string | null) => void;
 }
@@ -23,7 +25,7 @@ interface Transform {
 // typed by ring color — person = stamp blue, org = marker gold.
 const NODE_RING: Record<string, string> = { person: '#2f3dbd', org: '#f5ce00' };
 
-export default function EntityGraphView({ productionId, openEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
+export default function EntityGraphView({ productionId, openEntityId, onViewDocument, onViewEntityDocuments, onBack, onOpenEntityChange }: Props) {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [layout, setLayout] = useState<PositionedNode[]>([]);
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, k: 1 });
@@ -253,7 +255,8 @@ export default function EntityGraphView({ productionId, openEntityId, onViewDocu
       {openEntityId && (
         <EntityPanel entityId={openEntityId} onClose={() => openEntity(null)}
                      onOpenEntity={openEntity}
-                     onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }} />
+                     onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }}
+                     onViewAllDocuments={onViewEntityDocuments} />
       )}
     </div>
   );

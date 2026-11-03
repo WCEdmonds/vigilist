@@ -255,6 +255,14 @@
 .filter-chip .remove:hover {
   opacity: 1;
 }
+button.filter-chip .remove,
+.filter-chip button.remove {
+  background: none;
+  border: 0;
+  padding: 0 0 0 2px;
+  color: inherit;
+  line-height: 1;
+}
 
 /* ── Search results ── */
 

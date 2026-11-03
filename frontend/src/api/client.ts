@@ -64,7 +64,7 @@ export function getRandomDocument(productionId?: number): Promise<{ id: string }
 }
 
 
-export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string, sourceParty?: string, sourceType?: string, folderId?: number) {
+export function listDocuments(page = 1, perPage = 50, productionId?: number, tagId?: number, fileType?: string, sort = 'bates', clusterId?: number, aiDecision?: string, sourceParty?: string, sourceType?: string, folderId?: number, entityId?: string) {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
@@ -74,6 +74,7 @@ export function listDocuments(page = 1, perPage = 50, productionId?: number, tag
   if (sourceParty) params.set('source_party', sourceParty);
   if (sourceType) params.set('source_type', sourceType);
   if (folderId) params.set('folder_id', String(folderId));
+  if (entityId) params.set('entity_id', entityId);
   return request<PaginatedDocuments>(`/api/documents?${params}`);
 }
 

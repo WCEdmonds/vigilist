@@ -86,6 +86,10 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Folders: named subsets of the matter (e.g. one time period).
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [filterFolderId, setFilterFolderId] = useState<number | null>(null);
+  // "View all N documents" from an entity panel: the browse list narrowed to
+  // every document mentioning one person/org. Browse-list only — search
+  // doesn't apply it (the chip is shown only on the browse list).
+  const [filterEntity, setFilterEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [sourceParties, setSourceParties] = useState<string[]>([]);
   const [undesignatedCount, setUndesignatedCount] = useState(0);
@@ -196,12 +200,12 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
     getSourceParties(production.id).then(r => { setSourceParties(r.source_parties); setUndesignatedCount(r.undesignated); }).catch(e => console.warn('getSourceParties failed:', e));
     listFolders(production.id).then(setFolders).catch(e => console.warn('listFolders failed:', e));
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode, filterFolderId]);
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode, filterFolderId, filterEntity?.id]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam, filterFolderId ?? undefined);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam, filterFolderId ?? undefined, filterEntity?.id);
       setDocuments(res.documents);
       setDocTotal(res.total);
       setDocPage(page);
@@ -433,6 +437,26 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Re-fetch the doc list (or re-run the active search) after leaving the
   // review workspace, since markers/tags may have changed there. Called from
   // event handlers only — never from a render-time effect.
+  // Leave whatever full-screen view hosted the entity panel and land on the
+  // browse list filtered to that entity (the list effect reloads on the change).
+  const showEntityDocuments = (entityId: string, name: string) => {
+    setShowEntities(false);
+    setShowTimeline(false);
+    setShowGraph(false);
+    setShowReview(false);
+    setViewDocId(null);
+    setEntityPanelId(null);
+    setHasSearched(false);
+    setSearchQuery('');
+    setSearchResults([]);
+    setBatesHits([]);
+    setSelectedIds(new Set());
+    setAllMatching(false);
+    setLastExtras(undefined);
+    setDocPage(1);
+    setFilterEntity({ id: entityId, name });
+  };
+
   const refreshList = () => {
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     else loadDocuments(docPage);
@@ -460,6 +484,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       <EntitiesView
         productionId={production.id}
         onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
+        onViewEntityDocuments={showEntityDocuments}
         onBack={() => { setEntityPanelId(null); setShowEntities(false); refreshList(); }}
         openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
@@ -475,6 +500,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       <EntityTimelineView
         productionId={production.id}
         onViewDocument={(id) => { setShowTimeline(false); setViewDocId(id); refreshList(); }}
+        onViewEntityDocuments={showEntityDocuments}
         onBack={() => { setEntityPanelId(null); setShowTimeline(false); refreshList(); }}
         openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
@@ -490,6 +516,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       <EntityGraphView
         productionId={production.id}
         onViewDocument={(id) => { setShowGraph(false); setViewDocId(id); refreshList(); }}
+        onViewEntityDocuments={showEntityDocuments}
         onBack={() => { setEntityPanelId(null); setShowGraph(false); refreshList(); }}
         openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
@@ -530,6 +557,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           showSimilarResults(label, results);
         }}
         docIds={currentDocIds}
+        onViewEntityDocuments={showEntityDocuments}
       />
     );
   }
@@ -915,12 +943,22 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterSourceParty || workMode !== 'all') && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterSourceParty || workMode !== 'all' || filterEntity) && (
           <div>
             <div className="section-header">
               <h2 className="section-title">
                 All Documents
                 <span className="section-count">{docTotal}</span>
+                {filterEntity && (
+                  <span className="filter-chip" style={{ marginLeft: 'var(--space-2)' }}>
+                    Mentions: {filterEntity.name}
+                    <button type="button" className="remove" aria-label={`Remove filter: mentions ${filterEntity.name}`}
+                            title="Remove this filter"
+                            onClick={() => { setFilterEntity(null); setDocPage(1); setSelectedIds(new Set()); }}>
+                      ✕
+                    </button>
+                  </span>
+                )}
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
                 <label htmlFor="filter-tag" className="visually-hidden">Filter by tag</label>
