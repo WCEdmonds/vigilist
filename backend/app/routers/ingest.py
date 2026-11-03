@@ -597,6 +597,8 @@ async def ocr_backfill(
         return out
     if not task_service.is_configured():
         raise HTTPException(status_code=503, detail="Cloud Tasks not configured")
+    if not await ob.try_start_run(db, production_id):
+        raise HTTPException(status_code=409, detail="An OCR backfill is already running")
     task_service.enqueue_ocr_backfill_batch(production_id, None)
     await log_action(db, user, "ocr_backfill_started", "production",
                      resource_id=str(production_id), production_id=production_id,
@@ -620,6 +622,7 @@ async def ocr_backfill_batch_handler(
     if not production_id:
         raise HTTPException(status_code=400, detail="production_id required")
     res = await ob.run_batch(db, int(production_id), body.get("after_id"))
+    await ob.record_progress(db, int(production_id), res)
     if not res["done"]:
         task_service.enqueue_ocr_backfill_batch(int(production_id), res["next_after"])
     return {"ok": True, **res}
