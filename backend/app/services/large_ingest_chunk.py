@@ -337,11 +337,11 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
                 for d in docs:
                     _stamp_source(d, stamp)
                 await _persist_documents(db, job_id, docs, items_done=1)
-                if read_errors:
-                    # Loaded, but not every field could be read: reported,
-                    # not counted as failed.
+                # Loaded, but not every field (or attachment) could be read:
+                # one line per error, reported but not counted as failed.
+                for err in read_errors:
                     failures.append(f"{control}: partly read (PST folder {info.path!r}, position "
-                                    f"{raw_pos}): " + "; ".join(read_errors)[:1000])
+                                    f"{raw_pos}): {err[:500]}")
             except Exception as e:
                 await db.rollback()
                 if isinstance(e, IntegrityError):

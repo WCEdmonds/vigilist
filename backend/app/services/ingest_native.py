@@ -21,6 +21,7 @@ from app.models import Document, IngestJob, Production
 from app.services.email_parse import (
     OversizedAttachment,
     ParsedMessage,
+    RawEmbeddedMessage,
     UnreadableAttachment,
     expand_email,
 )
@@ -182,7 +183,12 @@ def build_email_documents(
                 extraction_error=why,
             ))
             continue
-        if extract_fn is None:
+        if isinstance(att_bytes, RawEmbeddedMessage):
+            # Not text we can read: keep the raw bytes as the native file.
+            from app.services.extractors import ExtractResult
+
+            res = ExtractResult("", "email", "partial", att_bytes.note[:500])
+        elif extract_fn is None:
             res = extract_attachment(
                 att_name, att_bytes,
                 inline=(att_name in parsed.inline_names), ocr_fn=ocr_fn,

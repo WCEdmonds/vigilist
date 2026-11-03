@@ -25,6 +25,7 @@ from typing import Iterator
 from app.services.email_parse import (
     OversizedAttachment,
     ParsedMessage,
+    RawEmbeddedMessage,
     UnreadableAttachment,
     _strip_html,
     decode_header_value,
@@ -162,6 +163,9 @@ def folders(handle) -> list[tuple[str, object]]:
 # MAPI property tags (non-named, so readable straight from record sets).
 PR_MESSAGE_CLASS = 0x001A
 PR_SUBJECT = 0x0037
+PR_BODY = 0x1000
+PR_CREATION_TIME = 0x3007
+PR_LAST_MODIFICATION_TIME = 0x3008
 PR_MESSAGE_SIZE = 0x0E08
 PR_RECIPIENT_TYPE = 0x0C15
 PR_DISPLAY_NAME = 0x3001
@@ -413,9 +417,11 @@ def _read_attachment(att, index: int, errors: list[str], depth: int) -> tuple[st
     ``UnreadableAttachment`` plus a read error, never a drop.
 
     Method 5 (embedded message) is unpacked as a nested message and rendered
-    as an ``.eml`` attachment, so it becomes one attachment document with its
-    own text (headers, body, attachment names). Method 6 (OLE) is read as
-    data; if that fails it is an error attachment."""
+    as an ``.eml`` attachment, so it becomes one attachment document of type
+    "email" with its own text (headers, body, attachment names). One that
+    can't be parsed keeps its raw bytes as ``<name>.msg-raw`` (a 'partial'
+    document). Method 6 (OLE) is read as data; if that fails it is an error
+    attachment."""
     try:
         name = _attachment_name(att)
     except Exception:
@@ -435,14 +441,21 @@ def _read_attachment(att, index: int, errors: list[str], depth: int) -> tuple[st
                 return f"{base[:150]}.eml", to_eml_bytes(inner)
             except Exception as e:
                 why = f"embedded message could not be read ({short_error(e)})"
+        base = (_text(getattr(att, "long_filename", None)).strip()
+                or _prop_str(att, PR_DISPLAY_NAME) or "attached message")
+        raw_name = f"{base[:150]}.msg-raw"
         try:
             data = _attachment_bytes(att)
         except Exception as e:
             msg = f"{why}; raw data unreadable: {short_error(e)}"
-            errors.append(f"{label}: {msg}")
-            return name, UnreadableAttachment(msg)
-        errors.append(f"{label}: {why}; kept as raw data")
-        return name, data
+            errors.append(f"attachment {index} ({raw_name}): {msg}")
+            return raw_name, UnreadableAttachment(msg)
+        if isinstance(data, OversizedAttachment):
+            errors.append(f"attachment {index} ({raw_name}): {why}; too large to keep")
+            return raw_name, data
+        note = f"{why}; kept as raw data"
+        errors.append(f"attachment {index} ({raw_name}): {note}")
+        return raw_name, RawEmbeddedMessage(data, note)
 
     try:
         return name, _attachment_bytes(att)
@@ -463,13 +476,26 @@ def _recipients(item, errors: list[str]) -> list[tuple[int, str]]:
     """(recipient type, 'Name <addr>') per recipient; type 1=to 2=cc 3=bcc."""
     table = _Reader(errors).get(item, "recipients")
     if table is None:
-        return []
+        return []  # no recipient table (2,022 items in the measured PST)
     out: list[tuple[int, str]] = []
+    record_sets: list = []
     try:
-        record_sets = list(table.record_sets or [])
-    except Exception as e:
-        errors.append(f"recipients: {short_error(e)}")
-        return []
+        n = getattr(table, "number_of_recipients", None)
+    except Exception:
+        n = None
+    if n is not None and callable(getattr(table, "get_recipient", None)):
+        # pypff.recipients: one record set per recipient.
+        for i in range(int(n)):
+            try:
+                record_sets.append(table.get_recipient(i))
+            except Exception as e:
+                errors.append(f"recipient {i + 1}: {short_error(e)}")
+    else:
+        try:
+            record_sets = list(table.record_sets or [])
+        except Exception as e:
+            errors.append(f"recipients: {short_error(e)}")
+            return []
     for rs in record_sets:
         holder = _RecordSets(rs)
         name = _prop_str(holder, PR_DISPLAY_NAME)
@@ -527,12 +553,32 @@ def _render_properties(item, kind: str, r: _Reader) -> str:
 _BARE_MAX_PROPS = 200
 
 
+def _prop_time(obj, tag: int) -> str:
+    entry = _prop(obj, tag)
+    if entry is None:
+        return ""
+    try:
+        return _fmt(entry.data_as_datetime)
+    except Exception:
+        return ""
+
+
+_BARE_RENDERED = (PR_MESSAGE_CLASS, PR_SUBJECT, PR_BODY, PR_CREATION_TIME,
+                  PR_LAST_MODIFICATION_TIME)
+
+
 def _render_bare(item) -> ParsedMessage:
-    """A non-message pypff item: its class and string properties as text."""
-    lines = []
-    mc = _prop_str(item, PR_MESSAGE_CLASS)
-    if mc:
-        lines.append(f"Message class: {mc}")
+    """A bare ``pypff.item`` (not a message; 2,185 in the measured PST): class,
+    subject, times and body from its record sets (each optional), rendered
+    like the other non-email kinds, then any other string properties. Never
+    a read failure."""
+    lines = [
+        _line("Message class", _prop_str(item, PR_MESSAGE_CLASS)),
+        _line("Created", _prop_time(item, PR_CREATION_TIME)),
+        _line("Modified", _prop_time(item, PR_LAST_MODIFICATION_TIME)),
+    ]
+    lines = [ln for ln in lines if ln]
+    extra = []
     seen = 0
     try:
         record_sets = list(item.record_sets or [])
@@ -548,7 +594,7 @@ def _render_bare(item) -> ParsedMessage:
                 break
             try:
                 tag = entry.entry_type
-                if tag == PR_MESSAGE_CLASS:
+                if tag in _BARE_RENDERED:
                     continue
                 value = entry.data_as_string
             except Exception:
@@ -556,8 +602,12 @@ def _render_bare(item) -> ParsedMessage:
             value = _text(value).strip() if isinstance(value, (str, bytes)) else ""
             if value:
                 label = f"0x{int(tag):04X}" if isinstance(tag, int) else str(tag)
-                lines.append(f"{label}: {value}")
+                extra.append(f"{label}: {value}")
                 seen += 1
+    lines += extra
+    body = _prop_str(item, PR_BODY)
+    if body:
+        lines += ["", body]
     return ParsedMessage(subject=_prop_str(item, PR_SUBJECT), body_text="\n".join(lines))
 
 

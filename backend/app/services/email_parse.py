@@ -46,6 +46,17 @@ class OversizedAttachment(bytes):
         return obj
 
 
+class RawEmbeddedMessage(bytes):
+    """An embedded-message attachment that could not be parsed as a message:
+    its raw bytes, kept as the attachment's native file with ``note`` saying
+    why (the document is 'partial', not dropped)."""
+
+    def __new__(cls, data: bytes, note: str):
+        obj = super().__new__(cls, data)
+        obj.note = str(note)
+        return obj
+
+
 class UnreadableAttachment(bytes):
     """Empty stand-in for an attachment whose bytes could not be read from the
     container; ``error`` says why. It becomes an error document with no native

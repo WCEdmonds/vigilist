@@ -73,13 +73,17 @@ def test_parity_with_pst_reader_for_the_same_items(store):
 
 
 def test_markers_survive_the_round_trip(store, monkeypatch):
-    monkeypatch.setattr(pst_reader, "MAX_ATTACHMENT_BYTES", 3)
+    from app.services.email_parse import RawEmbeddedMessage
+
+    monkeypatch.setattr(pst_reader, "MAX_ATTACHMENT_BYTES", 30)
     _explode(store, _tree([Item(attachments=[SizeFails("bad.bin", b"", method=7),
-                                             Att("big.zip", b"xxxx")])]))
+                                             Att("big.zip", b"x" * 31), Embedded("fwd", None)])]))
     ((_, _, _, item),) = _items([[2, 0, 1]])
-    (_, bad), (_, big) = exploded_reader.to_parsed(item, "email").attachments
+    (_, bad), (_, big), (raw_name, raw) = exploded_reader.to_parsed(item, "email").attachments
+    assert raw_name == "fwd.msg-raw" and isinstance(raw, RawEmbeddedMessage)
+    assert bytes(raw) == b"RAW-MAPI-BLOB" and "could not be opened" in raw.note
     assert isinstance(bad, UnreadableAttachment) and "data size" in bad.error
-    assert isinstance(big, OversizedAttachment) and (big.size, big.limit) == (4, 3)
+    assert isinstance(big, OversizedAttachment) and (big.size, big.limit) == (31, 30)
 
 
 def test_iter_slice_numbers_and_folders(store):

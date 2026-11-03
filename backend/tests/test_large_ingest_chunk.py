@@ -825,3 +825,20 @@ def test_item_unreadable_at_unpack_is_recorded_failed_with_its_position(monkeypa
     assert msg.startswith(f"{CONTROL} -0002") and "Top/Inbox" in msg and "position 1" in msg
     assert "item table corrupt" in msg
     assert [p["f"] for p in env.sql_params("items_failed = items_failed +")] == [1]
+
+
+def test_each_unreadable_attachment_gets_its_own_job_error_line(monkeypatch):
+    """Bucket 3: the parent loads; each bad attachment is an error document
+    and its own job error line; nothing is counted failed."""
+    from tests.test_pst_reader import SizeFails
+
+    item = Item(subject="s", plain_text_body="b",
+                attachments=[SizeFails("a.dat", b"", method=7), SizeFails("b.dat", b"", method=7)])
+    env = Env(monkeypatch, _tree([item]), chunk=_chunk([[2, 0, 1]], 1))
+    env.run()
+    docs = env.docs()
+    assert [d.extraction_status for d in docs] == ["ok", "error", "error"]
+    lines = env.errors_appended()
+    assert len(lines) == 2 and all(m.startswith(f"{CONTROL} -0001: partly read") for m in lines)
+    assert "a.dat" in lines[0] and "b.dat" in lines[1]
+    assert env.sql_params("items_failed = items_failed +") == []

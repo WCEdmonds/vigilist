@@ -363,9 +363,9 @@ def test_method5_that_cannot_be_opened_keeps_raw_bytes_and_records_it():
     item = Item(subject="Outer", attachments=[Embedded("fwd.msg", None)])
     p = to_parsed(item, "email")
     ((name, data),) = p.attachments
-    assert name == "fwd.msg" and data == b"RAW-MAPI-BLOB"
+    assert name == "fwd.msg.msg-raw" and data == b"RAW-MAPI-BLOB"
     (err,) = p.read_errors
-    assert err.startswith("attachment 1 (fwd.msg)") and "embedded message" in err
+    assert err.startswith("attachment 1 (fwd.msg.msg-raw)") and "embedded message" in err
 
 
 class OleFails(Att):
@@ -443,3 +443,172 @@ def test_open_pst_opens_a_local_file(monkeypatch):
     with pr.open_pst("/tmp/x.pst", "productions/1/raw/x.pst") as handle:
         assert handle.storage_path == "productions/1/raw/x.pst"
     assert opened == ["/tmp/x.pst", "closed"]
+
+
+# --- Read-error classification buckets (real PST, 50,272 items) --------------
+# Fakes mirror the installed pypff 20260926 types: record_set.get_entry_by_type
+# / entries; recipients.number_of_recipients / get_recipient(i) / record_sets;
+# attachment.size / read_buffer / number_of_sub_items / get_sub_item.
+
+from datetime import datetime as _dt  # noqa: E402
+
+
+class DtEntry(Entry):
+    def __init__(self, value, entry_type=None):
+        super().__init__(None, entry_type)
+        self.data_as_datetime = value
+
+
+class DtRecordSet(RecordSet):
+    def get_entry_by_type(self, tag):
+        v = self._props.get(tag)
+        if isinstance(v, _dt):
+            return DtEntry(v, tag)
+        return super().get_entry_by_type(tag)
+
+    @property
+    def entries(self):
+        return [DtEntry(v, t) if isinstance(v, _dt) else Entry(v, t) for t, v in self._props.items()]
+
+
+class PypffItem:
+    """Bucket 1: a bare pypff.item (not a message). Only identifier, record
+    sets and sub items; every message accessor raises AttributeError."""
+
+    def __init__(self, props):
+        self.record_sets = [DtRecordSet(props)]
+        self.identifier = 1
+        self.number_of_sub_items = 0
+
+
+def test_bucket1_bare_item_renders_class_subject_body_and_times():
+    from app.services.pst_reader import item_kind, survey
+
+    bare = PypffItem({0x001A: "IPM.Microsoft.ScheduleData.FreeBusy", 0x0037: "Free/busy",
+                      0x1000: "free busy body", 0x3007: _dt(2026, 1, 2, 3, 4, 5),
+                      0x3008: _dt(2026, 2, 3, 4, 5, 6)})
+    with pytest.raises(AttributeError):
+        bare.subject  # noqa: B018 - mirrors the real type
+    assert item_kind(bare) == "other"
+    p = to_parsed(bare, "other")
+    assert p.subject == "Free/busy" and p.read_errors == []
+    assert "Message class: IPM.Microsoft.ScheduleData.FreeBusy" in p.body_text
+    assert "Created: 2026-01-02T03:04:05" in p.body_text
+    assert "Modified: 2026-02-03T04:05:06" in p.body_text
+    assert p.body_text.rstrip().endswith("free busy body")
+    s = survey(Folder("", subs=[Folder("Inbox", [bare, Item()])]))
+    assert s.folders[1].counts["other"] == 1 and s.folders[1].counts["email"] == 1
+
+
+def test_bucket1_bare_item_with_no_properties_is_still_not_an_error():
+    p = to_parsed(PypffItem({}), "other")
+    assert p.read_errors == [] and p.subject == ""
+
+
+def test_bucket2_missing_html_on_every_optional_body_is_empty_not_an_error():
+    missing = OSError("libpff_message_get_html_body: missing value data")
+    cls = _item_with(html_body=missing, rtf_body=missing)
+    p = to_parsed(cls(subject="s", plain_text_body="b"), "email")
+    assert p.read_errors == [] and p.body_html == ""
+
+
+def test_bucket3_method7_attachment_is_an_error_document_and_the_parent_loads():
+    from app.services.ingest_native import build_email_documents
+
+    item = Item(subject="s", plain_text_body="b",
+                attachments=[SizeFails("report.dat", b"", method=7)])
+    p = to_parsed(item, "email")
+    docs = build_email_documents(p, "ACME 000001 -0001", 1, "acme.pst", None, b"m",
+                                 store_fn=lambda d, path: None)
+    parent, att = docs
+    assert parent.extraction_status == "ok" and parent.text_content == "b"
+    assert att.file_name == "report.dat" and att.extraction_status == "error"
+    assert "failed to retrieve data size" in att.extraction_error
+    (err,) = p.read_errors
+    assert err.startswith("attachment 1 (report.dat)")
+
+
+def test_bucket4_unparseable_embedded_message_is_kept_raw_as_partial():
+    from app.services.email_parse import RawEmbeddedMessage
+    from app.services.ingest_native import build_email_documents
+
+    att = Embedded("", None)
+    att.record_sets[0]._props[0x3001] = "Weekly update"  # PR_DISPLAY_NAME
+    p = to_parsed(Item(subject="Outer", attachments=[att]), "email")
+    ((name, data),) = p.attachments
+    assert name == "Weekly update.msg-raw"
+    assert isinstance(data, RawEmbeddedMessage) and bytes(data) == b"RAW-MAPI-BLOB"
+    stored = []
+    docs = build_email_documents(p, "ACME 000001 -0001", 1, "acme.pst", None, b"m",
+                                 store_fn=lambda d, path: stored.append(bytes(d)))
+    raw = docs[1]
+    assert raw.extraction_status == "partial" and "could not be opened" in raw.extraction_error
+    assert raw.native_path is not None and stored == [b"RAW-MAPI-BLOB"]
+
+
+def test_bucket4_unnamed_unparseable_embedded_message_gets_a_default_name():
+    ((name, _),) = to_parsed(Item(attachments=[Embedded("", None)]), "email").attachments
+    assert name == "attached message.msg-raw"
+
+
+def test_bucket4_parsed_embedded_message_is_an_email_attachment_document():
+    from app.services.ingest_native import build_email_documents
+
+    inner = Item(subject="Inner", plain_text_body="inner body",
+                 transport_headers="From: bob@acme.test\r\nTo: carol@acme.test\r\n"
+                                   "Date: Mon, 5 Jan 2026 10:00:00 +0000\r\n")
+    p = to_parsed(Item(subject="Outer", attachments=[Embedded("", inner)]), "email")
+    docs = build_email_documents(p, "ACME 000001 -0001", 1, "acme.pst", None, b"m",
+                                 store_fn=lambda d, path: None)
+    child = docs[1]
+    assert child.file_type == "email" and child.extraction_status == "ok"
+    for part in ("Inner", "bob@acme.test", "carol@acme.test", "2026", "inner body"):
+        assert part in child.text_content
+
+
+class RecipientsTable:
+    """pypff.recipients: number_of_recipients / get_recipient(i) return one
+    record set per recipient (record_sets mirrors them)."""
+
+    def __init__(self, rows):
+        self._sets = [RecordSet(r) for r in rows]
+        self.number_of_recipients = len(rows)
+        self.record_sets = list(self._sets)
+
+    def get_recipient(self, i):
+        return self._sets[i]
+
+
+def test_bucket5_no_recipient_table_is_empty_not_an_error():
+    p = to_parsed(Item("IPM.Contact", subject="Dana", recipients=None), "contact")
+    assert p.read_errors == []
+    p = to_parsed(Item(subject="s", sender_name="A", recipients=None), "email")
+    assert p.read_errors == [] and p.to == ""
+
+
+def test_bucket5_recipients_read_through_get_recipient():
+    item = Item(subject="s")
+    item.recipients = RecipientsTable([
+        {0x3001: "Bob", 0x39FE: "bob@acme.test", 0x0C15: 1},
+        {0x3001: "Carol", 0x3003: "carol@acme.test", 0x0C15: 2},
+    ])
+    item.recipients.record_sets = None  # only the recipient accessor works
+    p = to_parsed(item, "email")
+    assert p.to == "Bob <bob@acme.test>" and p.cc == "Carol <carol@acme.test>"
+    assert p.read_errors == []
+
+
+def test_bucket5_one_bad_recipient_is_recorded_and_the_rest_kept():
+    class Flaky(RecipientsTable):
+        def get_recipient(self, i):
+            if i == 0:
+                raise OSError("bad recipient row")
+            return super().get_recipient(i)
+
+    item = Item(subject="s")
+    item.recipients = Flaky([{0x3001: "Bob", 0x39FE: "bob@acme.test", 0x0C15: 1},
+                             {0x3001: "Carol", 0x39FE: "carol@acme.test", 0x0C15: 1}])
+    p = to_parsed(item, "email")
+    assert p.to == "Carol <carol@acme.test>"
+    (err,) = p.read_errors
+    assert err.startswith("recipient 1: OSError")

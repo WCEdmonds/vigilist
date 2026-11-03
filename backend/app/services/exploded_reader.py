@@ -15,7 +15,12 @@ import json
 from typing import Iterator
 
 from app.services import storage
-from app.services.email_parse import OversizedAttachment, ParsedMessage, UnreadableAttachment
+from app.services.email_parse import (
+    OversizedAttachment,
+    ParsedMessage,
+    RawEmbeddedMessage,
+    UnreadableAttachment,
+)
 from app.services.pst_explode import _PARSED_FIELDS, explode_prefix, item_object, manifest_object
 from app.services.pst_reader import FolderSurvey, is_recoverable
 
@@ -87,7 +92,10 @@ def item_kind(item: ExplodedItem) -> str:
 
 def _attachment(entry: dict) -> bytes:
     if entry.get("object"):
-        return storage.get_download_bytes(entry["object"])
+        data = storage.get_download_bytes(entry["object"])
+        if entry.get("raw_note"):
+            return RawEmbeddedMessage(data, entry["raw_note"])
+        return data
     over = entry.get("oversized")
     if over:
         return OversizedAttachment(int(over["size"]), int(over["limit"]))

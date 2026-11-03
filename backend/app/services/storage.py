@@ -65,8 +65,20 @@ def _get_signing_context() -> tuple[object | None, str | None]:
     return _signing_credentials, _signing_sa_email
 
 
+def _ensure_app() -> None:
+    """Initialize the default Firebase app if nothing has yet. The API does it
+    when the auth router is imported; the explode Job never imports it."""
+    if firebase_admin._apps:
+        return
+    try:
+        firebase_admin.initialize_app()
+    except ValueError:
+        pass  # initialized concurrently
+
+
 def get_bucket():
     """Get the Firebase Storage bucket."""
+    _ensure_app()
     return storage.bucket(settings.firebase_storage_bucket)
 
 

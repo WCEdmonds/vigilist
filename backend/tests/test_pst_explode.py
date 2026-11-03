@@ -329,3 +329,17 @@ def test_eml_attachment_gets_text():
 
 def test_markers_are_bytes():
     assert bytes(OversizedAttachment(5, 3)) == b"" and bytes(UnreadableAttachment("x")) == b""
+
+
+def test_get_bucket_initializes_firebase_when_no_app_exists(monkeypatch):
+    """The explode Job never imports the auth router (which initializes the
+    Firebase app for the API), so Storage access must initialize it."""
+    import firebase_admin
+    from firebase_admin import storage as fb_storage
+
+    inits = []
+    monkeypatch.setattr(firebase_admin, "_apps", {})
+    monkeypatch.setattr(firebase_admin, "initialize_app", lambda *a, **k: inits.append(k) or object())
+    monkeypatch.setattr(fb_storage, "bucket", lambda name: ("bucket", name))
+    assert storage.get_bucket()[0] == "bucket"
+    assert len(inits) == 1

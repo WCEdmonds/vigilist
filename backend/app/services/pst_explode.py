@@ -33,7 +33,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
 from app.services import pst_reader, storage
-from app.services.email_parse import OversizedAttachment, ParsedMessage, UnreadableAttachment
+from app.services.email_parse import (
+    OversizedAttachment,
+    ParsedMessage,
+    RawEmbeddedMessage,
+    UnreadableAttachment,
+)
 from app.services.pst_reader import ContainerSurvey, SurveyBuilder, short_error
 
 logger = logging.getLogger(__name__)
@@ -93,6 +98,8 @@ def serialize_item(parsed: ParsedMessage, kind: str, folder_path: str, prefix: s
         else:
             obj = attachment_object(prefix, folder_index, position, k)
             entry["object"] = obj
+            if isinstance(data, RawEmbeddedMessage):
+                entry["raw_note"] = data.note
             blobs.append((obj, bytes(data)))
         attachments.append(entry)
     fields = {f: getattr(parsed, f) for f in _PARSED_FIELDS}
