@@ -32,6 +32,23 @@
 - No client data in tests, fixtures, commits or PR text. Use synthetic/ACME data.
 - Branch: implementation goes on a fresh branch from `origin/main`, never local `main`.
 
+## Execution Order (combined units)
+
+The 12 task sections below are grouped into **7 units**. Each unit goes to one implementer and one reviewer. Its implementer works through its task sections in order, committing at each task's commit step.
+
+| Unit | Task sections | Depends on | Lane |
+|---|---|---|---|
+| U1 Speed test | 1 | — | **Parallel:** starts immediately, on its own worktree/branch. |
+| U2 Attachments | 8 | — | **Parallel:** starts immediately, on its own worktree/branch. Merged into the main branch before U4 starts. |
+| U3 Reader + schema + survey | 2, 3, 4 | — | Main |
+| U4 Selection + chunk worker | 5, 6 | U3, U2 merged | Main |
+| U5 Finalize | 7 | U4 | Main |
+| U6 AI hold + cheaper AI | 9, 10 | U3 (uses `Production.ai_hold`) | Main, after U5. It touches `_finalize_job_if_done` like U5, so it runs sequentially to avoid conflicts. |
+| U7 Screens + worker sizing | 11, plus 12 Step 1–2 | U5, U6; U1's constants | Main |
+
+- Until U1 reports, U4 uses provisional `CHUNK_ITEMS = 500` and U7 uses provisional `WORKER_MAX_INSTANCES = 30`. When U1 lands, its constants replace the provisional values in one commit.
+- Task 12 Steps 3–5 (PR, deploy, rollout re-run) are done by the controller after the final whole-branch review, not by an implementer.
+
 ## Review Focus
 
 1. **A retried or concurrent chunk after a partial commit.** The expected behavior is no duplicate `bates_begin`, no lost messages and no double-counted `items_done`. *Pinned in Task 6* (`test_retry_skips_existing_controls_and_counts_once`).
