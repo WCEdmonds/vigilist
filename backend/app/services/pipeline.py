@@ -556,31 +556,40 @@ async def poll_batch_stage(production_id: int, stage: str) -> None:
     synchronously. A batch where nothing succeeded fails the stage and does
     not continue the pipeline (resubmitting would fail the same way).
     """
+    # Only the database reads and the claim are pre-claim failures (capped by
+    # the handler). A Batches API or enqueue failure propagates as itself, so
+    # Cloud Tasks retries it normally.
+    def claim_error(e):
+        return BatchPollClaimError(f"batch poll for production {production_id} {stage} "
+                                   f"failed before its claim: {e}")
+
     try:
         async with async_session() as db:
             prod = await db.get(Production, production_id)
             entry = (prod.ai_pipeline_status or {}).get(stage) if prod is not None else None
-        if not (isinstance(entry, dict) and entry.get("batch_id")):
-            logger.info("Batch poll for production %s %s: stage not waiting, nothing to do",
-                        production_id, stage)
-            return
-        state = entry.get("status")
-        if not (state == WAITING or (state == APPLYING and _is_stale_apply(entry))):
-            logger.info("Batch poll for production %s %s: stage is %s, nothing to do",
-                        production_id, stage, state)
-            return
+    except Exception as e:
+        raise claim_error(e) from e
+    if not (isinstance(entry, dict) and entry.get("batch_id")):
+        logger.info("Batch poll for production %s %s: stage not waiting, nothing to do",
+                    production_id, stage)
+        return
+    state = entry.get("status")
+    if not (state == WAITING or (state == APPLYING and _is_stale_apply(entry))):
+        logger.info("Batch poll for production %s %s: stage is %s, nothing to do",
+                    production_id, stage, state)
+        return
 
-        results = await claude_batch.fetch_if_done(entry["batch_id"])
-        if results is None:
-            task_service.enqueue_batch_poll(production_id, stage, BATCH_POLL_SECONDS)
-            return
+    results = await claude_batch.fetch_if_done(entry["batch_id"])
+    if results is None:
+        task_service.enqueue_batch_poll(production_id, stage, BATCH_POLL_SECONDS)
+        return
 
-        claimed = {**entry, "status": APPLYING,
-                   "applying_at": datetime.now(timezone.utc).isoformat()}
+    claimed = {**entry, "status": APPLYING,
+               "applying_at": datetime.now(timezone.utc).isoformat()}
+    try:
         won = await _cas_stage(production_id, stage, entry, claimed)
     except Exception as e:
-        raise BatchPollClaimError(f"batch poll for production {production_id} {stage} "
-                                  f"failed before its claim: {e}") from e
+        raise claim_error(e) from e
     if not won:
         logger.info("Batch poll for production %s %s: another poll claimed batch %s",
                     production_id, stage, entry["batch_id"])

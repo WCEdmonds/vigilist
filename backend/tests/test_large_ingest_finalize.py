@@ -111,12 +111,18 @@ class SimSession(FakeSession):
         self.executed.append(sql)
         self.executed_params.append(params)
         s, job = self.s, self.s.job
-        if "GROUP BY kind, status" in sql:
+        if "GROUP BY kind, state" in sql:
+            assert params["stale"] == CHUNK_STALE_S
             counts: dict = {}
             for c in s.chunks.values():
-                counts[(c.kind, c.status)] = counts.get((c.kind, c.status), 0) + 1
+                st = "stale" if c.status == "running" and getattr(c, "stale", False) else c.status
+                counts[(c.kind, st)] = counts.get((c.kind, st), 0) + 1
             return FakeResult(rows=[(k, st, n) for (k, st), n in counts.items()])
         if "SKIP LOCKED" in sql:
+            for o in s.orphans:
+                c = s.chunks.get(str(o))
+                if c is not None and c.status == "running" and getattr(c, "stale", False):
+                    c.status, c.stale = "pending", False
             return FakeResult(rows=[(o,) for o in s.orphans])
         if "SET status = 'finalizing'" in sql:
             await asyncio.sleep(0)  # let a concurrent caller interleave
@@ -638,9 +644,35 @@ def test_busy_chunk_route_returns_503(monkeypatch):
     assert e.value.status_code == 503
 
 
-def test_sweep_only_targets_pending_chunks():
+def test_sweep_targets_stale_pending_and_stale_running_chunks():
     sql = fin._SWEEP_ORPHANS_SQL
-    assert "status = 'pending'" in sql and "running" not in sql
+    assert "status = 'pending' AND updated_at < now() - make_interval(mins => :mins)" in sql
+    assert "status = 'running' AND updated_at < now() - make_interval(secs => :stale)" in sql
+    # A stale running chunk goes back to pending so the re-sent task can claim it.
+    assert "SET status = 'pending', updated_at = now()" in sql
+
+
+def test_stale_running_chunk_does_not_block_the_sweep_and_is_reenqueued(env):
+    """NB1: a worker that died holding a chunk leaves it 'running'; once it is
+    older than CHUNK_STALE_S it no longer blocks the sweep, which re-sends it."""
+    s = env()
+    dead = s.add_chunk("items", "running")
+    s.chunks[dead].stale = True
+    s.orphans = [dead]
+    db = SimSession(s)
+    asyncio.run(maybe_finalize(db, "j1"))
+    assert s.enqueued == [dead] and s.chunks[dead].status == "pending"
+    sweep = [p for q, p in zip(db.executed, db.executed_params) if "SKIP LOCKED" in q]
+    assert sweep and sweep[0]["stale"] == CHUNK_STALE_S
+    assert s.job.status == "processing"  # stale work still blocks finalize
+
+
+def test_stale_running_chunk_still_blocks_phase_a(env):
+    s = env()
+    dead = s.add_chunk("items", "running")
+    s.chunks[dead].stale = True
+    _finalize(s)
+    assert s.claims_finalizing == 0
 
 
 def test_terminal_chunk_redelivery_is_not_busy(env, monkeypatch):

@@ -37,7 +37,8 @@ MAX_CHUNK_ATTEMPTS = 3
 # 'pending'), so Cloud Tasks' retry re-claims it within seconds. A worker that
 # dies outright (OOM, instance kill, timeout) can't release: Cloud Tasks'
 # retries get 503 (``ChunkBusy``) and back off until CHUNK_STALE_S has passed
-# since the claim, then the next retry re-claims it.
+# since the claim, then the next retry re-claims it (or finalize's orphan
+# sweep puts it back to 'pending' and re-sends it).
 # Must match the vigilist-worker `--timeout` in backend-deploy.yml.
 WORKER_REQUEST_TIMEOUT_S = 1800
 CHUNK_STALE_S = WORKER_REQUEST_TIMEOUT_S + 300  # 2100 s
@@ -52,15 +53,21 @@ _CLAIM_CHUNK_SQL = (
 # it at once (the attempt still counts). A raised error is not a crash, so the
 # in-flight position is cleared: the retry must not skip that item.
 _RELEASE_CHUNK_SQL = (
-    "UPDATE ingest_chunks SET status = 'pending', cursor = NULL, updated_at = now() "
+    "UPDATE ingest_chunks SET status = 'pending', cursor = NULL, cursor_hits = 0, "
+    "updated_at = now() WHERE id = :id AND status = 'running'"
+)
+# Written (and committed) before each item is built, with the number of
+# consecutive attempts that started this same item. If the worker dies while
+# building it (OOM, instance kill, timeout), both survive. After POISON_DEATHS
+# deaths at one position the next claim skips exactly that item, instead of
+# failing the whole chunk three times and halving it down to one item (~a day
+# of stale windows). One death is not enough: it may have been an unrelated
+# instance kill. Does not touch updated_at, which is the claim time.
+_SET_CURSOR_SQL = (
+    "UPDATE ingest_chunks SET cursor = :pos, cursor_hits = :hits "
     "WHERE id = :id AND status = 'running'"
 )
-# Written (and committed) before each item is built. If the worker dies while
-# building it (OOM, instance kill, timeout), the position survives, and the
-# next claim skips exactly that item instead of failing the whole chunk three
-# times and halving it down to one item (~a day of stale windows). Does not
-# touch updated_at, which is the claim time.
-_SET_CURSOR_SQL = "UPDATE ingest_chunks SET cursor = :pos WHERE id = :id AND status = 'running'"
+POISON_DEATHS = 2
 
 
 class ChunkBusy(Exception):
@@ -105,6 +112,7 @@ def _snapshot_chunk(chunk):
         global_offset=int(chunk.global_offset or 0), item_count=int(chunk.item_count or 0),
         doc_ids=[str(d) for d in (getattr(chunk, "doc_ids", None) or [])],
         cursor=getattr(chunk, "cursor", None),
+        cursor_hits=int(getattr(chunk, "cursor_hits", None) or 0),
     )
 
 
@@ -290,10 +298,12 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
     # Release the connection before reading the exploded items.
     await db.commit()
 
-    # The previous attempt died while building this item: skip it now.
-    poison = c.cursor
-    if poison is None or not (0 <= poison < c.item_count) or controls[poison] in existing:
-        poison = None
+    # Earlier attempts died while building this item: after POISON_DEATHS
+    # consecutive deaths at it, skip it now.
+    crashed = c.cursor
+    if crashed is None or not (0 <= crashed < c.item_count) or controls[crashed] in existing:
+        crashed = None
+    poison = crashed if crashed is not None and c.cursor_hits >= POISON_DEATHS else None
 
     type_filter = set(c.type_filter) or None
     local = 0
@@ -315,10 +325,11 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
                 logger.warning("Chunk %s: skipping %s, the previous attempt died loading it",
                                c.id, control)
                 failures.append(f"{control}: skipped; the worker stopped while loading it "
-                                f"(PST folder {info.path!r}, position {raw_pos})")
+                                f"{POISON_DEATHS} times (PST folder {info.path!r}, position {raw_pos})")
                 failed += 1
                 continue
-            await db.execute(text(_SET_CURSOR_SQL), {"id": c.id, "pos": pos})
+            hits = c.cursor_hits + 1 if pos == crashed else 1
+            await db.execute(text(_SET_CURSOR_SQL), {"id": c.id, "pos": pos, "hits": hits})
             await db.commit()
             try:
                 docs, read_errors = await asyncio.to_thread(
@@ -386,15 +397,22 @@ async def run_chunk(db, chunk_id: str) -> None:
     except Exception as e:
         raise ChunkClaimError(f"could not claim chunk {chunk_id}: {e}") from e
     if attempts is None:
-        chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
-        if chunk is None:
-            return
-        if chunk.status == "running":
-            raise ChunkBusy(f"chunk {chunk_id} is held by another attempt")
-        # Done, split or failed. A redelivered task still nudges finalize: a
-        # crash between the done commit and maybe_finalize (or inside it, which
-        # rolls back) would otherwise leave nobody to call it.
-        await large_ingest.maybe_finalize(db, str(chunk.job_id))
+        # No attempt was counted, so failures here are pre-claim failures
+        # (capped by the persisted per-chunk counter, like a failed claim).
+        try:
+            chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
+            if chunk is None:
+                return
+            if chunk.status == "running":
+                raise ChunkBusy(f"chunk {chunk_id} is held by another attempt")
+            # Done, split or failed. A redelivered task still nudges finalize:
+            # a crash between the done commit and maybe_finalize (or inside
+            # it, which rolls back) would otherwise leave nobody to call it.
+            await large_ingest.maybe_finalize(db, str(chunk.job_id))
+        except ChunkBusy:
+            raise
+        except Exception as e:
+            raise ChunkClaimError(f"chunk {chunk_id} (already claimed or finished): {e}") from e
         return
     chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
     if chunk is None:

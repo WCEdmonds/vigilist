@@ -333,14 +333,24 @@ async def _skip_large_containers_inline(db, job, production_id: int, load_prefix
         await _incr_skipped(db, str(job.id), large_source_key(it["storage_path"]))
 
 
-# A Cloud Tasks request that fails before its chunk/stage claim (e.g. the
-# database is unavailable) has no persisted attempt counter, so the task's
-# own retry count caps it: past this many attempts it is logged (and recorded
-# on the job where one can be found) and acknowledged with 200, instead of
-# crash-looping for days under the queue's maxAttempts 100. A dropped chunk
-# task is re-sent by finalize's orphan sweep once the chunk sits pending.
+# A batch-poll request that fails before its stage claim (the database is
+# unavailable) has no row to count on, so the task's own retry count caps it:
+# past this many attempts it is logged and acknowledged with 200, instead of
+# crash-looping for days under the queue's maxAttempts 100.
 PRE_CLAIM_MAX_ATTEMPTS = 3
 _RETRY_HEADER = "X-CloudTasks-TaskRetryCount"
+
+# A chunk request that fails before its claim counts on the chunk row
+# (``ingest_chunks.preclaim_failures``; the retry header resets when a task is
+# re-created). At the cap it is recorded on the job and acknowledged with 200.
+# A failure that can't even be counted answers 500 (Cloud Tasks retries,
+# bounded by the queue's maxAttempts). A dropped chunk task is re-sent by
+# finalize's orphan sweep once the chunk sits stale.
+CHUNK_PRE_CLAIM_MAX_FAILURES = 15
+_BUMP_PRECLAIM_SQL = text(
+    "UPDATE ingest_chunks SET preclaim_failures = preclaim_failures + 1 "
+    "WHERE id = :id RETURNING preclaim_failures, job_id"
+)
 
 
 def _task_attempt(retry_count) -> int:
@@ -351,17 +361,22 @@ def _task_attempt(retry_count) -> int:
         return 1
 
 
-async def _record_chunk_claim_failure(db, chunk_id: str, attempt: int, error: str) -> None:
-    """Best-effort: append the dropped claim to the chunk's job errors."""
-    from app.models import IngestChunk
+async def _count_chunk_claim_failure(db, chunk_id: str):
+    """Persist one pre-claim failure: ``(failures, job_id)``, or None when the
+    chunk row does not exist. Raises when the count can't be written."""
+    await db.rollback()
+    row = (await db.execute(_BUMP_PRECLAIM_SQL, {"id": chunk_id})).first()
+    await db.commit()
+    return None if row is None else (int(row[0]), row[1])
+
+
+async def _record_chunk_claim_failure(db, chunk_id: str, job_id, failures: int, error: str) -> None:
+    """Best-effort: append the dropped chunk task to its job's errors."""
     from app.services.ingest import append_job_errors
 
     try:
-        await db.rollback()
-        chunk = await db.get(IngestChunk, chunk_id)
-        if chunk is not None:
-            await append_job_errors(db, str(chunk.job_id), [
-                f"Chunk {chunk_id}: could not be started after {attempt} attempts: {error[:300]}"])
+        await append_job_errors(db, str(job_id), [
+            f"Chunk {chunk_id}: could not be started after {failures} attempts: {error[:300]}"])
     except Exception:
         logger.exception("Could not record the claim failure of chunk %s", chunk_id)
 
@@ -418,13 +433,22 @@ async def process_chunk_handler(
     try:
         await large_ingest_chunk.run_chunk(db, str(chunk_id))
     except large_ingest_chunk.ChunkClaimError as e:
-        attempt = _task_attempt(retry_count)
-        if attempt < PRE_CLAIM_MAX_ATTEMPTS:
-            logger.exception("Ingest chunk %s could not be claimed (attempt %d)", chunk_id, attempt)
+        try:
+            counted = await _count_chunk_claim_failure(db, str(chunk_id))
+        except Exception:
+            logger.exception("Ingest chunk %s could not be claimed, and the failure could not "
+                             "be counted", chunk_id)
             raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
-        logger.error("Ingest chunk %s could not be claimed after %d attempts; dropping the task: %s",
-                     chunk_id, attempt, e)
-        await _record_chunk_claim_failure(db, str(chunk_id), attempt, str(e))
+        if counted is None:
+            logger.error("Ingest chunk %s does not exist; dropping the task: %s", chunk_id, e)
+            return {"ok": False, "dropped": True}
+        failures, job_id = counted
+        if failures < CHUNK_PRE_CLAIM_MAX_FAILURES:
+            logger.exception("Ingest chunk %s could not be claimed (failure %d)", chunk_id, failures)
+            raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
+        logger.error("Ingest chunk %s could not be claimed %d times; dropping the task: %s",
+                     chunk_id, failures, e)
+        await _record_chunk_claim_failure(db, str(chunk_id), job_id, failures, str(e))
         return {"ok": False, "dropped": True}
     except large_ingest_chunk.ChunkBusy as e:
         # Another live attempt holds the chunk: Cloud Tasks backs off and

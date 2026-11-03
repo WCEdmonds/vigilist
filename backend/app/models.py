@@ -387,8 +387,15 @@ class IngestChunk(Base):
     parent_id = Column(UUID(as_uuid=True), nullable=True)
     # items chunks: local position of the item being built, written before
     # each build and cleared when an attempt releases after an error. Left
-    # set only by a worker that died mid-item, so the next claim skips it.
+    # set only by a worker that died mid-item.
     cursor = Column(Integer, nullable=True)
+    # Consecutive attempts that started building the item at ``cursor``. The
+    # item is skipped as poison only after two attempts died on it.
+    cursor_hits = Column(Integer, nullable=False, default=0, server_default="0")
+    # Requests for this chunk that failed before its claim (e.g. database
+    # unavailable). Past the cap the task is acknowledged and the failure
+    # recorded on the job, instead of crash-looping under Cloud Tasks.
+    preclaim_failures = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -57,11 +57,14 @@ POST_FINISH_MARGIN_S = 120
 # Below this much remaining budget, AI titles are skipped outright.
 POST_MIN_TITLE_WINDOW_S = 30
 
-ACTIVE = ("pending", "running")
+# 'stale': a 'running' chunk whose claim is older than CHUNK_STALE_S, so no
+# live request can hold it (its worker died). Still unfinished work.
+ACTIVE = ("pending", "running", "stale")
 
 _CHUNK_SUMMARY_SQL = (
-    "SELECT kind, status, count(*) AS n FROM ingest_chunks "
-    "WHERE job_id = :jid GROUP BY kind, status"
+    "SELECT kind, CASE WHEN status = 'running' "
+    "AND updated_at < now() - make_interval(secs => :stale) THEN 'stale' ELSE status END AS state, "
+    "count(*) AS n FROM ingest_chunks WHERE job_id = :jid GROUP BY kind, state"
 )
 _CLAIM_FINALIZE_SQL = (
     "UPDATE ingest_jobs SET status = 'finalizing' WHERE id = :id AND status = 'processing'"
@@ -102,12 +105,17 @@ _INSERT_POST_SQL = (
     "WHERE job_id = cast(:jid as uuid) AND kind = 'post') "
     "RETURNING id"
 )
+# Orphans: 'pending' chunks untouched for ORPHAN_AFTER_MINUTES (lost task),
+# and 'running' chunks whose claim is older than CHUNK_STALE_S (dead worker;
+# no live request can hold one). Both go back to 'pending' and are re-sent;
+# a dead worker's cursor stays, so the poison-item skip still applies.
 # Touching updated_at claims the re-enqueue: a second sweep inside the window
 # finds nothing.
 _SWEEP_ORPHANS_SQL = (
-    "UPDATE ingest_chunks SET updated_at = now() WHERE id IN ("
-    "SELECT id FROM ingest_chunks WHERE job_id = :jid AND status = 'pending' "
-    "AND updated_at < now() - make_interval(mins => :mins) "
+    "UPDATE ingest_chunks SET status = 'pending', updated_at = now() WHERE id IN ("
+    "SELECT id FROM ingest_chunks WHERE job_id = :jid AND ("
+    "(status = 'pending' AND updated_at < now() - make_interval(mins => :mins)) OR "
+    "(status = 'running' AND updated_at < now() - make_interval(secs => :stale))) "
     "ORDER BY created_at LIMIT :lim FOR UPDATE SKIP LOCKED) RETURNING id"
 )
 _COMPLETE_JOB_SQL = (
@@ -135,7 +143,10 @@ def _as_uuid(value):
 
 
 async def _chunk_summary(db, job_id: str) -> dict[tuple[str, str], int]:
-    rows = (await db.execute(text(_CHUNK_SUMMARY_SQL), {"jid": job_id})).all()
+    from app.services.large_ingest_chunk import CHUNK_STALE_S
+
+    rows = (await db.execute(text(_CHUNK_SUMMARY_SQL),
+                             {"jid": job_id, "stale": CHUNK_STALE_S})).all()
     return {(kind, status): int(n) for kind, status, n in rows}
 
 
@@ -166,13 +177,16 @@ def _enqueue_all(chunk_ids) -> list[str]:
 async def _sweep_orphans(db, job_id: str) -> int:
     from app.services.ingest import append_job_errors
 
+    from app.services.large_ingest_chunk import CHUNK_STALE_S
+
     rows = (await db.execute(text(_SWEEP_ORPHANS_SQL), {
-        "jid": job_id, "mins": ORPHAN_AFTER_MINUTES, "lim": ORPHAN_SWEEP_LIMIT,
+        "jid": job_id, "mins": ORPHAN_AFTER_MINUTES, "stale": CHUNK_STALE_S,
+        "lim": ORPHAN_SWEEP_LIMIT,
     })).all()
     await db.commit()
     ids = [r[0] for r in rows]
     if ids:
-        logger.warning("Job %s: re-enqueuing %d orphaned pending chunks", job_id, len(ids))
+        logger.warning("Job %s: re-enqueuing %d orphaned chunks", job_id, len(ids))
         await append_job_errors(db, job_id, _enqueue_all(ids))
     return len(ids)
 
@@ -294,13 +308,13 @@ async def maybe_finalize(db, job_id: str) -> None:
     await db.commit()  # release the connection between steps
 
     if _active(summary) and not any(s == "running" for (_k, s) in summary):
-        # Everything left is pending with nothing running: a chunk whose
-        # enqueue failed (or whose released retry Cloud Tasks gave up on)
-        # would wait forever. Re-enqueue stale 'pending' ones only; a
-        # 'running' chunk is never swept. If the original task was merely
-        # delayed, the claim token lets only one of the two run it (the other
-        # gets ChunkBusy/503 and backs off). Pending work blocks both phases,
-        # so there is nothing to finalize yet.
+        # Everything left is pending or stale with nothing live running: a
+        # chunk whose enqueue failed (or whose released retry Cloud Tasks gave
+        # up on, or whose worker died) would wait forever. Re-enqueue stale
+        # ones; a live 'running' chunk is never swept. If the original task
+        # was merely delayed, the claim token lets only one of the two run it
+        # (the other gets ChunkBusy/503 and backs off). Unfinished work blocks
+        # both phases, so there is nothing to finalize yet.
         await _sweep_orphans(db, job_id)
         return
 

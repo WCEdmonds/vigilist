@@ -458,17 +458,36 @@ def test_failures_not_recorded_when_done_transition_loses(monkeypatch):
 
 
 class _DownSession(RollbackSession):
-    """The claim UPDATE raises, as with the database unavailable."""
+    """The claim UPDATE raises, as with the database unavailable. The
+    persisted pre-claim counter (NB1) answers ``failures`` (None: no row)."""
+
+    def __init__(self, failures=1, counter_down=False, **kw):
+        super().__init__(**kw)
+        self.failures = failures
+        self.counter_down = counter_down
 
     async def execute(self, stmt, params=None):
-        if "RETURNING attempts" in str(stmt):
+        sql = str(stmt)
+        if "RETURNING attempts" in sql:
             raise OSError("connection refused")
+        if "preclaim_failures = preclaim_failures + 1" in sql:
+            self.executed.append(sql)
+            self.executed_params.append(params)
+            if self.counter_down:
+                raise OSError("connection refused")
+            if self.failures is None:
+                return FakeResult()
+            return FakeResult(items=[(self.failures, "j1")])
         return await super().execute(stmt, params)
 
 
-def _down_db():
+def _down_db(**kw):
     chunk = SimpleNamespace(id="c1", job_id="j1")
-    return _DownSession(get_objects={("IngestChunk", "c1"): chunk})
+    return _DownSession(get_objects={("IngestChunk", "c1"): chunk}, **kw)
+
+
+def _handle(db, retry=None):
+    return asyncio.run(ri.process_chunk_handler(body={"chunk_id": "c1"}, db=db, retry_count=retry))
 
 
 def test_claim_failure_is_a_claim_error():
@@ -476,21 +495,86 @@ def test_claim_failure_is_a_claim_error():
         asyncio.run(run_chunk(_down_db(), "c1"))
 
 
-def test_process_chunk_claim_failure_retries_below_the_cap():
-    for retry in ("0", "1"):
+def test_chunk_pre_claim_cap_is_15():
+    assert ri.CHUNK_PRE_CLAIM_MAX_FAILURES == 15
+
+
+def test_process_chunk_claim_failure_retries_below_the_persisted_cap():
+    # The Cloud Tasks retry header no longer decides: a high header with a
+    # low persisted count still retries.
+    for n in (1, 14):
         with pytest.raises(HTTPException) as e:
-            asyncio.run(ri.process_chunk_handler(body={"chunk_id": "c1"}, db=_down_db(),
-                                                 retry_count=retry))
+            _handle(_down_db(failures=n), retry="99")
         assert e.value.status_code == 500
 
 
-def test_process_chunk_claim_failure_is_dropped_past_the_cap():
-    db = _down_db()
-    out = asyncio.run(ri.process_chunk_handler(body={"chunk_id": "c1"}, db=db, retry_count="2"))
-    assert out == {"ok": False, "dropped": True}
+def test_process_chunk_claim_failure_is_dropped_at_the_persisted_cap():
+    db = _down_db(failures=15)
+    assert _handle(db, retry="0") == {"ok": False, "dropped": True}
     (new,) = [json.loads(p["new"]) for s, p in zip(db.executed, db.executed_params) if "errors ||" in s]
-    assert new[0].startswith("Chunk c1: could not be started after 3 attempts")
+    assert new[0].startswith("Chunk c1: could not be started after 15 attempts")
     assert "connection refused" in new[0]
+    (bump,) = [p for s, p in zip(db.executed, db.executed_params) if "preclaim_failures" in s]
+    assert bump == {"id": "c1"}
+
+
+def test_process_chunk_claim_failure_that_cannot_be_counted_retries():
+    with pytest.raises(HTTPException) as e:
+        _handle(_down_db(counter_down=True))
+    assert e.value.status_code == 500
+
+
+def test_process_chunk_claim_failure_for_a_missing_chunk_is_dropped():
+    assert _handle(_down_db(failures=None)) == {"ok": False, "dropped": True}
+
+
+def test_terminal_branch_database_failure_is_a_claim_error(monkeypatch):
+    """Ruling 5: the attempts-is-None branch (done/split/failed redelivery)
+    is pre-claim work too: its DB failures get the capped handling."""
+
+    async def broken(db, job_id):
+        raise OSError("connection reset")
+
+    chunk = _chunk([[2, 0, 1]], 1)
+    chunk.status = "done"
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=chunk, attempts=None)
+    monkeypatch.setattr(large_ingest, "maybe_finalize", broken)
+    with pytest.raises(large_ingest_chunk.ChunkClaimError, match="connection reset"):
+        env.run()
+
+
+def test_busy_chunk_is_not_a_claim_error(monkeypatch):
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1), attempts=None)
+    with pytest.raises(large_ingest_chunk.ChunkBusy):
+        env.run()
+
+
+def test_poll_batch_fetch_failure_propagates_for_a_normal_retry(monkeypatch):
+    """NB2: only the DB claim is capped; a Batches API failure is not a
+    claim failure and must not be dropped after 3 tries."""
+    from app.services import claude_batch, pipeline
+
+    class Prod:
+        ai_pipeline_status = {"summaries": {"status": pipeline.WAITING, "batch_id": "b1"}}
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, model, key):
+            return Prod()
+
+    async def fetch(batch_id):
+        raise RuntimeError("batches API 529 overloaded")
+
+    monkeypatch.setattr(pipeline, "async_session", lambda: Session())
+    monkeypatch.setattr(claude_batch, "fetch_if_done", fetch)
+    with pytest.raises(RuntimeError, match="overloaded") as e:
+        asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    assert not isinstance(e.value, pipeline.BatchPollClaimError)
 
 
 def test_poll_batch_pre_claim_failure_is_capped(monkeypatch):
@@ -548,23 +632,34 @@ def test_item_position_is_recorded_before_building_it(monkeypatch):
     env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 0, 3]], 3))
     env.run()
     assert [p["pos"] for p in env.sql_params("SET cursor = :pos")] == [0, 1, 2]
+    assert [p["hits"] for p in env.sql_params("SET cursor = :pos")] == [1, 1, 1]
 
 
-def test_crash_while_building_an_item_skips_it_on_the_next_claim(monkeypatch):
-    built = _always_dies_on(monkeypatch, "Msg 2")
-    chunk = _chunk([[2, 0, 3]], 3)
-    chunk.cursor = None
-    env = Env(monkeypatch, _tree(_emails(3)), chunk=chunk)
+def _die_once_at(env, chunk):
     with pytest.raises(WorkerDied):
         env.run()
     assert env.sql_params("SET status = 'pending'") == []  # a dead worker can't release
-    cursor = env.sql_params("SET cursor = :pos")[-1]["pos"]
-    assert cursor == 1
-    # Re-claim: the row still carries the crashed attempt's position.
-    chunk.cursor = cursor
+    last = env.sql_params("SET cursor = :pos")[-1]
+    # The row keeps the dead attempt's position and hit count.
+    chunk.cursor, chunk.cursor_hits = last["pos"], last["hits"]
+
+
+def test_crash_while_building_an_item_skips_it_after_two_deaths(monkeypatch):
+    built = _always_dies_on(monkeypatch, "Msg 2")
+    chunk = _chunk([[2, 0, 3]], 3)
+    chunk.cursor, chunk.cursor_hits = None, 0
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=chunk)
+    _die_once_at(env, chunk)
+    assert (chunk.cursor, chunk.cursor_hits) == (1, 1)
     loaded = [d.bates_begin for d in env.parents()]
     assert loaded == [f"{CONTROL} -0001"]
     env.db.responders.insert(0, ("documents.bates_begin IN", FakeResult(rows=[(c,) for c in loaded])))
+    # One death is not enough: the next claim builds the item again (the
+    # first death may have been an unrelated instance kill).
+    built.clear()
+    _die_once_at(env, chunk)
+    assert built == ["Msg 2"] and (chunk.cursor, chunk.cursor_hits) == (1, 2)
+    # Two consecutive deaths at the same position: skipped.
     built.clear()
     env.run()
     assert built == ["Msg 3"]  # the poison item is not built again
@@ -591,6 +686,20 @@ def test_recorded_position_of_a_loaded_item_is_not_skipped(monkeypatch):
 def test_release_after_an_error_clears_the_position(monkeypatch):
     """A raised error is not a crash: the retry must not skip anything."""
     assert "cursor = NULL" in large_ingest_chunk._RELEASE_CHUNK_SQL
+    assert "cursor_hits = 0" in large_ingest_chunk._RELEASE_CHUNK_SQL
+
+
+def test_a_death_at_a_different_position_restarts_the_count(monkeypatch):
+    """Deaths must be consecutive at one position: cursor 1 with one hit,
+    then a death at position 2, leaves position 2 with one hit."""
+    _always_dies_on(monkeypatch, "Msg 3")
+    chunk = _chunk([[2, 0, 3]], 3)
+    chunk.cursor, chunk.cursor_hits = 1, 1
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=chunk)
+    with pytest.raises(WorkerDied):
+        env.run()
+    sets = env.sql_params("SET cursor = :pos")
+    assert [(p["pos"], p["hits"]) for p in sets] == [(0, 1), (1, 2), (2, 1)]
 
 
 def test_chunk_model_has_a_cursor_column():
