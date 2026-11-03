@@ -163,3 +163,35 @@ def test_readpst_runs_single_job(monkeypatch, tmp_path):
     monkeypatch.setattr(ep.subprocess, "run", lambda args, **kw: calls.append(args))
     ep._explode_pst(b"not really a pst")
     assert calls and calls[0][:3] == ["readpst", "-j", "0"]
+
+
+# m4: a cid reference must match the whole Content-ID, not a prefix of it.
+
+
+def test_cid_reference_does_not_match_a_longer_cid():
+    from email.message import EmailMessage
+
+    from app.services.email_parse import _parse_eml_bytes
+
+    m = EmailMessage()
+    m["From"] = "a@example.com"
+    m["To"] = "b@example.com"
+    m["Subject"] = "logos"
+    m.set_content("plain")
+    m.add_alternative('<html><body><img src="cid:logo10"></body></html>', subtype="html")
+    html_part = m.get_payload()[1]
+    html_part.add_related(b"PNG-10", "image", "png", cid="<logo10>", filename="logo10.png")
+    html_part.add_related(b"PNG-1", "image", "png", cid="<logo1>", filename="logo1.png")
+    parsed = _parse_eml_bytes(m.as_bytes())
+    assert parsed.inline_names == {"logo10.png"}
+
+
+def test_references_cid_terminators():
+    from app.services.email_parse import references_cid
+
+    assert references_cid('<img src="cid:logo1">', "logo1")
+    assert references_cid("<img src='CID:logo1'>", "logo1")
+    assert references_cid("url(cid:logo1)", "logo1")
+    assert references_cid("cid:logo1", "logo1")
+    assert not references_cid('<img src="cid:logo10">', "logo1")
+    assert not references_cid('<img src="cid:logo1.png">', "logo1")

@@ -40,9 +40,16 @@ def _is_actively_running(status: dict | None) -> bool:
     status whose `updated_at` is older than the Cloud Tasks dispatch
     ceiling (30 min) plus margin as stale rather than actually in-flight,
     so re-runs aren't blocked forever by a dead worker.
+
+    A stage waiting on a Message Batch, or applying its results, is a dict
+    state; it is live until ``pipeline._is_live_wait`` says it went stale.
     """
     if not status:
         return False
+    from app.services.pipeline import STAGES, _is_live_wait
+
+    if any(_is_live_wait(status.get(s)) for s in STAGES):
+        return True
     if not any(status.get(s) == "running" for s in ("clustering", "summaries", "brief")):
         return False
     ts = status.get("updated_at")

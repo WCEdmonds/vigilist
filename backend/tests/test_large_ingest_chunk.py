@@ -632,3 +632,16 @@ def test_resumed_container_loads_only_messages_the_earlier_job_missed(monkeypatc
     env.run()
     assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0003", f"{CONTROL} -0004"]
     assert [d.title for d in env.parents()] == ["Msg 3", "Msg 4"]
+
+
+def test_single_item_over_attempts_already_loaded_is_done_not_failed(monkeypatch):
+    """m1: a concurrent attempt loaded the item: no failure is recorded."""
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 1, 2]], 1, global_offset=1, attempts=3),
+              attempts=MAX_CHUNK_ATTEMPTS + 1, total=3)
+    env.db.responders.insert(0, ("documents.bates_begin = ", FakeResult(items=[(42,)])))
+    env.run()
+    assert env.errors_appended() == []
+    assert env.sql_params("items_failed = items_failed +") == []
+    assert env.sql_params("status = 'done'") and not env.sql_params("status = 'failed'")
+    assert env.opened == []  # no subject read
+    assert env.finalized == ["j1"]

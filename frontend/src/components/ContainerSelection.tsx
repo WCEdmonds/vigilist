@@ -16,10 +16,12 @@ const DEFAULT_ON = new Set(['email', 'calendar']);
 const fmtBytes = (b: number) =>
   b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(0, Math.round(b / 1e3))} KB`;
 
+// The time model is provisional (worker throughput not yet measured), so the
+// label says it is rough.
 const fmtMinutes = (m: number) => {
-  if (m < 1) return 'under a minute';
-  if (m < 90) return `about ${Math.round(m)} min`;
-  return `about ${(m / 60).toFixed(1)} hours`;
+  if (m < 1) return 'under a minute (rough estimate)';
+  if (m < 90) return `about ${Math.round(m)} min (rough estimate)`;
+  return `about ${(m / 60).toFixed(1)} hours (rough estimate)`;
 };
 
 interface Estimate { items: number; bytes: number; usd: number; minutes: number; storageGb: number }

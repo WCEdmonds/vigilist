@@ -200,9 +200,28 @@ async def _split(db, c, survey_json: dict | None) -> None:
                    c.id, [p["item_count"] for p in plans])
 
 
-async def _fail_single(db, c, sel: dict, survey_json: dict | None, attempts: int) -> None:
-    """Record a one-item chunk that keeps failing as a failed item."""
+async def _fail_single(db, c, sel: dict, survey_json: dict | None, attempts: int,
+                       production_id: int) -> None:
+    """Record a one-item chunk that keeps failing as a failed item, unless
+    the item was loaded after all (e.g. by a concurrent attempt): then the
+    chunk is simply done."""
+    from sqlalchemy import select
+
+    from app.models import Document
     from app.services.ingest import append_job_errors, incr_job_items
+
+    control = message_control(sel.get("control", ""), c.global_offset + 1, int(sel.get("items") or 1))
+    loaded = (await db.execute(
+        select(Document.id).where(
+            Document.production_id == production_id,
+            Document.bates_begin == control,
+        )
+    )).first() is not None
+    if loaded:
+        await db.execute(text(_CHUNK_DONE_SQL), {"id": c.id})
+        await db.commit()
+        return
+    await db.commit()
 
     folder_index, raw_pos = c.slices[0][0], c.slices[0][1]
     folder_path = _folder_path(survey_json, folder_index)
@@ -214,7 +233,6 @@ async def _fail_single(db, c, sel: dict, survey_json: dict | None, attempts: int
                 _read_subject_at, c.container_path, c.slices, set(c.type_filter) or None)
         except Exception:
             logger.exception("Could not read subject of failed item in chunk %s", c.id)
-    control = message_control(sel.get("control", ""), c.global_offset + 1, int(sel.get("items") or 1))
     msg = (f"{control}: could not be read after {MAX_CHUNK_ATTEMPTS} attempts "
            f"(PST folder {folder_path!r}, position {raw_pos}"
            + (f", subject {subject!r}" if subject else "") + ")")
@@ -400,7 +418,7 @@ async def _process(db, c, attempts: int) -> None:
             await _split(db, c, survey_json)
             return
         sel = dict((job.selection or {}).get(c.container_path) or {})
-        await _fail_single(db, c, sel, survey_json, attempts)
+        await _fail_single(db, c, sel, survey_json, attempts, job.production_id)
         await large_ingest.maybe_finalize(db, c.job_id)
         return
 

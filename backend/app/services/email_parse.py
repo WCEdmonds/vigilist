@@ -148,7 +148,7 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     body_html = _inline_cid_images(html_all, inline_images)
     # Inline = the HTML body references the part as cid:<Content-ID>. Checked
     # against the raw HTML, so images too large to embed still count.
-    inline_names = {n for n, cid in att_cids.items() if f"cid:{cid}" in html_all}
+    inline_names = {n for n, cid in att_cids.items() if references_cid(html_all, cid)}
 
     return ParsedMessage(
         from_=_header(msg, "From"),
@@ -183,6 +183,16 @@ def _collect_inline_image(part: Message, out: dict[str, str]) -> None:
     if not payload or len(payload) > _INLINE_IMAGE_MAX_BYTES:
         return
     out[cid] = f"data:{part.get_content_type()};base64,{base64.b64encode(payload).decode('ascii')}"
+
+
+def references_cid(html: str, cid: str) -> bool:
+    """True if ``html`` references the whole Content-ID ``cid`` (``cid:logo1``
+    must not match ``cid:logo10``). The token ends where ``_inline_cid_images``
+    ends it: a quote, whitespace, ``>`` or ``)``, or the end of the text."""
+    import re
+
+    return bool(cid) and re.search(
+        "cid:" + re.escape(cid) + r"""(?=["'\s>)]|$)""", html or "", re.I) is not None
 
 
 def _inline_cid_images(html: str, images: dict[str, str]) -> str:
