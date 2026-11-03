@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import DateTime, and_, cast, func, or_, select, text
 
 from app.models import Document
 from app.services.embeddings import embed_documents
@@ -44,8 +44,16 @@ def _candidate_filter(production_id: int):
         Document.native_path.is_not(None),
         Document.native_path != "",
         (Document.text_content.is_(None)) | (Document.text_content == ""),
-        # A doc stamped by an earlier run (any result) is never re-billed.
-        ~Document.metadata_.has_key(MARKER),
+        # A doc stamped by an earlier run is never re-billed, except a
+        # 'pending' claim old enough that its worker must have died.
+        or_(
+            ~Document.metadata_.has_key(MARKER),
+            and_(
+                Document.metadata_[MARKER]["result"].astext == "pending",
+                cast(Document.metadata_[MARKER]["at"].astext, DateTime(timezone=True))
+                < func.now() - STALE_AFTER,
+            ),
+        ),
     )
 
 
@@ -173,20 +181,21 @@ async def _write_marker(db, production_id: int, marker: dict) -> None:
 
 
 async def try_start_run(db, production_id: int) -> bool:
-    """False if a chain is still running (touched < 30 min ago)."""
+    """Atomically claim the run: False if a chain touched it < 30 min ago."""
     now = datetime.now(timezone.utc)
-    m = await _read_marker(db, production_id)
-    if m.get("status") == "running":
-        try:
-            last = datetime.fromisoformat(m.get("updated_at") or m["started_at"])
-        except Exception:
-            last = None
-        if last is not None and now - last < STALE_AFTER:
-            return False
-    await _write_marker(db, production_id, {
-        "status": "running", "started_at": now.isoformat(), "updated_at": now.isoformat(),
-        **{k: 0 for k in _COUNTERS}})
-    return True
+    marker = {"status": "running", "started_at": now.isoformat(),
+              "updated_at": now.isoformat(), **{k: 0 for k in _COUNTERS}}
+    res = await db.execute(
+        text("UPDATE productions SET ai_pipeline_status = jsonb_set("
+             "coalesce(ai_pipeline_status, '{}'::jsonb), '{ocr_backfill}', "
+             "CAST(:v AS jsonb)) WHERE id = :p AND NOT ("
+             "coalesce(ai_pipeline_status->'ocr_backfill'->>'status', '') = 'running' "
+             "AND (ai_pipeline_status->'ocr_backfill'->>'updated_at')::timestamptz "
+             "> now() - interval '30 minutes')"),
+        {"v": json.dumps(marker), "p": production_id},
+    )
+    await db.commit()
+    return res.rowcount == 1
 
 
 async def record_progress(db, production_id: int, res: dict) -> None:

@@ -39,8 +39,10 @@ class _Db(FakeSession):
         self.texts = {}
 
     async def execute(self, stmt, params=None):
-        await super().execute(stmt, params)
+        base = await super().execute(stmt, params)
         sql = str(stmt)
+        if "UPDATE productions" in sql:
+            return base
         if params and "v" in params and "metadata" in sql:
             self.stamps.append((params["id"], __import__("json").loads(params["v"])["result"]))
         if params and "txt" in params:
@@ -216,3 +218,24 @@ def test_after_id_keyset_binds_as_uuid(monkeypatch):
     db = _Db([])
     asyncio.run(ob.run_batch(db, 7, "00000000-0000-0000-0000-000000000009", 50))
     assert any("documents.id >" in s for s in db.executed)
+
+
+def test_candidate_filter_readmits_only_stale_pending():
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql
+    from app.models import Document
+    sql = str(select(Document.id).where(*ob._candidate_filter(7))
+              .compile(dialect=postgresql.dialect()))
+    assert "?" in sql or "metadata ?" in sql or "has_key" in sql.lower() or "metadata" in sql
+    assert "timestamptz" in sql.lower() or "TIMESTAMP WITH TIME ZONE" in sql
+    assert "now()" in sql
+
+
+def test_try_start_run_is_one_conditional_update():
+    db = _Db([])
+    async def run(rc):
+        db.responders = [("UPDATE productions", FakeResult(rowcount=rc))]
+        return await ob.try_start_run(db, 7)
+    assert asyncio.run(run(1)) is True
+    assert asyncio.run(run(0)) is False
+    assert sum("UPDATE productions" in s for s in db.executed) == 2
