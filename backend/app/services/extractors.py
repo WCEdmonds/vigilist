@@ -187,14 +187,19 @@ def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
     except Exception as e:
         return ExtractResult("", "pdf", "error", str(e)[:500])
     parts: list[str] = []
+    page_errors: list[str] = []
     try:
         for page in doc:
             embedded = page.get_text().strip()
             if sum(1 for c in embedded if not c.isspace()) >= MIN_TEXT_CHARS:
                 parts.append(embedded)
             elif ocr_fn is not None:
-                jpeg = page.get_pixmap(dpi=RENDER_DPI, alpha=False).tobytes("jpeg")
-                t = (ocr_fn(jpeg) or "").strip()
+                try:
+                    jpeg = page.get_pixmap(dpi=RENDER_DPI, alpha=False).tobytes("jpeg")
+                    t = (ocr_fn(jpeg) or "").strip()
+                except Exception as e:  # one bad page must not drop the rest
+                    page_errors.append(f"page {page.number + 1}: OCR failed: {str(e)[:100]}")
+                    continue
                 if t:
                     parts.append(t)
     except Exception as e:
@@ -203,6 +208,8 @@ def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
     finally:
         doc.close()
     text = "\n\n".join(parts)
+    if page_errors:
+        return ExtractResult(text, "pdf", "partial", "; ".join(page_errors)[:500])
     return ExtractResult(text, "pdf", _status_for(text))
 
 

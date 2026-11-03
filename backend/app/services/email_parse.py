@@ -96,6 +96,7 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     attachments: list[tuple[str, bytes]] = []
 
     inline_images: dict[str, str] = {}
+    att_cids: dict[str, str] = {}  # attachment filename -> Content-ID
     if msg.is_multipart():
         for part in msg.walk():
             if part.is_multipart():
@@ -107,6 +108,9 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
                 name = part.get_filename() or "attachment"
                 payload = part.get_payload(decode=True) or b""
                 attachments.append((name, payload))
+                cid = (part.get("Content-ID") or "").strip().strip("<>")
+                if cid:
+                    att_cids[name] = cid
             elif content_type == "text/plain":
                 body_parts.append(_decode_part(part))
             elif content_type == "text/html":
@@ -127,7 +131,11 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     body_text = "\n".join(p for p in body_parts if p).strip()
     if not body_text and html_fallback:
         body_text = _strip_html("\n".join(html_fallback)).strip()
-    body_html = _inline_cid_images("\n".join(html_fallback), inline_images)
+    html_all = "\n".join(html_fallback)
+    body_html = _inline_cid_images(html_all, inline_images)
+    # Inline = the HTML body references the part as cid:<Content-ID>. Checked
+    # against the raw HTML, so images too large to embed still count.
+    inline_names = {n for n, cid in att_cids.items() if f"cid:{cid}" in html_all}
 
     return ParsedMessage(
         from_=_header(msg, "From"),
@@ -142,6 +150,7 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
         message_id=_header(msg, "Message-ID"),
         in_reply_to=_header(msg, "In-Reply-To"),
         references=" ".join(_header(msg, "References").split()),
+        inline_names=inline_names,
     )
 
 

@@ -76,3 +76,41 @@ def test_pdf_attachment_gets_text_layer_and_ocr_only_blank_pages(two_page_pdf_on
     res = extract_pdf_text(two_page_pdf_one_scanned, ocr_fn=lambda img: ocr_calls.append(1) or "SCANNED TEXT")
     assert "typed page text" in res.text and "SCANNED TEXT" in res.text and len(ocr_calls) == 1
     assert res.file_type == "pdf"
+
+
+def test_ocr_failure_on_one_page_keeps_other_pages():
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "first page typed text")
+    doc.new_page()  # scanned
+    doc.new_page().insert_text((72, 72), "third page typed text")
+    data = doc.tobytes()
+    doc.close()
+
+    def boom(img):
+        raise RuntimeError("vision down")
+
+    res = extract_pdf_text(data, ocr_fn=boom)
+    assert "first page typed text" in res.text and "third page typed text" in res.text
+    assert res.extraction_status == "partial"
+    assert "page 2" in res.extraction_error
+
+
+def test_parse_eml_marks_cid_referenced_attachment_inline():
+    from email.message import EmailMessage
+
+    from app.services.email_parse import _parse_eml_bytes
+
+    m = EmailMessage()
+    m["From"] = "a@example.com"
+    m["To"] = "b@example.com"
+    m["Subject"] = "hi"
+    m.set_content("plain")
+    m.add_alternative('<html><body><img src="cid:logo1"></body></html>', subtype="html")
+    html_part = m.get_payload()[1]
+    html_part.add_related(b"PNG-logo", "image", "png", cid="<logo1>", filename="logo.png")
+    m.add_attachment(b"%PDF-fake", maintype="application", subtype="pdf", filename="real.pdf")
+
+    parsed = _parse_eml_bytes(m.as_bytes())
+    names = [n for n, _ in parsed.attachments]
+    assert "logo.png" in names and "real.pdf" in names
+    assert parsed.inline_names == {"logo.png"}
