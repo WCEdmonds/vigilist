@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, IngestJob, Production
-from app.services.email_parse import ParsedMessage, expand_email
+from app.services.email_parse import OversizedAttachment, ParsedMessage, expand_email
 from app.services.extractors import extract, extract_attachment
 from app.services.large_ingest import is_large_container
 from app.services.metadata_normalize import normalize_date
@@ -151,6 +151,28 @@ def build_email_documents(
     docs: list[Document] = [parent]
     for k, (att_name, att_bytes) in enumerate(parsed.attachments, start=1):
         att_control = f"{message_control} .{k:04d}"
+        if isinstance(att_bytes, OversizedAttachment):
+            # Never read: no text, no stored native, no hash.
+            docs.append(Document(
+                production_id=production_id,
+                bates_begin=att_control,
+                bates_end=att_control,
+                page_count=1,
+                metadata_={"File Name": att_name, "Parent": message_control},
+                title=(att_name[:200] or None),
+                text_content=None,
+                native_path=None,
+                image_paths=[],
+                family_id=message_control,
+                file_name=att_name,
+                file_type=os.path.splitext(att_name)[1].lower().lstrip(".") or "unknown",
+                source_path=source_path,
+                custodian=custodian,
+                extraction_status="error",
+                extraction_error=(f"attachment too large to load ({att_bytes.size:,} bytes; "
+                                  f"limit {att_bytes.limit:,}); not extracted or stored"),
+            ))
+            continue
         if extract_fn is None:
             res = extract_attachment(
                 att_name, att_bytes,

@@ -385,6 +385,10 @@ class IngestChunk(Base):
     attempts = Column(Integer, nullable=False, default=0, server_default="0")
     error = Column(Text, nullable=True)
     parent_id = Column(UUID(as_uuid=True), nullable=True)
+    # items chunks: local position of the item being built, written before
+    # each build and cleared when an attempt releases after an error. Left
+    # set only by a worker that died mid-item, so the next claim skips it.
+    cursor = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

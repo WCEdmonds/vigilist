@@ -519,3 +519,106 @@ def test_poll_batch_stage_wraps_failures_before_the_claim(monkeypatch):
     monkeypatch.setattr(pipeline, "async_session", lambda: Broken())
     with pytest.raises(pipeline.BatchPollClaimError):
         asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+
+
+# --- I4: a crash while building one item skips that item on the next claim ---
+
+
+class WorkerDied(BaseException):
+    """Stands in for an OOM kill / instance death: no except Exception runs."""
+
+
+def _always_dies_on(monkeypatch, subject):
+    real = pst_reader.to_parsed
+    built = []
+
+    def dying(item, kind):
+        built.append(item.subject)
+        if item.subject == subject:
+            raise WorkerDied()
+        return real(item, kind)
+
+    monkeypatch.setattr(pst_reader, "to_parsed", dying)
+    return built
+
+
+def test_item_position_is_recorded_before_building_it(monkeypatch):
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 0, 3]], 3))
+    env.run()
+    assert [p["pos"] for p in env.sql_params("SET cursor = :pos")] == [0, 1, 2]
+
+
+def test_crash_while_building_an_item_skips_it_on_the_next_claim(monkeypatch):
+    built = _always_dies_on(monkeypatch, "Msg 2")
+    chunk = _chunk([[2, 0, 3]], 3)
+    chunk.cursor = None
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=chunk)
+    with pytest.raises(WorkerDied):
+        env.run()
+    assert env.sql_params("SET status = 'pending'") == []  # a dead worker can't release
+    cursor = env.sql_params("SET cursor = :pos")[-1]["pos"]
+    assert cursor == 1
+    # Re-claim: the row still carries the crashed attempt's position.
+    chunk.cursor = cursor
+    loaded = [d.bates_begin for d in env.parents()]
+    assert loaded == [f"{CONTROL} -0001"]
+    env.db.responders.insert(0, ("documents.bates_begin IN", FakeResult(rows=[(c,) for c in loaded])))
+    built.clear()
+    env.run()
+    assert built == ["Msg 3"]  # the poison item is not built again
+    assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0001", f"{CONTROL} -0003"]
+    (msg,) = env.errors_appended()
+    assert msg.startswith(f"{CONTROL} -0002") and "Top/Inbox" in msg and "position 1" in msg
+    assert "stopped while loading it" in msg
+    assert [p["f"] for p in env.sql_params("items_failed = items_failed +")] == [1]
+    assert env.sql_params("status = 'done'")
+
+
+def test_recorded_position_of_a_loaded_item_is_not_skipped(monkeypatch):
+    """The crash came after that item committed (e.g. while reading the next
+    one): nothing is skipped."""
+    chunk = _chunk([[2, 0, 3]], 3)
+    chunk.cursor = 0
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=chunk, attempts=2,
+              existing=[f"{CONTROL} -0001"])
+    env.run()
+    assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0002", f"{CONTROL} -0003"]
+    assert env.errors_appended() == []
+
+
+def test_release_after_an_error_clears_the_position(monkeypatch):
+    """A raised error is not a crash: the retry must not skip anything."""
+    assert "cursor = NULL" in large_ingest_chunk._RELEASE_CHUNK_SQL
+
+
+def test_chunk_model_has_a_cursor_column():
+    from app.models import IngestChunk
+
+    assert IngestChunk.__table__.c.cursor.nullable
+
+
+# --- I4: attachment size cap -------------------------------------------------
+
+
+def test_oversized_attachment_is_not_read(monkeypatch):
+    from tests.test_pst_reader import Att
+
+    monkeypatch.setattr(pst_reader, "MAX_ATTACHMENT_BYTES", 10)
+    big = Att("huge.zip", b"x" * 11)
+    big.read_buffer = lambda n: pytest.fail("oversized attachment was read")
+    item = Item(subject="With huge file", plain_text_body="see",
+                attachments=[Att("small.txt", b"hello"), big])
+    env = Env(monkeypatch, _tree([item]), chunk=_chunk([[2, 0, 1]], 1))
+    env.run()
+    docs = env.docs()
+    assert [d.bates_begin for d in docs] == [
+        f"{CONTROL} -0001", f"{CONTROL} -0001 .0001", f"{CONTROL} -0001 .0002"]
+    huge = docs[2]
+    assert huge.file_name == "huge.zip" and huge.native_path is None
+    assert huge.extraction_status == "error" and "too large" in huge.extraction_error
+    assert huge.text_content is None and huge.family_id == f"{CONTROL} -0001"
+    assert docs[1].extraction_status == "ok"
+
+
+def test_max_attachment_bytes_is_512_mib():
+    assert pst_reader.MAX_ATTACHMENT_BYTES == 512 * 1024 * 1024

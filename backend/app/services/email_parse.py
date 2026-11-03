@@ -34,6 +34,18 @@ _PST_EXTS = {".pst", ".ost"}
 _MBOX_EXTS = {".mbox"}
 
 
+class OversizedAttachment(bytes):
+    """Empty stand-in for an attachment too large to read whole; ``size`` is
+    its declared size and ``limit`` the cap it exceeded. The attachment becomes
+    an error document with no native file."""
+
+    def __new__(cls, size: int, limit: int):
+        obj = super().__new__(cls, b"")
+        obj.size = int(size)
+        obj.limit = int(limit)
+        return obj
+
+
 @dataclass
 class ParsedMessage:
     from_: str = ""

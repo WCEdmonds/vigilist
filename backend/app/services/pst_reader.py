@@ -17,7 +17,12 @@ from dataclasses import dataclass, field
 from typing import Iterator
 
 from app.services import storage
-from app.services.email_parse import ParsedMessage, _strip_html, decode_header_value
+from app.services.email_parse import (
+    OversizedAttachment,
+    ParsedMessage,
+    _strip_html,
+    decode_header_value,
+)
 
 READER_MODE = "gcs_stream"
 GCS_READ_CHUNK_BYTES = 8 * 1024 * 1024  # provisional, pending throughput spike
@@ -278,8 +283,15 @@ def _attachment_name(att) -> str:
     )
 
 
+# Attachments above this are not read into memory (the worker has 4 GiB);
+# they become an error document instead.
+MAX_ATTACHMENT_BYTES = 512 * 1024 * 1024
+
+
 def _attachment_bytes(att) -> bytes:
     size = getattr(att, "size", 0) or 0
+    if size > MAX_ATTACHMENT_BYTES:
+        return OversizedAttachment(size, MAX_ATTACHMENT_BYTES)
     return bytes(att.read_buffer(size)) if size else b""
 
 

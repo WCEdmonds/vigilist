@@ -47,11 +47,18 @@ _CLAIM_CHUNK_SQL = (
     "RETURNING attempts"
 )
 # The claim holder gives the chunk back after an error so the retry can claim
-# it at once (the attempt still counts).
+# it at once (the attempt still counts). A raised error is not a crash, so the
+# in-flight position is cleared: the retry must not skip that item.
 _RELEASE_CHUNK_SQL = (
-    "UPDATE ingest_chunks SET status = 'pending', updated_at = now() "
+    "UPDATE ingest_chunks SET status = 'pending', cursor = NULL, updated_at = now() "
     "WHERE id = :id AND status = 'running'"
 )
+# Written (and committed) before each item is built. If the worker dies while
+# building it (OOM, instance kill, timeout), the position survives, and the
+# next claim skips exactly that item instead of failing the whole chunk three
+# times and halving it down to one item (~a day of stale windows). Does not
+# touch updated_at, which is the claim time.
+_SET_CURSOR_SQL = "UPDATE ingest_chunks SET cursor = :pos WHERE id = :id AND status = 'running'"
 
 
 class ChunkBusy(Exception):
@@ -95,6 +102,7 @@ def _snapshot_chunk(chunk):
         type_filter=list(chunk.type_filter or []),
         global_offset=int(chunk.global_offset or 0), item_count=int(chunk.item_count or 0),
         doc_ids=[str(d) for d in (getattr(chunk, "doc_ids", None) or [])],
+        cursor=getattr(chunk, "cursor", None),
     )
 
 
@@ -257,6 +265,11 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
     # Release the connection before the long PST open/stream.
     await db.commit()
 
+    # The previous attempt died while building this item: skip it now.
+    poison = c.cursor
+    if poison is None or not (0 <= poison < c.item_count) or controls[poison] in existing:
+        poison = None
+
     type_filter = set(c.type_filter) or None
     cm = pst_reader.open_pst(c.container_path)
     handle = await asyncio.to_thread(cm.__enter__)
@@ -270,10 +283,20 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
             if found is None:
                 break
             info, raw_pos, item, kind = found
+            pos = local
             control = controls[local]
             local += 1
             if control in existing:
                 continue
+            if pos == poison:
+                logger.warning("Chunk %s: skipping %s, the previous attempt died loading it",
+                               c.id, control)
+                failures.append(f"{control}: skipped; the worker stopped while loading it "
+                                f"(PST folder {info.path!r}, position {raw_pos})")
+                failed += 1
+                continue
+            await db.execute(text(_SET_CURSOR_SQL), {"id": c.id, "pos": pos})
+            await db.commit()
             try:
                 docs = await asyncio.to_thread(
                     _build_item, item, kind, control, info.path, production_id, source_path, custodian)
