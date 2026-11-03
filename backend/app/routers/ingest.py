@@ -370,6 +370,30 @@ async def survey_container_handler(
     return {"ok": True}
 
 
+@router.post("/ingest/process-chunk")
+async def process_chunk_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker: process one large-container chunk.
+
+    Non-2xx makes Cloud Tasks retry; the chunk's attempt counter splits a range
+    that keeps failing, so retries can't crash-loop forever.
+    """
+    from app.services import large_ingest
+
+    chunk_id = body.get("chunk_id")
+    if not chunk_id:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    try:
+        await large_ingest.run_chunk(db, str(chunk_id))
+    except Exception as e:
+        logger.exception("Ingest chunk %s failed", chunk_id)
+        raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
+    return {"ok": True}
+
+
 @router.post("/ingest/{job_id}/selection")
 async def apply_container_selection(
     job_id: UUID,

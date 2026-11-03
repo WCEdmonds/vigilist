@@ -575,26 +575,49 @@ async def _persist_job_errors(db: AsyncSession, job_id: str, errors: list[str]) 
 # Appends in one statement: parallel chunks each add their own messages and
 # never overwrite another writer's (unlike _persist_job_errors' snapshot).
 _APPEND_JOB_ERRORS_SQL = (
-    "UPDATE ingest_jobs SET errors = COALESCE(errors, cast('[]' as jsonb)) || cast(:new as jsonb) "
+    "UPDATE ingest_jobs SET errors = errors || cast(:new as jsonb) WHERE id = :jid"
+)
+
+
+async def append_job_errors(db: AsyncSession, job_id: str, messages: list[str],
+                            *, commit: bool = True) -> None:
+    """Atomically append ``messages`` to the job's errors.
+
+    ``commit=False`` leaves it in the caller's transaction, so it can commit
+    together with a related counter or status change.
+    """
+    if not messages:
+        return
+    await db.execute(text(_APPEND_JOB_ERRORS_SQL), {"new": json.dumps(list(messages)), "jid": job_id})
+    if commit:
+        await db.commit()
+
+
+_INCR_JOB_ITEMS_SQL = (
+    "UPDATE ingest_jobs SET items_done = items_done + :d, items_failed = items_failed + :f "
     "WHERE id = :jid"
 )
 
 
-async def append_job_errors(db: AsyncSession, job_id: str, messages: list[str]) -> None:
-    """Atomically append ``messages`` to the job's errors."""
-    if not messages:
-        return
-    await db.execute(text(_APPEND_JOB_ERRORS_SQL), {"new": json.dumps(list(messages)), "jid": job_id})
-    await db.commit()
+async def incr_job_items(db: AsyncSession, job_id: str, done: int = 0, failed: int = 0,
+                         *, commit: bool = True) -> None:
+    """Atomically add to the job's large-container item counters."""
+    await db.execute(text(_INCR_JOB_ITEMS_SQL), {"d": done, "f": failed, "jid": job_id})
+    if commit:
+        await db.commit()
 
 
-async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]) -> None:
+async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document],
+                             *, items_done: int = 0) -> None:
     """Persist a group of Documents atomically: one flush + one commit for all.
 
     Used for email families (parent + attachments), which must commit together —
     a failure before the single commit leaves nothing persisted, so a Cloud Tasks
     retry re-expands the whole container cleanly instead of skipping it on a
     partially-committed parent (whose native_path would satisfy the dedup check).
+
+    ``items_done`` (large-container path) is counted in the same UPDATE, so a
+    crash can never commit a family without its count, or count it twice.
     """
     if not docs:
         return
@@ -612,10 +635,19 @@ async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]
             ),
             {"id": doc.id},
         )
-    await db.execute(
-        text("UPDATE ingest_jobs SET processed_files = processed_files + :n WHERE id = :jid"),
-        {"n": len(docs), "jid": job_id},
-    )
+    if items_done:
+        await db.execute(
+            text(
+                "UPDATE ingest_jobs SET processed_files = processed_files + :n, "
+                "items_done = items_done + :d WHERE id = :jid"
+            ),
+            {"n": len(docs), "d": items_done, "jid": job_id},
+        )
+    else:
+        await db.execute(
+            text("UPDATE ingest_jobs SET processed_files = processed_files + :n WHERE id = :jid"),
+            {"n": len(docs), "jid": job_id},
+        )
     await db.commit()
 
 
