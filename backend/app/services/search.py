@@ -2,12 +2,13 @@
 
 import re
 from datetime import date, datetime, time, timedelta, timezone
+from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Document, FolderDocument
+from app.models import Document, EntityMention, FolderDocument
 
 
 # Characters allowed inside a tsquery lexeme. Everything else (quotes,
@@ -148,6 +149,24 @@ def _day_start(d: date, tz) -> datetime:
     return datetime.combine(d, time.min, tzinfo=tz)
 
 
+def mentions_entity(entity_id):
+    """Documents with at least one mention of this person/org.
+
+    The one predicate behind the "Mentions: <entity>" filter, shared by the
+    browse list, search, select-all-matching bulk actions and the CSV
+    exports so they all resolve the same set. A correlated EXISTS: one row
+    per document (counts stay exact) and a single bind, never an id list.
+    Entity merges re-point the loser's mentions to the survivor, so the
+    survivor's id covers both.
+    """
+    return (
+        select(EntityMention.id)
+        .where(EntityMention.entity_id == entity_id,
+               EntityMention.document_id == Document.id)
+        .exists()
+    )
+
+
 def build_search_conditions(
     query: str = "",
     *,
@@ -163,6 +182,7 @@ def build_search_conditions(
     date_to: date | None = None,
     tz: str | None = None,
     folder_id: int | None = None,
+    entity_id: UUID | None = None,
 ) -> tuple[list, object | None, bool]:
     """WHERE clauses for a search. Shared by /api/search and bulk
     tag-by-query so both resolve exactly the same document set.
@@ -180,7 +200,7 @@ def build_search_conditions(
     has_criteria = bool(tsquery_str or metadata_filters or file_type
                         or source_party or source_type or email
                         or date_from is not None or date_to is not None
-                        or folder_id is not None)
+                        or folder_id is not None or entity_id is not None)
 
     conditions = []
     tsquery = None
@@ -225,6 +245,8 @@ def build_search_conditions(
     if folder_id is not None:
         conditions.append(Document.id.in_(
             select(FolderDocument.document_id).where(FolderDocument.folder_id == folder_id)))
+    if entity_id is not None:
+        conditions.append(mentions_entity(entity_id))
 
     return conditions, tsquery, has_criteria
 
@@ -247,6 +269,7 @@ async def search_documents(
     date_to: date | None = None,
     tz: str | None = None,
     folder_id: int | None = None,
+    entity_id: UUID | None = None,
 ) -> tuple[list[dict], int]:
     """Execute a full-text search and return results with snippets."""
     conditions, tsquery, has_criteria = build_search_conditions(
@@ -263,6 +286,7 @@ async def search_documents(
         date_to=date_to,
         tz=tz,
         folder_id=folder_id,
+        entity_id=entity_id,
     )
     if not has_criteria:
         return [], 0

@@ -51,6 +51,7 @@ async def resolve_query_docs(
         date_to=query.date_to,
         tz=query.tz,
         folder_id=query.folder_id,
+        entity_id=query.entity_id,
     )
     if not has_criteria:
         raise NoCriteriaError

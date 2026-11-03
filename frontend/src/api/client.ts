@@ -281,6 +281,7 @@ export async function searchDocuments(
   sourceType?: string,
   extras?: SearchExtras,
   folderId?: number,
+  entityId?: string,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage), sort });
   if (productionId) params.set('production_id', String(productionId));
@@ -299,6 +300,7 @@ export async function searchDocuments(
   if (extras?.dateTo) params.set('date_to', extras.dateTo);
   if (extras?.dateFrom || extras?.dateTo) params.set('tz', browserTimeZone());
   if (folderId) params.set('folder_id', String(folderId));
+  if (entityId) params.set('entity_id', entityId);
   return request<SearchResponse>(`/api/search?${params}`);
 }
 
@@ -488,10 +490,11 @@ async function downloadCsv(url: string, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-export async function exportDocsCsv(productionId?: number, tagId?: number) {
+export async function exportDocsCsv(productionId?: number, tagId?: number, entityId?: string) {
   const params = new URLSearchParams();
   if (productionId) params.set('production_id', String(productionId));
   if (tagId) params.set('tag_id', String(tagId));
+  if (entityId) params.set('entity_id', entityId);
   const qs = params.toString();
   await downloadCsv(`/api/export/documents/csv${qs ? `?${qs}` : ''}`, 'documents.csv');
 }
@@ -507,6 +510,7 @@ export async function exportSearchCsv(
     sourceType?: string;
     extras?: SearchExtras;
     folderId?: number;
+    entityId?: string;
   },
 ) {
   // Same filters as the on-screen search, so the file matches what the
@@ -528,6 +532,7 @@ export async function exportSearchCsv(
   if (extras?.dateFrom) params.set('date_from', extras.dateFrom);
   if (extras?.dateTo) params.set('date_to', extras.dateTo);
   if (filters?.folderId) params.set('folder_id', String(filters.folderId));
+  if (filters?.entityId) params.set('entity_id', filters.entityId);
   // Always send the timezone: the report's Date Sent column uses it too.
   params.set('tz', browserTimeZone());
   await downloadCsv(`/api/export/search/csv?${params}`, 'metadata_report.csv');

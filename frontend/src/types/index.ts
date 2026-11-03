@@ -806,6 +806,8 @@ export interface BulkTagQuery {
   /** Reviewer's IANA timezone; date bounds are whole days in it. */
   tz?: string | null;
   folder_id?: number | null;
+  /** The "Mentions: <entity>" filter: only documents mentioning this person/org. */
+  entity_id?: string | null;
 }
 
 /** A named set of a matter's documents (GET /api/productions/{id}/folders). */

@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload, undefer
 
 from app.database import get_db
 from app.models import (
-    Annotation, Document, DocumentTag, Entity, EntityMention, FolderDocument, Note, Redaction, User,
+    Annotation, Document, DocumentTag, Entity, FolderDocument, Note, Redaction, User,
 )
 from app.models_review import ReviewProject, AIReviewResult
 
@@ -29,7 +29,7 @@ from app.dependencies import get_accessible_production_ids, get_user_role_for_pr
 from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
 from app.services.families import parent_fields, parent_refs_for_ids
-from app.services.search import date_order
+from app.services.search import date_order, mentions_entity
 from app.schemas import (
     BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
     DocumentTagOut, EmailAttachmentOut, EmailViewOut, PaginatedDocuments, TagOut,
@@ -105,17 +105,9 @@ async def list_documents(
         entity = await db.get(Entity, entity_id)
         if entity is None or entity.production_id not in accessible:
             raise HTTPException(status_code=404, detail="Entity not found")
-        # EXISTS keeps one row per document (no join fan-out, so the count is
-        # exact) and never ships a Python list of ids. Entity merges re-point
-        # the loser's mentions to the winner, so the survivor's id covers both.
-        mentions_entity = (
-            select(EntityMention.id)
-            .where(EntityMention.entity_id == entity_id,
-                   EntityMention.document_id == Document.id)
-            .exists()
-        )
-        query = query.where(mentions_entity)
-        count_query = count_query.where(mentions_entity)
+        # Same predicate as search / bulk-by-query / export (one EXISTS).
+        query = query.where(mentions_entity(entity_id))
+        count_query = count_query.where(mentions_entity(entity_id))
 
     if tag_id:
         query = query.where(Document.tags.any(DocumentTag.tag_id == tag_id))

@@ -109,6 +109,8 @@ class BulkTagQuery(BaseModel):
     date_to: date | None = None
     tz: str | None = None
     folder_id: int | None = None
+    # The "Mentions: <entity>" filter (services.search.mentions_entity).
+    entity_id: UUID | None = None
 
     @field_validator("tz")
     @classmethod

@@ -87,9 +87,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Folders: named subsets of the matter (e.g. one time period).
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [filterFolderId, setFilterFolderId] = useState<number | null>(null);
-  // "View all N documents" from an entity panel: the browse list narrowed to
-  // every document mentioning one person/org. Browse-list only — search
-  // doesn't apply it (the chip is shown only on the browse list).
+  // "View all N documents" from an entity panel: every document mentioning
+  // one person/org. Like the folder filter it narrows the browse list, search,
+  // select-all-matching bulk actions and the CSV exports alike.
   const [filterEntity, setFilterEntity] = useState<{ id: string; name: string } | null>(null);
   const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [sourceParties, setSourceParties] = useState<string[]>([]);
@@ -271,6 +271,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         query, 1, perPage, searchSort, production.id,
         metadata, mode, filterFileType || undefined,
         filterSourceParty || undefined, sourceTypeParam, extras, filterFolderId ?? undefined,
+        filterEntity?.id,
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
@@ -285,7 +286,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   useEffect(() => {
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterFileType, filterSourceParty, workMode, searchSort, filterFolderId]);
+  }, [filterFileType, filterSourceParty, workMode, searchSort, filterFolderId, filterEntity?.id]);
 
   // Ambient entity chips: batch-fetch summaries for whichever page of rows
   // is currently on screen (doc list or search results), one call per newly
@@ -568,7 +569,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // filters). Only a full-text result set can be re-resolved as a query, so
   // "select all matching" is offered only then.
   const searchUsedFulltext = lastSearchMode === 'fulltext' || !!lastMetadata || hasExtras(lastExtras)
-    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam || filterFolderId !== null;
+    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam || filterFolderId !== null
+    || filterEntity !== null;
   const pageAllSelected = hasSearched && searchResults.length > 0
     && searchResults.every(r => selectedIds.has(r.id));
   const bulkTarget: BulkTarget = allMatching
@@ -587,6 +589,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           date_to: lastExtras?.dateTo ?? null,
           tz: browserTimeZone(),
           folder_id: filterFolderId,
+          entity_id: filterEntity?.id ?? null,
         },
       }
     : { kind: 'ids', docIds: Array.from(selectedIds) };
@@ -622,6 +625,19 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       showToast(`Could not delete the folder: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     }
   };
+
+  // Shown on both the browse list and search results — the filter applies to
+  // both (and to select-all-matching and the exports).
+  const mentionsChip = filterEntity && (
+    <span className="filter-chip" style={{ marginLeft: 'var(--space-2)' }}>
+      Mentions: {filterEntity.name}
+      <button type="button" className="remove" aria-label={`Remove filter: mentions ${filterEntity.name}`}
+              title="Remove this filter"
+              onClick={() => { setFilterEntity(null); setDocPage(1); setSelectedIds(new Set()); setAllMatching(false); }}>
+        ✕
+      </button>
+    </span>
+  );
 
   const folderFilter = folders.length > 0 && (
     <>
@@ -771,6 +787,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 </button>
                 Search results
                 <span className="section-count">{searchTotal}</span>
+                {mentionsChip}
                 {lastExtras?.email && (
                   <span className="badge badge-blue" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
                     {lastExtras.email.scope === 'from' ? 'From' : 'Involving'} {lastExtras.email.address}
@@ -841,6 +858,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   sort: searchSort, metadata: lastMetadata, fileType: filterFileType || undefined,
                   sourceParty: filterSourceParty || undefined, sourceType: sourceTypeParam, extras: lastExtras,
                   folderId: filterFolderId ?? undefined,
+                  entityId: filterEntity?.id,
                 })} title="Bates, family, date, from, to, cc, subject and tags for every result">
                   Export metadata (CSV)
                 </button>
@@ -950,16 +968,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
               <h2 className="section-title">
                 All Documents
                 <span className="section-count">{docTotal}</span>
-                {filterEntity && (
-                  <span className="filter-chip" style={{ marginLeft: 'var(--space-2)' }}>
-                    Mentions: {filterEntity.name}
-                    <button type="button" className="remove" aria-label={`Remove filter: mentions ${filterEntity.name}`}
-                            title="Remove this filter"
-                            onClick={() => { setFilterEntity(null); setDocPage(1); setSelectedIds(new Set()); }}>
-                      ✕
-                    </button>
-                  </span>
-                )}
+                {mentionsChip}
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
                 <label htmlFor="filter-tag" className="visually-hidden">Filter by tag</label>
@@ -1025,7 +1034,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     Clear filters
                   </button>
                 )}
-                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportDocsCsv(production.id)}>
+                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportDocsCsv(production.id, undefined, filterEntity?.id)}>
                   Export CSV
                 </button>
 <div className="view-toggle">

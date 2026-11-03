@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +36,7 @@ async def search(
     date_to: date | None = Query(None, description="Inclusive end date (YYYY-MM-DD)"),
     tz: str | None = Query(None, max_length=64, description="Reviewer's IANA timezone for date bounds"),
     folder_id: int | None = Query(None, description="Only documents in this folder"),
+    entity_id: UUID | None = Query(None, description="Only documents that mention this person/org"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -63,7 +65,7 @@ async def search(
     has_dates = date_from is not None or date_to is not None
     if (mode == "semantic" and q.strip() and not metadata_filters and not file_type
             and not source_party and not source_type and not has_email and not has_dates
-            and folder_id is None):
+            and folder_id is None and entity_id is None):
         results, total = await semantic_search(
             db, q, production_id=production_id, page=page, per_page=per_page,
             accessible_production_ids=accessible,
@@ -83,6 +85,7 @@ async def search(
             date_to=date_to,
             tz=tz,
             folder_id=folder_id,
+            entity_id=entity_id,
         )
     await log_action(db, user, "search_executed", "search", None,
                      details={"query": q, "result_count": total})
