@@ -527,6 +527,12 @@ async def run_pipeline_handler(
         from app.services.pipeline import run_merge_review_stage
         await run_merge_review_stage(int(production_id))
         return {"ok": True, "job": job}
+    if job == "timeline_review":
+        # The on-demand timeline review runs that one stage, never the whole
+        # pipeline (which would also start paid summaries/extraction).
+        from app.services.pipeline import run_timeline_review_stage
+        await run_timeline_review_stage(int(production_id))
+        return {"ok": True, "job": job}
     if job:
         raise HTTPException(status_code=400, detail=f"Unknown job {job!r}")
 

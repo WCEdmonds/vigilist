@@ -181,3 +181,41 @@ def test_trigger_enqueues_when_not_held(monkeypatch):
     out = asyncio.run(er.trigger_timeline_review(
         production_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
     assert out == {"status": "enqueued"} and calls == [1]
+
+
+# The on-demand trigger must run ONLY the timeline-review stage. Enqueuing a
+# plain pipeline run walked every pending stage, so on a matter with
+# unsummarized / unextracted documents the button silently started paid
+# summaries + entity extraction with no cost confirmation.
+
+def test_trigger_enqueues_only_the_timeline_review_job(monkeypatch):
+    _patch(monkeypatch, configured=True)
+    calls = []
+    monkeypatch.setattr(task_service, "enqueue_pipeline",
+                        lambda pid, *a, **k: calls.append((pid, k.get("job"))))
+    prod = Production(name="M")
+    prod.id = 1
+    prod.ai_hold = False
+    db = FakeSession(get_objects={("Production", 1): prod})
+    asyncio.run(er.trigger_timeline_review(
+        production_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert calls == [(1, "timeline_review")]
+
+
+def test_worker_routes_the_timeline_review_job_to_that_stage_only(monkeypatch):
+    import app.routers.ingest as ing
+    import app.services.pipeline as pipeline
+
+    ran = []
+
+    async def fake_stage(pid):
+        ran.append(("timeline_review", pid))
+
+    async def fake_pipeline(pid, force=False):
+        ran.append(("pipeline", pid))
+    monkeypatch.setattr(pipeline, "run_timeline_review_stage", fake_stage)
+    monkeypatch.setattr(pipeline, "run_ambient_pipeline", fake_pipeline)
+    out = asyncio.run(ing.run_pipeline_handler(
+        body={"production_id": 1, "job": "timeline_review"}, _verified=None))
+    assert out == {"ok": True, "job": "timeline_review"}
+    assert ran == [("timeline_review", 1)]
