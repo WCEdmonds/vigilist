@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, IngestJob, Production
 from app.services.email_parse import ParsedMessage, expand_email
-from app.services.extractors import extract
+from app.services.extractors import extract, extract_attachment
 from app.services.large_ingest import is_large_container
 from app.services.metadata_normalize import normalize_date
 from app.services.storage import get_download_bytes, get_size, list_files
@@ -101,7 +101,7 @@ def build_email_documents(
     msg_bytes: bytes,
     *,
     native_path: str | None = None,
-    extract_fn=extract,
+    extract_fn=None,
     ocr_fn=None,
     store_fn=None,
 ) -> list[Document]:
@@ -151,7 +151,13 @@ def build_email_documents(
     docs: list[Document] = [parent]
     for k, (att_name, att_bytes) in enumerate(parsed.attachments, start=1):
         att_control = f"{message_control} .{k:04d}"
-        res = extract_fn(att_name, att_bytes, ocr_fn=ocr_fn)
+        if extract_fn is None:
+            res = extract_attachment(
+                att_name, att_bytes,
+                inline=(att_name in parsed.inline_names), ocr_fn=ocr_fn,
+            )
+        else:
+            res = extract_fn(att_name, att_bytes, ocr_fn=ocr_fn)
         # Store the attachment itself so it can be previewed and produced
         # natively. Best-effort: without it the document still has its text.
         att_native = None
