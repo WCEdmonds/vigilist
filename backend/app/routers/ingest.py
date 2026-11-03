@@ -531,7 +531,7 @@ async def run_pipeline_handler(
         raise HTTPException(status_code=400, detail=f"Unknown job {job!r}")
 
     from app.services.pipeline import run_ambient_pipeline
-    await run_ambient_pipeline(int(production_id), force)
+    await run_ambient_pipeline(int(production_id), force, resume=bool(body.get("resume")))
     return {"ok": True}
 
 

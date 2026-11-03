@@ -113,7 +113,7 @@ def enqueue_chunk(chunk_id: str) -> None:
 
 
 def enqueue_pipeline(production_id: int, force: bool = False,
-                     job: str | None = None) -> None:
+                     job: str | None = None, resume: bool = False) -> None:
     """Enqueue one ambient-pipeline run (clustering -> summaries -> brief).
 
     `job` names a standalone run instead of the stage sequence. Without it the
@@ -124,6 +124,10 @@ def enqueue_pipeline(production_id: int, force: bool = False,
     body = {"production_id": production_id, "force": force}
     if job:
         body["job"] = job
+    if resume:
+        # A batch poll's continuation: never restarts a failed per-document
+        # stage (see pipeline.run_ambient_pipeline).
+        body["resume"] = True
     _enqueue("/api/ingest/run-pipeline", body)
     logger.info("Enqueued ambient pipeline run for production %d", production_id)
 
