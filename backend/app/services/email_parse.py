@@ -50,6 +50,8 @@ class ParsedMessage:
     message_id: str = ""
     in_reply_to: str = ""
     references: str = ""
+    # Attachment filenames referenced inline (cid:) by the HTML body.
+    inline_names: set[str] = field(default_factory=set)
 
 
 def _ext(filename: str) -> str:

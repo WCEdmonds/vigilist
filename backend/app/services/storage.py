@@ -119,6 +119,21 @@ def get_download_bytes(remote_path: str) -> bytes:
     return blob.download_as_bytes()
 
 
+def get_size(remote_path: str) -> int:
+    """Object size in bytes (0 when the object is missing)."""
+    blob = get_bucket().get_blob(remote_path)
+    return int(blob.size or 0) if blob is not None else 0
+
+
+def open_blob_reader(remote_path: str, chunk_size: int):
+    """Seekable, read-only file object streaming ranges of the blob.
+
+    Nothing is written to local disk; memory is bounded by ``chunk_size``.
+    """
+    blob = get_bucket().blob(remote_path)
+    return blob.open("rb", chunk_size=chunk_size)
+
+
 def get_signed_url(
     remote_path: str,
     expiration_minutes: int = 60,
