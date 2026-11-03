@@ -154,3 +154,64 @@ def extract(filename: str, data: bytes, ocr_fn=None) -> ExtractResult:
         return ExtractResult("", ft, "unsupported")
     except Exception as e:  # never raise — a bad file is an error row, not a crash
         return ExtractResult("", ft, "error", str(e)[:500])
+
+
+TINY_IMAGE_BYTES = 20_000
+TINY_IMAGE_SIDE_PX = 150
+
+
+def should_ocr_image(name: str, data: bytes, inline: bool) -> bool:
+    """False for inline (cid:) images and for tiny ones (logos, signature
+    icons, tracking pixels) where OCR spend buys nothing. An image PIL cannot
+    read is OCR'd, since we cannot prove it is junk."""
+    if inline or len(data) < TINY_IMAGE_BYTES:
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            return min(im.size) >= TINY_IMAGE_SIDE_PX
+    except Exception:
+        return True
+
+
+def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
+    """Text for a PDF attachment: PyMuPDF text layer per page, OCR only for
+    pages under the ``ingest_pdf`` sparse-text gate. ``ocr_fn(jpeg) -> str``."""
+    import fitz
+
+    from app.services.ingest_pdf import MIN_TEXT_CHARS, RENDER_DPI
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as e:
+        return ExtractResult("", "pdf", "error", str(e)[:500])
+    parts: list[str] = []
+    try:
+        for page in doc:
+            embedded = page.get_text().strip()
+            if sum(1 for c in embedded if not c.isspace()) >= MIN_TEXT_CHARS:
+                parts.append(embedded)
+            elif ocr_fn is not None:
+                jpeg = page.get_pixmap(dpi=RENDER_DPI, alpha=False).tobytes("jpeg")
+                t = (ocr_fn(jpeg) or "").strip()
+                if t:
+                    parts.append(t)
+    except Exception as e:
+        text = "\n\n".join(parts)
+        return ExtractResult(text, "pdf", "error", str(e)[:500])
+    finally:
+        doc.close()
+    text = "\n\n".join(parts)
+    return ExtractResult(text, "pdf", _status_for(text))
+
+
+def extract_attachment(name: str, data: bytes, *, inline: bool, ocr_fn) -> ExtractResult:
+    """Extraction for an email attachment: PDFs get text, tiny/inline images
+    skip OCR (empty text, status ok), everything else uses ``extract``."""
+    ext = _ext(name)
+    if ext == ".pdf":
+        return extract_pdf_text(data, ocr_fn)
+    if ext in _IMAGE_EXTS and not should_ocr_image(name, data, inline):
+        return ExtractResult("", "image", "ok")
+    return extract(name, data, ocr_fn=ocr_fn)
