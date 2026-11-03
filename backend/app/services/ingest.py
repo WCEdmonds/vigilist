@@ -662,9 +662,11 @@ async def generate_missing_titles(
     errors: list[str],
     *,
     ai_limit: int | None = None,
+    ai_timeout_s: float | None = None,
 ) -> None:
     """Title the production's untitled documents: AI titles (at most
-    ``ai_limit`` of them when set), then the original filename as a fallback."""
+    ``ai_limit`` of them, within ``ai_timeout_s``, when set), then the original
+    filename as a fallback."""
     result = await db.execute(
         select(Document).where(
             Document.production_id == production_id,
@@ -673,15 +675,22 @@ async def generate_missing_titles(
     )
     untitled_docs = list(result.scalars().all())
 
-    if settings.anthropic_api_key and untitled_docs:
-        targets = untitled_docs if ai_limit is None else untitled_docs[:ai_limit]
+    targets = untitled_docs if ai_limit is None else untitled_docs[:max(ai_limit, 0)]
+    if settings.anthropic_api_key and targets:
         try:
             texts_for_titles = [(str(d.id), d.text_content) for d in targets]
-            titles = await generate_titles_batch(texts_for_titles)
+            if ai_timeout_s is None:
+                titles = await generate_titles_batch(texts_for_titles)
+            else:
+                titles = await asyncio.wait_for(
+                    generate_titles_batch(texts_for_titles), timeout=max(ai_timeout_s, 0))
             for d in targets:
                 t = titles.get(str(d.id))
                 if t:
                     d.title = t
+        except TimeoutError:
+            logger.warning("AI titles deferred: time budget reached for production %s", production_id)
+            errors.append("AI titles deferred: time budget reached; filename titles kept")
         except Exception as e:
             logger.exception("AI title generation failed")
             errors.append(f"AI title generation skipped: {e}")

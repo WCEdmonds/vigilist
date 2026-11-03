@@ -20,14 +20,43 @@ from app.services.pst_reader import ContainerSurvey
 logger = logging.getLogger(__name__)
 
 # Attempts per chunk before it is split in half (or, at one item, recorded as
-# failed). A worker crash (OOM, timeout) leaves the chunk 'running'; the Cloud
-# Tasks retry re-claims it and the attempt count drives the split.
+# failed). Every claim counts an attempt.
 MAX_CHUNK_ATTEMPTS = 3
+
+# Claim token: only one live worker may process a chunk. A 'pending' chunk is
+# claimable at once. A 'running' chunk is claimable only once its last claim
+# (updated_at) is older than any request could still be alive: the worker's
+# Cloud Run request timeout (3600 s, backend-deploy.yml), which outlasts the
+# 1800 s Cloud Tasks dispatch deadline, plus a margin. So a swept duplicate,
+# or a Cloud Tasks retry after the dispatch deadline, can never run alongside
+# a live-but-slow original.
+#
+# Timeline: a worker that raises releases its claim (status back to
+# 'pending'), so Cloud Tasks' retry re-claims it within seconds. A worker that
+# dies outright (OOM, instance kill, timeout) can't release: Cloud Tasks'
+# retries get 503 (``ChunkBusy``) and back off until CHUNK_STALE_S has passed
+# since the claim, then the next retry re-claims it.
+WORKER_REQUEST_TIMEOUT_S = 3600
+CHUNK_STALE_S = WORKER_REQUEST_TIMEOUT_S + 300
 
 _CLAIM_CHUNK_SQL = (
     "UPDATE ingest_chunks SET attempts = attempts + 1, status = 'running', updated_at = now() "
-    "WHERE id = :id AND status IN ('pending', 'running') RETURNING attempts"
+    "WHERE id = :id AND (status = 'pending' OR "
+    "(status = 'running' AND updated_at < now() - make_interval(secs => :stale))) "
+    "RETURNING attempts"
 )
+# The claim holder gives the chunk back after an error so the retry can claim
+# it at once (the attempt still counts).
+_RELEASE_CHUNK_SQL = (
+    "UPDATE ingest_chunks SET status = 'pending', updated_at = now() "
+    "WHERE id = :id AND status = 'running'"
+)
+
+
+class ChunkBusy(Exception):
+    """Another live attempt holds this chunk; the task should retry later."""
+
+
 _CHUNK_DONE_SQL = (
     "UPDATE ingest_chunks SET status = 'done', error = NULL, updated_at = now() "
     "WHERE id = :id AND status = 'running'"
@@ -278,22 +307,48 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
     return failures, failed
 
 
+async def _release(db, chunk_id) -> None:
+    try:
+        await db.rollback()
+        await db.execute(text(_RELEASE_CHUNK_SQL), {"id": chunk_id})
+        await db.commit()
+    except Exception:
+        # Unreleased, the chunk becomes claimable once CHUNK_STALE_S passes.
+        logger.exception("Could not release chunk %s", chunk_id)
+
+
 async def run_chunk(db, chunk_id: str) -> None:
-    """Process one ``ingest_chunks`` row (Cloud Tasks worker)."""
-    attempts = (await db.execute(text(_CLAIM_CHUNK_SQL), {"id": chunk_id})).scalar()
+    """Process one ``ingest_chunks`` row (Cloud Tasks worker).
+
+    Raises ``ChunkBusy`` when another live attempt holds the chunk.
+    """
+    attempts = (await db.execute(
+        text(_CLAIM_CHUNK_SQL), {"id": chunk_id, "stale": CHUNK_STALE_S})).scalar()
     await db.commit()
     if attempts is None:
-        # Done, split, failed, or gone. A redelivered task still nudges
-        # finalize: a crash between the done commit and maybe_finalize (or
-        # inside it, which rolls back) would otherwise leave nobody to call it.
         chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
-        if chunk is not None:
-            await large_ingest.maybe_finalize(db, str(chunk.job_id))
+        if chunk is None:
+            return
+        if chunk.status == "running":
+            raise ChunkBusy(f"chunk {chunk_id} is held by another attempt")
+        # Done, split or failed. A redelivered task still nudges finalize: a
+        # crash between the done commit and maybe_finalize (or inside it, which
+        # rolls back) would otherwise leave nobody to call it.
+        await large_ingest.maybe_finalize(db, str(chunk.job_id))
         return
     chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
     if chunk is None:
         return
     c = _snapshot_chunk(chunk)
+    try:
+        await _process(db, c, attempts)
+    except Exception:
+        # No-op once the chunk reached done/split/failed.
+        await _release(db, c.id)
+        raise
+
+
+async def _process(db, c, attempts: int) -> None:
     if c.kind in ("embed", "post"):
         from app.services import large_ingest_finalize as fin
 
@@ -301,7 +356,7 @@ async def run_chunk(db, chunk_id: str) -> None:
         await handler(db, c, attempts)
         return
     if c.kind != "items":
-        logger.warning("Chunk %s has unknown kind %r", chunk_id, c.kind)
+        logger.warning("Chunk %s has unknown kind %r", c.id, c.kind)
         return
     job = await db.get(IngestJob, c.job_id, populate_existing=True)
     if job is None:

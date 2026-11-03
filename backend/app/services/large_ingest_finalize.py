@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 # Documents per embed chunk.
 EMBED_BATCH_DOCS = 200
 # A pending chunk untouched this long, with nothing running, lost its Cloud
-# Task (an enqueue that failed): re-enqueue it. Longer than the 30-minute
-# dispatch deadline, so a live queued task is not doubled up in practice.
+# Task (an enqueue that failed): re-enqueue it. A duplicate of a merely
+# delayed task is safe: the chunk claim lets only one attempt run it.
 ORPHAN_AFTER_MINUTES = 35
 # Re-enqueued per sweep (each is one Cloud Tasks create call).
 ORPHAN_SWEEP_LIMIT = 500
@@ -45,6 +45,16 @@ ORPHAN_SWEEP_LIMIT = 500
 # at load time, so few documents reach this; the rest keep the filename
 # fallback.
 POST_AI_TITLE_LIMIT = 200
+# Soft time budget for the post chunk, under the 1800 s dispatch deadline.
+# Threading runs first; AI titles get whatever is left (minus a margin for the
+# filename fallback and the completion commit), and are skipped when too
+# little is left. Skipped/unfinished AI titles are deferred: those documents
+# keep the filename fallback (or stay untitled) until a later finalize or
+# analysis titles them.
+POST_SOFT_BUDGET_S = 1500
+POST_FINISH_MARGIN_S = 120
+# Below this much remaining budget, AI titles are skipped outright.
+POST_MIN_TITLE_WINDOW_S = 30
 
 ACTIVE = ("pending", "running")
 
@@ -277,9 +287,12 @@ async def maybe_finalize(db, job_id: str) -> None:
 
     if _active(summary) and not any(s == "running" for (_k, s) in summary):
         # Everything left is pending with nothing running: a chunk whose
-        # enqueue failed would wait forever. Re-enqueue stale ones (run_chunk
-        # claims atomically, so a duplicate dispatch is harmless). Pending
-        # work blocks both phases, so there is nothing to finalize yet.
+        # enqueue failed (or whose released retry Cloud Tasks gave up on)
+        # would wait forever. Re-enqueue stale 'pending' ones only; a
+        # 'running' chunk is never swept. If the original task was merely
+        # delayed, the claim token lets only one of the two run it (the other
+        # gets ChunkBusy/503 and backs off). Pending work blocks both phases,
+        # so there is nothing to finalize yet.
         await _sweep_orphans(db, job_id)
         return
 
@@ -407,6 +420,9 @@ async def run_post_chunk(db, c, attempts: int) -> None:
         await db.commit()
         return
 
+    import time
+
+    started = time.monotonic()
     errors: list[str] = []
     try:
         from app.services import email_threading
@@ -416,8 +432,14 @@ async def run_post_chunk(db, c, attempts: int) -> None:
     except Exception:
         await db.rollback()
         logger.exception("thread derivation skipped for production %s", production_id)
+    window = POST_SOFT_BUDGET_S - POST_FINISH_MARGIN_S - (time.monotonic() - started)
+    ai_limit = POST_AI_TITLE_LIMIT
+    if window < POST_MIN_TITLE_WINDOW_S:
+        ai_limit = 0
+        logger.warning("Post chunk %s: threading used the time budget; AI titles deferred", c.id)
     try:
-        await generate_missing_titles(db, production_id, errors, ai_limit=POST_AI_TITLE_LIMIT)
+        await generate_missing_titles(db, production_id, errors, ai_limit=ai_limit,
+                                      ai_timeout_s=max(window, 0))
     except Exception as e:
         await db.rollback()
         logger.exception("Title generation skipped for production %s", production_id)

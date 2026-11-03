@@ -390,6 +390,10 @@ async def process_chunk_handler(
         raise HTTPException(status_code=400, detail="Missing required fields")
     try:
         await large_ingest_chunk.run_chunk(db, str(chunk_id))
+    except large_ingest_chunk.ChunkBusy as e:
+        # Another live attempt holds the chunk: Cloud Tasks backs off and
+        # retries; the claim succeeds once that attempt is done or stale.
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.exception("Ingest chunk %s failed", chunk_id)
         raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")

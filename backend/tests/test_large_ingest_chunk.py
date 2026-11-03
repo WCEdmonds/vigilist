@@ -283,9 +283,40 @@ def test_short_slice_records_missing_items_as_failed(monkeypatch):
 def test_finished_chunk_returns_immediately(monkeypatch):
     # A redelivered task for a finished chunk does no work, but still nudges
     # finalize (a crash after the done commit may have skipped it).
-    env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1), attempts=None)
+    chunk = _chunk([[2, 0, 1]], 1)
+    chunk.status = "done"
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=chunk, attempts=None)
     env.run()
     assert env.opened == [] and env.docs() == [] and env.finalized == ["j1"]
+
+
+def test_chunk_held_by_live_attempt_is_busy(monkeypatch):
+    # The claim refused a fresh 'running' chunk: another attempt holds it.
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1), attempts=None)
+    with pytest.raises(large_ingest_chunk.ChunkBusy):
+        env.run()
+    assert env.opened == [] and env.docs() == [] and env.finalized == []
+
+
+def test_claim_passes_stale_window(monkeypatch):
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1))
+    env.run()
+    claim = env.sql_params("RETURNING attempts")
+    assert claim and claim[0]["stale"] == large_ingest_chunk.CHUNK_STALE_S
+
+
+def test_whole_chunk_error_releases_claim(monkeypatch):
+    env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1))
+
+    @contextlib.contextmanager
+    def broken_open(path):
+        raise OSError("storage unavailable")
+        yield
+
+    monkeypatch.setattr(pst_reader, "open_pst", broken_open)
+    with pytest.raises(OSError):
+        env.run()
+    assert env.sql_params("SET status = 'pending'")
 
 
 def test_claim_is_one_conditional_statement(monkeypatch):

@@ -20,7 +20,7 @@ from app.models import IngestChunk
 from app.services import embeddings, email_threading, large_ingest, large_ingest_chunk
 from app.services import large_ingest_finalize as fin
 from app.services.large_ingest import large_source_key, maybe_finalize
-from app.services.large_ingest_chunk import MAX_CHUNK_ATTEMPTS, run_chunk
+from app.services.large_ingest_chunk import CHUNK_STALE_S, MAX_CHUNK_ATTEMPTS, ChunkBusy, run_chunk
 from tests.fakes import FakeResult, FakeSession
 
 PST = "productions/1/raw/big.pst"
@@ -148,12 +148,21 @@ class SimSession(FakeSession):
             cid = s.add_chunk("post", "pending", item_count=0)
             return FakeResult(scalar=cid)
         if "RETURNING attempts" in sql:
+            assert params["stale"] == CHUNK_STALE_S
             c = s.chunks.get(str(params["id"]))
-            if c is None or c.status not in ("pending", "running"):
+            claimable = c is not None and (
+                c.status == "pending" or (c.status == "running" and getattr(c, "stale", False)))
+            if not claimable:
                 return FakeResult(scalar=None)
             c.attempts += 1
             c.status = "running"
             return FakeResult(scalar=c.attempts)
+        if "SET status = 'pending'" in sql:
+            c = s.chunks.get(str(params["id"]))
+            if c is not None and c.status == "running":
+                c.status = "pending"
+                return FakeResult(rowcount=1)
+            return FakeResult(rowcount=0)
         for target in ("done", "split", "failed"):
             if f"SET status = '{target}'" in sql and "ingest_chunks" in sql:
                 c = s.chunks.get(str(params["id"]))
@@ -425,7 +434,8 @@ def test_embed_failure_raises_for_retry_then_resumes(env, monkeypatch):
     monkeypatch.setattr(embeddings, "chunk_and_embed_document", flaky)
     with pytest.raises(RuntimeError):
         _run(s, cid)
-    assert s.chunks[cid].status == "running" and s.embedded == {a}
+    # The claim is released so Cloud Tasks' retry can claim it at once.
+    assert s.chunks[cid].status == "pending" and s.embedded == {a}
     fail.clear()
     _run(s, cid)
     assert s.chunks[cid].status == "done" and s.embedded == {a, b}
@@ -434,7 +444,7 @@ def test_embed_failure_raises_for_retry_then_resumes(env, monkeypatch):
 def test_embed_chunk_splits_after_max_attempts(env):
     s = env(status="finalizing")
     ids = [str(uuid.uuid4()) for _ in range(5)]
-    cid = s.add_chunk("embed", "running", doc_ids=ids, item_count=5, attempts=MAX_CHUNK_ATTEMPTS)
+    cid = s.add_chunk("embed", "pending", doc_ids=ids, item_count=5, attempts=MAX_CHUNK_ATTEMPTS)
     _run(s, cid)
     assert s.chunks[cid].status == "split"
     children = [c for c in s.of_kind("embed") if c.parent_id is not None]
@@ -447,7 +457,7 @@ def test_embed_chunk_splits_after_max_attempts(env):
 def test_single_doc_embed_failure_recorded_and_finalize_continues(env):
     s = env(status="finalizing")
     doc = str(uuid.uuid4())
-    cid = s.add_chunk("embed", "running", doc_ids=[doc], item_count=1, attempts=MAX_CHUNK_ATTEMPTS)
+    cid = s.add_chunk("embed", "pending", doc_ids=[doc], item_count=1, attempts=MAX_CHUNK_ATTEMPTS)
     _run(s, cid)
     assert s.chunks[cid].status == "failed"
     assert any("search embeddings could not be generated" in e for e in s.job.errors)
@@ -456,7 +466,7 @@ def test_single_doc_embed_failure_recorded_and_finalize_continues(env):
 
 def test_post_chunk_gives_up_and_completes_after_max_attempts(env):
     s = env(status="finalizing")
-    cid = s.add_chunk("post", "running", item_count=0, attempts=MAX_CHUNK_ATTEMPTS)
+    cid = s.add_chunk("post", "pending", item_count=0, attempts=MAX_CHUNK_ATTEMPTS)
     _run(s, cid)
     assert s.chunks[cid].status == "failed"
     assert s.job.status == "complete"
@@ -572,3 +582,129 @@ def test_process_chunk_route_dispatches_every_kind(monkeypatch):
     for _kind in ("items", "embed", "post"):
         asyncio.run(ri.process_chunk_handler({"chunk_id": "c1"}, db=FakeSession(), _verified=None))
     assert seen == ["c1", "c1", "c1"]
+
+
+# --- claim token (fix round 1) ---
+
+
+def test_claim_sql_only_takes_pending_or_stale_running():
+    sql = large_ingest_chunk._CLAIM_CHUNK_SQL
+    assert "status = 'pending' OR" in sql
+    assert "status = 'running' AND updated_at < now() - make_interval(secs => :stale)" in sql
+    assert "updated_at = now()" in sql
+    # Stale only after any live request must be gone: worker timeout, not the
+    # (shorter) dispatch deadline.
+    assert CHUNK_STALE_S > large_ingest_chunk.WORKER_REQUEST_TIMEOUT_S >= task_service.MAX_DISPATCH_DEADLINE_S
+
+
+def test_fresh_running_chunk_is_not_claimed_and_reports_busy(env, monkeypatch):
+    s = env(status="finalizing")
+    cid = s.add_chunk("embed", "running", doc_ids=[str(uuid.uuid4())], attempts=1)
+    calls = []
+
+    async def fake_embed(db, doc_id):
+        calls.append(doc_id)
+        return 1
+
+    monkeypatch.setattr(embeddings, "chunk_and_embed_document", fake_embed)
+    with pytest.raises(ChunkBusy):
+        _run(s, cid)
+    assert calls == [] and s.chunks[cid].attempts == 1 and s.chunks[cid].status == "running"
+
+
+def test_stale_running_chunk_is_reclaimed(env):
+    s = env(status="finalizing")
+    doc = str(uuid.uuid4())
+    cid = s.add_chunk("embed", "running", doc_ids=[doc], attempts=1)
+    s.chunks[cid].stale = True
+    _run(s, cid)
+    assert s.chunks[cid].attempts == 2 and s.chunks[cid].status == "done"
+    assert doc in s.embedded
+
+
+def test_busy_chunk_route_returns_503(monkeypatch):
+    import app.routers.ingest as ri
+    from fastapi import HTTPException
+
+    async def busy(db, cid):
+        raise ChunkBusy("held")
+
+    monkeypatch.setattr(large_ingest_chunk, "run_chunk", busy)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ri.process_chunk_handler({"chunk_id": "c1"}, db=FakeSession(), _verified=None))
+    assert e.value.status_code == 503
+
+
+def test_sweep_only_targets_pending_chunks():
+    sql = fin._SWEEP_ORPHANS_SQL
+    assert "status = 'pending'" in sql and "running" not in sql
+
+
+def test_terminal_chunk_redelivery_is_not_busy(env, monkeypatch):
+    s = env()
+    cid = s.add_chunk("items", "failed")
+    seen = []
+
+    async def fake_finalize(db, job_id):
+        seen.append(job_id)
+
+    monkeypatch.setattr(large_ingest, "maybe_finalize", fake_finalize)
+    _run(s, cid)  # no ChunkBusy
+    assert seen == ["j1"]
+
+
+# --- post chunk time budget (fix round 1) ---
+
+
+def _clock(monkeypatch, start=1000.0):
+    import time
+
+    now = {"t": start}
+    monkeypatch.setattr(time, "monotonic", lambda: now["t"])
+    return now
+
+
+def test_post_chunk_defers_ai_titles_when_threading_uses_the_budget(env, monkeypatch):
+    s = env(status="finalizing")
+    now = _clock(monkeypatch)
+
+    async def slow_threads(db, production_id):
+        now["t"] += 1450
+
+    monkeypatch.setattr(email_threading, "derive_threads", slow_threads)
+    cid = s.add_chunk("post", "pending", item_count=0)
+    _run(s, cid)
+    assert s.titled and s.titled[0][1]["ai_limit"] == 0
+    assert s.job.status == "complete"
+
+
+def test_post_chunk_gives_titles_the_remaining_budget(env, monkeypatch):
+    s = env(status="finalizing")
+    now = _clock(monkeypatch)
+
+    async def threads(db, production_id):
+        now["t"] += 100
+
+    monkeypatch.setattr(email_threading, "derive_threads", threads)
+    cid = s.add_chunk("post", "pending", item_count=0)
+    _run(s, cid)
+    kw = s.titled[0][1]
+    assert kw["ai_limit"] == fin.POST_AI_TITLE_LIMIT
+    assert kw["ai_timeout_s"] == fin.POST_SOFT_BUDGET_S - fin.POST_FINISH_MARGIN_S - 100
+    assert fin.POST_SOFT_BUDGET_S < task_service.MAX_DISPATCH_DEADLINE_S
+
+
+def test_generate_missing_titles_timeout_keeps_filename_fallback(monkeypatch):
+    doc = SimpleNamespace(id="d1", title=None, text_content="text", metadata_={"File Name": "memo.docx"})
+
+    async def slow_titles(texts):
+        await asyncio.sleep(5)
+        return {}
+
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    monkeypatch.setattr(ingest_mod, "generate_titles_batch", slow_titles)
+    db = FakeSession(responders=[("FROM documents", FakeResult(items=[doc]))])
+    errors: list[str] = []
+    asyncio.run(ingest_mod.generate_missing_titles(db, 1, errors, ai_limit=10, ai_timeout_s=0.01))
+    assert doc.title == "memo"
+    assert any("deferred" in e for e in errors)

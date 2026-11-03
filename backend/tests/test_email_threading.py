@@ -140,7 +140,42 @@ def test_derive_threads_updates_docs_over_fake_session():
     assert stats.messages == 2
     assert stats.threads == 1
     assert stats.inclusive == 1
-    by_id = {u["id"]: u for u in updates}
-    assert by_id["b"]["inc"] is True
-    assert by_id["a"]["inc"] is False
-    assert by_id["a"]["tid"] == by_id["b"]["tid"]
+    assert len(updates) == 1  # one set-based UPDATE for the batch
+    u = updates[0]
+    by_id = {i: (tid, inc) for i, tid, inc in zip(u["ids"], u["tids"], u["incs"])}
+    assert by_id["b"][1] is True
+    assert by_id["a"][1] is False
+    assert by_id["a"][0] == by_id["b"][0]
+
+
+def test_derive_threads_issues_one_update_per_batch_not_per_email():
+    import asyncio
+
+    import app.services.email_threading as et
+    from app.services.email_threading import derive_threads
+
+    n = et._UPDATE_BATCH * 2 + 5
+    rows = [(f"d{i}", f"<m{i}>", None, None, f"Subject {i}", _dt(1)) for i in range(n)]
+    updates: list[dict] = []
+    commits = []
+
+    class FakeResult:
+        def all(self_inner):
+            return rows
+
+    class FakeSession:
+        async def execute(self_inner, stmt, params=None):
+            if params is not None:
+                updates.append(params)
+                return None
+            return FakeResult()
+
+        async def commit(self_inner):
+            commits.append(1)
+
+    stats = asyncio.run(derive_threads(FakeSession(), production_id=1))
+    assert stats.messages == n
+    assert len(updates) == 3  # ceil(n / batch), not n
+    assert sorted(len(u["ids"]) for u in updates) == [5, et._UPDATE_BATCH, et._UPDATE_BATCH]
+    assert {i for u in updates for i in u["ids"]} == {r[0] for r in rows}
+    assert len(commits) == 3

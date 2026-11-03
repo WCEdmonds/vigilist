@@ -22,7 +22,18 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-_UPDATE_BATCH = 500
+# Documents per set-based UPDATE (one statement and one commit per batch):
+# per-row round trips to a remote Postgres don't fit a mailbox-scale run.
+_UPDATE_BATCH = 2000
+
+# Cast the arrays explicitly so asyncpg binds them as uuid[]/text[]/boolean[].
+_THREAD_UPDATE_SQL = (
+    "UPDATE documents AS d SET thread_id = v.tid, is_inclusive = v.inc "
+    "FROM (SELECT unnest(cast(:ids as uuid[])) AS id, "
+    "unnest(cast(:tids as text[])) AS tid, "
+    "unnest(cast(:incs as boolean[])) AS inc) AS v "
+    "WHERE d.id = v.id"
+)
 
 _PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw)\s*:\s*", re.IGNORECASE)
 _EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
@@ -243,17 +254,18 @@ async def derive_threads(db: "AsyncSession", production_id: int) -> ThreadStats:
         id_by_str = {str(r[0]): r[0] for r in rows}
         assignments = compute_thread_assignments(messages, production_id)
 
-        pending = 0
-        for doc_id_str, a in assignments.items():
+        items = list(assignments.items())
+        for start in range(0, len(items), _UPDATE_BATCH):
+            batch = items[start:start + _UPDATE_BATCH]
             await db.execute(
-                text("UPDATE documents SET thread_id = :tid, is_inclusive = :inc WHERE id = :id"),
-                {"tid": a.thread_id, "inc": a.is_inclusive, "id": id_by_str[doc_id_str]},
+                text(_THREAD_UPDATE_SQL),
+                {
+                    "ids": [id_by_str[doc_id_str] for doc_id_str, _a in batch],
+                    "tids": [a.thread_id for _d, a in batch],
+                    "incs": [bool(a.is_inclusive) for _d, a in batch],
+                },
             )
-            pending += 1
-            if pending >= _UPDATE_BATCH:
-                await db.commit()
-                pending = 0
-        await db.commit()
+            await db.commit()
 
         return ThreadStats(
             threads=len({a.thread_id for a in assignments.values()}),
