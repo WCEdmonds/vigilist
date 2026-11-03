@@ -114,3 +114,30 @@ def test_parse_eml_marks_cid_referenced_attachment_inline():
     names = [n for n, _ in parsed.attachments]
     assert "logo.png" in names and "real.pdf" in names
     assert parsed.inline_names == {"logo.png"}
+
+
+# --- I7: OCR page cap per PDF attachment -------------------------------------
+
+
+def test_ocr_page_cap_is_50():
+    from app.services import extractors
+
+    assert extractors.MAX_OCR_PAGES_PER_ATTACHMENT == 50
+
+
+def test_pages_past_the_ocr_cap_keep_only_their_text_layer(monkeypatch):
+    from app.services import extractors
+
+    monkeypatch.setattr(extractors, "MAX_OCR_PAGES_PER_ATTACHMENT", 2)
+    doc = fitz.open()
+    for _ in range(3):
+        doc.new_page()  # scanned
+    doc.new_page().insert_text((72, 72), "sig")  # sparse text layer, past the cap
+    data = doc.tobytes()
+    doc.close()
+    calls = []
+    res = extract_pdf_text(data, ocr_fn=lambda img: calls.append(1) or f"OCR {len(calls)}")
+    assert len(calls) == 2
+    assert res.text == "OCR 1\n\nOCR 2\n\nsig"
+    assert res.extraction_status == "partial"
+    assert "2 pages past the 2-page OCR cap were not OCR'd" in res.extraction_error

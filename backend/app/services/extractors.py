@@ -175,9 +175,16 @@ def should_ocr_image(name: str, data: bytes, inline: bool) -> bool:
         return True
 
 
+# Pages OCR'd per PDF attachment. A scanned attachment of thousands of pages
+# would otherwise be billed (and rendered) page by page inside one worker
+# request; pages past the cap keep their text layer only.
+MAX_OCR_PAGES_PER_ATTACHMENT = 50
+
+
 def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
     """Text for a PDF attachment: PyMuPDF text layer per page, OCR only for
-    pages under the ``ingest_pdf`` sparse-text gate. ``ocr_fn(jpeg) -> str``."""
+    pages under the ``ingest_pdf`` sparse-text gate, at most
+    ``MAX_OCR_PAGES_PER_ATTACHMENT`` of them. ``ocr_fn(jpeg) -> str``."""
     import fitz
 
     from app.services.ingest_pdf import MIN_TEXT_CHARS, RENDER_DPI
@@ -188,12 +195,19 @@ def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
         return ExtractResult("", "pdf", "error", str(e)[:500])
     parts: list[str] = []
     page_errors: list[str] = []
+    ocr_pages = 0
+    over_cap = 0
     try:
         for page in doc:
             embedded = page.get_text().strip()
             if sum(1 for c in embedded if not c.isspace()) >= MIN_TEXT_CHARS:
                 parts.append(embedded)
+            elif ocr_fn is not None and ocr_pages >= MAX_OCR_PAGES_PER_ATTACHMENT:
+                over_cap += 1
+                if embedded:
+                    parts.append(embedded)
             elif ocr_fn is not None:
+                ocr_pages += 1
                 try:
                     jpeg = page.get_pixmap(dpi=RENDER_DPI, alpha=False).tobytes("jpeg")
                     t = (ocr_fn(jpeg) or "").strip()
@@ -208,6 +222,9 @@ def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
     finally:
         doc.close()
     text = "\n\n".join(parts)
+    if over_cap:
+        page_errors.insert(0, f"{over_cap} pages past the {MAX_OCR_PAGES_PER_ATTACHMENT}-page OCR cap "
+                              "were not OCR'd (text layer only)")
     if page_errors:
         return ExtractResult(text, "pdf", "partial", "; ".join(page_errors)[:500])
     return ExtractResult(text, "pdf", _status_for(text))
