@@ -61,7 +61,7 @@ async def create_qc_sample(
     if reviewed_ids:
         qc_result = await db.execute(
             select(QCDecision.batch_document_id).where(
-                QCDecision.batch_document_id.in_(reviewed_ids)
+                QCDecision.batch_document_id.in_(stmt.subquery().select())
             )
         )
         already_qcd = {row[0] for row in qc_result.all()}

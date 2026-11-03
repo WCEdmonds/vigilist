@@ -56,7 +56,7 @@ async def export_documents_csv(
     if doc_ids:
         nc_result = await db.execute(
             select(Note.document_id, func.count(Note.id))
-            .where(Note.document_id.in_(doc_ids))
+            .where(ids_match(Note.document_id, doc_ids))
             .group_by(Note.document_id)
         )
         note_counts = dict(nc_result.all())

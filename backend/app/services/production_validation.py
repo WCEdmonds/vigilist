@@ -18,6 +18,7 @@ from app.models import (
     RedactionQCDecision,
     Tag,
 )
+from app.services.sql_arrays import ids_match, strings_match
 from app.services.families import is_attachment
 from app.services.imaging import imaging_kind
 from app.services.privilege import effective_disposition, qc_status
@@ -39,19 +40,19 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
         select(Document.id, Document.bates_begin,
                Document.privilege_disposition, Document.image_paths,
                Document.source_type, Document.source_party)
-        .where(Document.id.in_(doc_ids))
+        .where(ids_match(Document.id, doc_ids))
     )).all()
 
     privileged = {r[0] for r in (await db.execute(
         select(DocumentTag.document_id)
         .join(Tag, Tag.id == DocumentTag.tag_id)
-        .where(Tag.is_privilege.is_(True), DocumentTag.document_id.in_(doc_ids))
+        .where(Tag.is_privilege.is_(True), ids_match(DocumentTag.document_id, doc_ids))
     )).all()}
 
     red_rows = (await db.execute(
         select(Redaction.document_id, func.count(Redaction.id),
                func.max(func.coalesce(Redaction.updated_at, Redaction.created_at)))
-        .where(Redaction.document_id.in_(doc_ids))
+        .where(ids_match(Redaction.document_id, doc_ids))
         .group_by(Redaction.document_id)
     )).all()
     reds = {r[0]: (r[1], r[2]) for r in red_rows}
@@ -60,7 +61,7 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
     info = {r[0]: r[1:] for r in (await db.execute(
         select(Document.id, Document.file_type, Document.native_path,
                Document.imaging_status, Document.family_id, Document.header_regions)
-        .where(Document.id.in_(doc_ids))
+        .where(ids_match(Document.id, doc_ids))
     )).all()}
     families = {fam for (_ft, _np, _st, fam, _hr) in info.values() if fam}
     parents: dict = {}
@@ -68,14 +69,14 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
         parents = {bates: (pid, regions) for pid, bates, regions in (await db.execute(
             select(Document.id, Document.bates_begin, Document.header_regions)
             .where(Document.production_id == ps.production_id,
-                   Document.bates_begin.in_(families),
+                   strings_match(Document.bates_begin, families),
                    Document.header_regions.is_not(None))
         )).all()}
     names_redacted: set = set()
     if parents:
         parent_reds: dict = {}
         for red in (await db.execute(
-            select(Redaction).where(Redaction.document_id.in_([p for p, _ in parents.values()]))
+            select(Redaction).where(ids_match(Redaction.document_id, [p for p, _ in parents.values()]))
         )).scalars().all():
             parent_reds.setdefault(red.document_id, []).append(red)
         names_redacted = {bates for bates, (pid, regions) in parents.items()
@@ -84,7 +85,7 @@ async def compute_conflicts(db: AsyncSession, ps: ProductionSet,
     latest: dict = {}
     for d in (await db.execute(
         select(RedactionQCDecision)
-        .where(RedactionQCDecision.document_id.in_(doc_ids))
+        .where(ids_match(RedactionQCDecision.document_id, doc_ids))
         .order_by(RedactionQCDecision.document_id,
                   RedactionQCDecision.decided_at.desc(),
                   RedactionQCDecision.id.desc())

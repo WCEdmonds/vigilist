@@ -18,6 +18,7 @@ from app.schemas_review import (
     AIReviewResultOut, AttorneyDecision, BulkAcceptRequest, PaginatedResults,
     ReviewProjectCreate, ReviewProjectOut, ReviewProjectUpdate,
 )
+from app.services.sql_arrays import ids_match
 from app.services.ai_review import DEFAULT_CATEGORIES
 from app.services.audit import log_action
 from app.services.review_tags import apply_decision_tag
@@ -570,7 +571,7 @@ async def bulk_accept(
         from app.models import DocumentTag
         existing_result = await db.execute(
             select(DocumentTag.document_id, DocumentTag.tag_id)
-            .where(DocumentTag.document_id.in_(doc_ids))
+            .where(ids_match(DocumentTag.document_id, doc_ids))
         )
         existing_pairs: set[tuple] = set(existing_result.all())
     else:

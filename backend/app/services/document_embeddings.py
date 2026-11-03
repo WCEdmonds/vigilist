@@ -19,22 +19,17 @@ async def get_document_embeddings(
     Returns dict mapping document_id (str) -> numpy array of averaged chunk embeddings.
     Only includes documents that have embeddings.
     """
-    doc_result = await db.execute(
-        select(Document.id)
-        .where(Document.production_id == production_id)
-        .where(Document.text_content.isnot(None))
-    )
-    all_doc_ids = [row[0] for row in doc_result.all()]
-
-    if not all_doc_ids:
-        return {}
-
+    # Select by production with a join -- never ship a Python list of document
+    # ids back as IN (...): asyncpg caps a statement at 32,767 bind params and
+    # a large matter (~69k docs) blew straight past it.
     result = await db.execute(
         select(
             DocumentChunk.document_id,
             func.avg(DocumentChunk.embedding).label("avg_embedding"),
         )
-        .where(DocumentChunk.document_id.in_(all_doc_ids))
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .where(Document.production_id == production_id)
+        .where(Document.text_content.isnot(None))
         .group_by(DocumentChunk.document_id)
     )
 
