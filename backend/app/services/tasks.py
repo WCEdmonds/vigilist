@@ -155,6 +155,14 @@ def enqueue_reocr_batch(
     )
 
 
+def enqueue_ocr_backfill_batch(production_id: int, after_id: str | None) -> None:
+    """Enqueue one image-OCR backfill batch (keyset-paginated after ``after_id``)."""
+    _enqueue("/api/ingest/ocr-backfill-batch",
+             {"production_id": production_id, "after_id": after_id})
+    logger.info("Enqueued OCR backfill batch for production %d after %s",
+                production_id, after_id)
+
+
 def enqueue_render_batch(set_id: int, document_ids: list[str]) -> None:
     """Enqueue a Cloud Task to render one batch of production-set documents."""
     _enqueue("/api/production-sets/render-batch",
