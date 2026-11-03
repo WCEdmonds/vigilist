@@ -198,6 +198,8 @@ export interface SearchResponse {
   total: number;
   page: number;
   per_page: number;
+  /** Echo of the applied "Mentions" filter (absent from servers that predate it). */
+  entity_id?: string | null;
 }
 
 export interface PaginatedDocuments {
@@ -205,6 +207,8 @@ export interface PaginatedDocuments {
   total: number;
   page: number;
   per_page: number;
+  /** Echo of the applied "Mentions" filter (absent from servers that predate it). */
+  entity_id?: string | null;
 }
 
 export interface ProductionInfo {
@@ -806,6 +810,8 @@ export interface BulkTagQuery {
   /** Reviewer's IANA timezone; date bounds are whole days in it. */
   tz?: string | null;
   folder_id?: number | null;
+  /** The "Mentions: <entity>" filter: only documents mentioning this person/org. */
+  entity_id?: string | null;
 }
 
 /** A named set of a matter's documents (GET /api/productions/{id}/folders). */

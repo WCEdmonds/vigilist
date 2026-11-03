@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
 from app.database import get_db
-from app.models import Annotation, Document, DocumentTag, FolderDocument, Note, Redaction, User
+from app.models import (
+    Annotation, Document, DocumentTag, FolderDocument, Note, Redaction, User,
+)
 from app.models_review import ReviewProject, AIReviewResult
 
 # Pin colors used by both the viewer overlay and the burned-in PDF pins.
@@ -27,7 +29,7 @@ from app.dependencies import get_accessible_production_ids, get_user_role_for_pr
 from app.services.audit import log_action
 from app.services.produced_bates import resolve_produced_bates
 from app.services.families import parent_fields, parent_refs_for_ids
-from app.services.search import date_order
+from app.services.search import date_order, mentions_entity, require_entity_in_scope
 from app.schemas import (
     BatesCandidateOut, BatesCandidatesOut, DocumentDetail, DocumentSummary,
     DocumentTagOut, EmailAttachmentOut, EmailViewOut, PaginatedDocuments, TagOut,
@@ -76,6 +78,7 @@ async def list_documents(
     cluster_id: int | None = None,
     ai_decision: str | None = None,
     folder_id: int | None = None,
+    entity_id: UUID | None = Query(None, description="Only documents that mention this person/org"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -96,6 +99,12 @@ async def list_documents(
             select(FolderDocument.document_id).where(FolderDocument.folder_id == folder_id))
         query = query.where(in_folder)
         count_query = count_query.where(in_folder)
+
+    if entity_id:
+        await require_entity_in_scope(db, entity_id, accessible)
+        # Same predicate as search / bulk-by-query / export (one EXISTS).
+        query = query.where(mentions_entity(entity_id))
+        count_query = count_query.where(mentions_entity(entity_id))
 
     if tag_id:
         query = query.where(Document.tags.any(DocumentTag.tag_id == tag_id))
@@ -296,6 +305,7 @@ async def list_documents(
         total=total,
         page=page,
         per_page=per_page,
+        entity_id=entity_id,
     )
 
 

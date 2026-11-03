@@ -48,7 +48,10 @@ async def select_diverse_sample(
             DocumentChunk.document_id,
             func.avg(DocumentChunk.embedding).label("avg_embedding"),
         )
-        .where(DocumentChunk.document_id.in_(all_doc_ids))
+        # Join by production: never bind every doc id (asyncpg caps at 32,767).
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .where(Document.production_id == production_id)
+        .where(Document.text_content.isnot(None))
         .group_by(DocumentChunk.document_id)
     )
     rows = result.all()

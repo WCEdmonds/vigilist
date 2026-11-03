@@ -209,7 +209,8 @@ async def apply_verdicts(db, production_id: int, verdicts: list[dict], actor) ->
 
     part_rows = (await db.execute(
         select(EventParticipant.event_id, EventParticipant.entity_id).where(
-            EventParticipant.event_id.in_(list(events.keys()) or [0])))).all()
+            EventParticipant.event_id.in_(
+                select(OntologyEvent.id).where(OntologyEvent.production_id == production_id))))).all()
     parts_by_event: dict[int, set] = {}
     for ev_id, ent_id in part_rows:
         parts_by_event.setdefault(ev_id, set()).add(ent_id)
@@ -412,7 +413,8 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
     name_rows = (await db.execute(
         select(EventParticipant.event_id, Entity.canonical_name)
         .join(Entity, EventParticipant.entity_id == Entity.id)
-        .where(EventParticipant.event_id.in_([e.id for e in all_events])))).all()
+        .join(OntologyEvent, OntologyEvent.id == EventParticipant.event_id)
+        .where(OntologyEvent.production_id == production_id))).all()
     participants: dict[int, list[str]] = {}
     for ev_id, name in name_rows:
         participants.setdefault(ev_id, []).append(name)

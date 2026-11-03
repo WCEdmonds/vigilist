@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, ProductionSet, ProductionSetItem, Redaction
+from app.services.sql_arrays import ids_match
 from app.services import storage
 from app.services.redaction_drift import drift_message, redaction_drift
 from app.services.redacted_metadata import FIELD_COLUMNS, blanked_fields
@@ -51,7 +52,7 @@ def _fetch_bytes(path: str) -> bytes:
 
 async def _docs_by_id(db: AsyncSession, items) -> dict:
     docs = (await db.execute(
-        select(Document).where(Document.id.in_([i.document_id for i in items]))
+        select(Document).where(ids_match(Document.id, [i.document_id for i in items]))
     )).scalars().all()
     return {d.id: d for d in docs}
 
@@ -83,7 +84,7 @@ async def build_dat_rows(db: AsyncSession, ps: ProductionSet, items,
     reds: dict = {}
     if redacted_ids:
         for red in (await db.execute(
-            select(Redaction).where(Redaction.document_id.in_(redacted_ids))
+            select(Redaction).where(ids_match(Redaction.document_id, redacted_ids))
         )).scalars().all():
             reds.setdefault(red.document_id, []).append(red)
     rows = []
@@ -204,7 +205,7 @@ async def package_set(db: AsyncSession, set_id: int) -> None:
         reds_by_doc: dict = {}
         if redacted_ids:
             for red in (await db.execute(
-                select(Redaction).where(Redaction.document_id.in_(redacted_ids))
+                select(Redaction).where(ids_match(Redaction.document_id, redacted_ids))
             )).scalars().all():
                 reds_by_doc.setdefault(red.document_id, {}).setdefault(red.page_num, []).append(red)
         tiff_mode = getattr(ps, "image_format", "pdf") == "tiff"

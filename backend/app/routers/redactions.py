@@ -16,6 +16,7 @@ from app.schemas import (
     RedactionQCQueueItem,
     RedactionUpdate,
 )
+from app.services.sql_arrays import ids_match
 from app.services.audit import log_action
 from app.services.privilege import qc_status
 from app.services.redaction import is_valid_reason_code, page_limit, validate_rect
@@ -275,7 +276,7 @@ async def redaction_qc_queue(
     if doc_ids:
         dec_result = await db.execute(
             select(RedactionQCDecision)
-            .where(RedactionQCDecision.document_id.in_(doc_ids))
+            .where(ids_match(RedactionQCDecision.document_id, doc_ids))
             .order_by(RedactionQCDecision.document_id,
                       RedactionQCDecision.decided_at.desc(),
                       RedactionQCDecision.id.desc())

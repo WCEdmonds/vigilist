@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,7 @@ from app.dependencies import get_accessible_production_ids
 from app.services.audit import log_action
 from app.schemas import SearchResponse, SearchResult
 from app.services.families import parent_fields, parent_refs_for_ids
-from app.services.search import resolve_tz, search_documents
+from app.services.search import require_entity_in_scope, resolve_tz, search_documents
 from app.services.semantic_search import semantic_search
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -35,6 +36,7 @@ async def search(
     date_to: date | None = Query(None, description="Inclusive end date (YYYY-MM-DD)"),
     tz: str | None = Query(None, max_length=64, description="Reviewer's IANA timezone for date bounds"),
     folder_id: int | None = Query(None, description="Only documents in this folder"),
+    entity_id: UUID | None = None,  # only documents that mention this person/org
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -52,6 +54,7 @@ async def search(
         raise HTTPException(status_code=422, detail=str(e))
 
     accessible = await get_accessible_production_ids(db, user)
+    await require_entity_in_scope(db, entity_id, accessible)
 
     results: list[dict] = []
     total = 0
@@ -63,7 +66,7 @@ async def search(
     has_dates = date_from is not None or date_to is not None
     if (mode == "semantic" and q.strip() and not metadata_filters and not file_type
             and not source_party and not source_type and not has_email and not has_dates
-            and folder_id is None):
+            and folder_id is None and entity_id is None):
         results, total = await semantic_search(
             db, q, production_id=production_id, page=page, per_page=per_page,
             accessible_production_ids=accessible,
@@ -83,6 +86,7 @@ async def search(
             date_to=date_to,
             tz=tz,
             folder_id=folder_id,
+            entity_id=entity_id,
         )
     await log_action(db, user, "search_executed", "search", None,
                      details={"query": q, "result_count": total})
@@ -93,4 +97,5 @@ async def search(
         total=total,
         page=page,
         per_page=per_page,
+        entity_id=entity_id,
     )

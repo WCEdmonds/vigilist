@@ -17,6 +17,7 @@ from app.models import (
     User,
 )
 from app.routers.auth import get_current_user
+from app.services.sql_arrays import ids_match
 from app.schemas import DashboardStats, QCStats
 
 router = APIRouter(
@@ -257,7 +258,7 @@ async def get_reviewer_agreement(
     tags_a_result = await db.execute(
         select(DocumentTag.document_id, DocumentTag.tag_id)
         .where(
-            DocumentTag.document_id.in_(overlapping),
+            ids_match(DocumentTag.document_id, overlapping),
             DocumentTag.applied_by == reviewer_a,
         )
     )
@@ -269,7 +270,7 @@ async def get_reviewer_agreement(
     tags_b_result = await db.execute(
         select(DocumentTag.document_id, DocumentTag.tag_id)
         .where(
-            DocumentTag.document_id.in_(overlapping),
+            ids_match(DocumentTag.document_id, overlapping),
             DocumentTag.applied_by == reviewer_b,
         )
     )

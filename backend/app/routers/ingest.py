@@ -527,6 +527,12 @@ async def run_pipeline_handler(
         from app.services.pipeline import run_merge_review_stage
         await run_merge_review_stage(int(production_id))
         return {"ok": True, "job": job}
+    if job == "timeline_review":
+        # The on-demand timeline review runs that one stage, never the whole
+        # pipeline (which would also start paid summaries/extraction).
+        from app.services.pipeline import run_timeline_review_stage
+        await run_timeline_review_stage(int(production_id))
+        return {"ok": True, "job": job}
     if job:
         raise HTTPException(status_code=400, detail=f"Unknown job {job!r}")
 
@@ -657,12 +663,14 @@ async def trigger_entity_extraction(
     return {"status": "started"}
 
 
-# The held estimate sums text lengths over every pending document, so it is
-# cached per production per instance (in-process, like the other throttles).
+# The estimate sums text lengths over every pending document, so it is cached
+# per (production, mode, force) per instance (in-process, like the other
+# throttles).
 AI_ESTIMATE_CACHE_S = 600
 # Throttle/cache entries older than this are pruned whenever one is written.
 THROTTLE_PRUNE_S = 3600
-_AI_ESTIMATE_CACHE: dict[int, tuple[float, dict]] = {}
+_AI_ESTIMATE_CACHE: dict[tuple[int, str, bool], tuple[float, dict]] = {}
+AI_ESTIMATE_MODES = ("pending", "rebuild")
 
 
 def _monotonic() -> float:
@@ -683,17 +691,28 @@ def _prune(cache: dict, now: float) -> None:
 @router.get("/productions/{production_id}/ai-estimate")
 async def ai_estimate(
     production_id: int,
+    force: bool = False,
+    mode: str = "pending",
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Whether the production's AI is on hold, how many documents still need
     per-document AI (a summary or entity extraction), and what running it
-    would cost at Haiku 5.5 batch pricing. Shown before any paid work."""
-    from sqlalchemy import case, func
+    would cost at Haiku 5.5 batch pricing. Shown before any paid work.
+
+    Without force the estimate is computed only while the production is held
+    (the hold banner); otherwise it short-circuits to zero. force=true prices
+    the pending work regardless of hold (the confirmation before a manual
+    run). mode=rebuild prices a full re-extraction (extract-entities
+    ?rebuild=true): every document with text gets entity extraction again,
+    plus summaries for documents that still lack one; it implies force."""
+    from sqlalchemy import case, func, true
 
     from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
     from app.services.ai import SUMMARY_INPUT_CHARS, estimate_per_doc_usd
 
+    if mode not in AI_ESTIMATE_MODES:
+        raise HTTPException(status_code=422, detail=f"mode must be one of {', '.join(AI_ESTIMATE_MODES)}")
     accessible = await get_accessible_production_ids(db, user)
     if production_id not in accessible:
         raise HTTPException(status_code=404, detail="Production not found")
@@ -703,17 +722,22 @@ async def ai_estimate(
     # Same gate as POST /pipeline/run: only managers/admins can start analysis.
     role = await get_user_role_for_production(db, user, production_id)
     can_run = ROLE_RANK.get(role, 0) >= ROLE_RANK["manager"]
-    if not prod.ai_hold:
+    held = bool(prod.ai_hold)
+    rebuild = mode == "rebuild"
+    if not held and not force and not rebuild:
         # Nothing is waiting on a decision: skip the text scan.
         return {"held": False, "documents_pending": 0, "usd_estimate": 0, "can_run": can_run}
 
     now = _monotonic()
-    cached = _AI_ESTIMATE_CACHE.get(production_id)
+    cache_key = (production_id, mode, bool(force))
+    cached = _AI_ESTIMATE_CACHE.get(cache_key)
     if cached is not None and now - cached[0] < AI_ESTIMATE_CACHE_S:
-        return {"held": True, **cached[1], "can_run": can_run}
+        return {"held": held, **cached[1], "can_run": can_run}
 
     needs_summary = Document.summary.is_(None)
-    needs_entities = Document.entities_extracted_at.is_(None)
+    # A rebuild clears every extraction watermark first, so every document
+    # with text is re-extracted; summaries are left alone.
+    needs_entities = true() if rebuild else Document.entities_extracted_at.is_(None)
     length = func.char_length(Document.text_content)
     row = (await db.execute(
         select(
@@ -733,8 +757,8 @@ async def ai_estimate(
     usd = estimate_per_doc_usd(summary_docs, summary_chars, entity_docs, entity_chars)
     result = {"documents_pending": pending, "usd_estimate": round(usd, 4)}
     _prune(_AI_ESTIMATE_CACHE, now)
-    _AI_ESTIMATE_CACHE[production_id] = (now, result)
-    return {"held": True, **result, "can_run": can_run}
+    _AI_ESTIMATE_CACHE[cache_key] = (now, result)
+    return {"held": held, **result, "can_run": can_run}
 
 
 # Self-heal: a processing/finalizing job whose chunks have been quiet this long

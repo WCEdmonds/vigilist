@@ -11,6 +11,7 @@ import { CASE_ROLE_LABELS, CASE_ROLE_ORDER, caseRoleRank } from '../utils/caseRo
 import type { CaseRole, EntityConnections, EntityListItem, MergeSuggestion } from '../types';
 import EntityPanel from './EntityPanel';
 import { showToast } from './Toast';
+import { useAiRunConfirm } from '../hooks/useAiRunConfirm';
 
 /* ────────────────────────────────────────────────────────────────────────
    The cast page. Billing is the information architecture: prominence in
@@ -160,6 +161,8 @@ function errText(e: unknown): string {
 interface Props {
   productionId: number;
   onViewDocument: (docId: string) => void;
+  /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
+  onViewEntityDocuments?: (entityId: string, name: string, documentCount: number) => void;
   onBack: () => void;
   openEntityId?: string | null;
   onOpenEntityChange?: (id: string | null) => void;
@@ -171,7 +174,7 @@ const TYPE_LENSES: { value: string; label: string }[] = [
   { value: 'org', label: 'Organizations' },
 ];
 
-export default function EntitiesView({ productionId, onViewDocument, onBack, openEntityId, onOpenEntityChange }: Props) {
+export default function EntitiesView({ productionId, onViewDocument, onViewEntityDocuments, onBack, openEntityId, onOpenEntityChange }: Props) {
   // ── Cast data (timeline's paging pattern: `loading` derives from the
   // highest settled page, so no effect ever flips a loading flag) ──
   const [entities, setEntities] = useState<EntityListItem[]>([]);
@@ -374,10 +377,20 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
   }, [tiers.principals]);
 
   // ── Extraction ──
+  const { confirmAiRun, aiRunDialog } = useAiRunConfirm(productionId);
+  // Every entry point goes through the cost confirmation; nothing is
+  // enqueued until Run. A rebuild re-extracts every document, so it is
+  // priced (and warned about) as one.
+  const requestExtraction = (rebuild = false) => confirmAiRun(rebuild
+    ? {
+        mode: 'rebuild',
+        title: 'Rebuild the entity graph?',
+        warning: 'All entities, relationships, events, and merge history for this matter will be deleted and re-extracted from scratch.',
+        run: () => startExtraction(true),
+      }
+    : { title: 'Extract entities?', run: () => startExtraction(false) });
+
   const startExtraction = async (rebuild = false) => {
-    if (rebuild && !window.confirm(
-      'Rebuild the entity graph? All entities, relationships, events, and merge history for this matter will be deleted and re-extracted from scratch.',
-    )) return;
     setExtractMsg(null);
     try {
       await triggerEntityExtraction(productionId, rebuild);
@@ -853,7 +866,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           <button
             className="btn btn-xs"
             disabled={extracting}
-            onClick={() => startExtraction(false)}
+            onClick={() => requestExtraction(false)}
             title="Run AI entity extraction over this matter's documents (manager only)"
           >
             {extracting ? 'Extracting…' : 'Extract entities'}
@@ -861,7 +874,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           <button
             className="btn btn-ghost btn-xs"
             disabled={extracting}
-            onClick={() => startExtraction(true)}
+            onClick={() => requestExtraction(true)}
             title="Delete this matter's entire ontology and re-extract from scratch (manager only)"
           >
             Rebuild
@@ -1052,7 +1065,7 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
                 across aliases, every relationship cited to its document.
               </div>
               <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} disabled={extracting}
-                      onClick={() => startExtraction(false)}>
+                      onClick={() => requestExtraction(false)}>
                 {extracting ? 'Extracting…' : 'Extract entities'}
               </button>
             </div>
@@ -1076,8 +1089,10 @@ export default function EntitiesView({ productionId, onViewDocument, onBack, ope
           onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }}
           onRenamed={(id, name) => applyRename(id, name)}
           onDeleted={applyDelete}
+          onViewAllDocuments={onViewEntityDocuments}
         />
       )}
+      {aiRunDialog}
     </div>
   );
 }

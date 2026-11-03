@@ -7,6 +7,7 @@ import AttachmentBadge from './components/AttachmentBadge';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
+import AiActivityIndicator from './components/AiActivityIndicator';
 import EntityGraphView from './components/EntityGraphView';
 import EntityTimelineView from './components/EntityTimelineView';
 import IngestWizard from './components/IngestWizard';
@@ -86,6 +87,19 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Folders: named subsets of the matter (e.g. one time period).
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [filterFolderId, setFilterFolderId] = useState<number | null>(null);
+  // "View all N documents" from an entity panel: every document mentioning
+  // one person/org. Like the folder filter it narrows the browse list, search,
+  // select-all-matching bulk actions and the CSV exports alike.
+  // total = the entity's distinct document count (N) when the filter was set.
+  const [filterEntity, setFilterEntity] = useState<{ id: string; name: string; total: number } | null>(null);
+  // The entity filter each result set was actually computed with, as echoed by
+  // the server. Select-all-matching and filtered export under the chip are
+  // enabled only when this matches: a server that doesn't know the filter
+  // (mid-deploy) would otherwise silently act on the whole matter.
+  const [listEntityEcho, setListEntityEcho] = useState<string | null>(null);
+  const [searchEntityEcho, setSearchEntityEcho] = useState<string | null>(null);
+  // "Similar documents" results are AI-ranked, not entity-filtered.
+  const [similarMode, setSimilarMode] = useState(false);
   const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [sourceParties, setSourceParties] = useState<string[]>([]);
   const [undesignatedCount, setUndesignatedCount] = useState(0);
@@ -196,14 +210,15 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     getMyBatches(production.id).then(setMyBatches).catch(e => console.warn('getMyBatches failed:', e));
     getSourceParties(production.id).then(r => { setSourceParties(r.source_parties); setUndesignatedCount(r.undesignated); }).catch(e => console.warn('getSourceParties failed:', e));
     listFolders(production.id).then(setFolders).catch(e => console.warn('listFolders failed:', e));
-  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode, filterFolderId]);
+  }, [production.id, perPage, filterTagId, filterFileType, sortBy, filterSourceParty, workMode, filterFolderId, filterEntity?.id]);
 
   const loadDocuments = async (page = 1) => {
     setLoading(true);
     try {
-      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam, filterFolderId ?? undefined);
+      const res = await listDocuments(page, perPage, production.id, filterTagId ?? undefined, filterFileType || undefined, sortBy, undefined, undefined, filterSourceParty || undefined, sourceTypeParam, filterFolderId ?? undefined, filterEntity?.id);
       setDocuments(res.documents);
       setDocTotal(res.total);
+      setListEntityEcho(res.entity_id ?? null);
       setDocPage(page);
     } catch (e) {
       showToast(`Could not load documents: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
@@ -221,6 +236,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // drop any selection (especially "all matching", which would otherwise
   // re-resolve the label text as a full-text search) and the old filters.
   const showSimilarResults = (label: string, results: SearchResult[]) => {
+    setSimilarMode(true);
+    setSearchEntityEcho(null);
     setSelectedIds(new Set());
     setAllMatching(false);
     setLastExtras(undefined);
@@ -238,6 +255,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
     setLoading(true);
     setSearchQuery(query);
     setHasSearched(true);
+    setSimilarMode(false);
     setSelectedIds(new Set());
     setAllMatching(false);
     setLastMetadata(metadata);
@@ -266,9 +284,11 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         query, 1, perPage, searchSort, production.id,
         metadata, mode, filterFileType || undefined,
         filterSourceParty || undefined, sourceTypeParam, extras, filterFolderId ?? undefined,
+        filterEntity?.id,
       );
       setSearchResults(res.results);
       setSearchTotal(res.total);
+      setSearchEntityEcho(res.entity_id ?? null);
     } catch (e) {
       showToast(`Search failed: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     } finally {
@@ -280,7 +300,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   useEffect(() => {
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterFileType, filterSourceParty, workMode, searchSort, filterFolderId]);
+  }, [filterFileType, filterSourceParty, workMode, searchSort, filterFolderId, filterEntity?.id]);
 
   // Ambient entity chips: batch-fetch summaries for whichever page of rows
   // is currently on screen (doc list or search results), one call per newly
@@ -433,6 +453,35 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // Re-fetch the doc list (or re-run the active search) after leaving the
   // review workspace, since markers/tags may have changed there. Called from
   // event handlers only — never from a render-time effect.
+  // Leave whatever full-screen view hosted the entity panel and land on the
+  // browse list filtered to that entity (the list effect reloads on the change).
+  // Every other list filter is cleared so the list shows exactly the N the
+  // button promised. Incoming/outgoing is a remembered preference with no
+  // "temporary view" notion in the app, so it is switched to All (visibly, in
+  // the mode toggle) rather than silently narrowing the count.
+  const showEntityDocuments = (entityId: string, name: string, documentCount: number) => {
+    setFilterTagId(null);
+    setFilterFileType('');
+    setFilterSourceParty('');
+    setFilterFolderId(null);
+    if (workMode !== 'all') setWorkMode('all');
+    setShowEntities(false);
+    setShowTimeline(false);
+    setShowGraph(false);
+    setShowReview(false);
+    setViewDocId(null);
+    setEntityPanelId(null);
+    setHasSearched(false);
+    setSearchQuery('');
+    setSearchResults([]);
+    setBatesHits([]);
+    setSelectedIds(new Set());
+    setAllMatching(false);
+    setLastExtras(undefined);
+    setDocPage(1);
+    setFilterEntity({ id: entityId, name, total: documentCount });
+  };
+
   const refreshList = () => {
     if (hasSearched) handleSearch(searchQuery, lastMetadata, lastSearchMode, lastExtras);
     else loadDocuments(docPage);
@@ -460,6 +509,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       <EntitiesView
         productionId={production.id}
         onViewDocument={(id) => { setShowEntities(false); setViewDocId(id); refreshList(); }}
+        onViewEntityDocuments={showEntityDocuments}
         onBack={() => { setEntityPanelId(null); setShowEntities(false); refreshList(); }}
         openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
@@ -475,6 +525,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       <EntityTimelineView
         productionId={production.id}
         onViewDocument={(id) => { setShowTimeline(false); setViewDocId(id); refreshList(); }}
+        onViewEntityDocuments={showEntityDocuments}
         onBack={() => { setEntityPanelId(null); setShowTimeline(false); refreshList(); }}
         openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
@@ -490,6 +541,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       <EntityGraphView
         productionId={production.id}
         onViewDocument={(id) => { setShowGraph(false); setViewDocId(id); refreshList(); }}
+        onViewEntityDocuments={showEntityDocuments}
         onBack={() => { setEntityPanelId(null); setShowGraph(false); refreshList(); }}
         openEntityId={entityPanelId}
         onOpenEntityChange={setEntityPanelId}
@@ -530,6 +582,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           showSimilarResults(label, results);
         }}
         docIds={currentDocIds}
+        onViewEntityDocuments={showEntityDocuments}
       />
     );
   }
@@ -539,7 +592,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   // filters). Only a full-text result set can be re-resolved as a query, so
   // "select all matching" is offered only then.
   const searchUsedFulltext = lastSearchMode === 'fulltext' || !!lastMetadata || hasExtras(lastExtras)
-    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam || filterFolderId !== null;
+    || !!filterFileType || !!filterSourceParty || !!sourceTypeParam || filterFolderId !== null
+    || (filterEntity !== null && !similarMode);
   const pageAllSelected = hasSearched && searchResults.length > 0
     && searchResults.every(r => selectedIds.has(r.id));
   const bulkTarget: BulkTarget = allMatching
@@ -558,6 +612,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           date_to: lastExtras?.dateTo ?? null,
           tz: browserTimeZone(),
           folder_id: filterFolderId,
+          entity_id: similarMode ? null : filterEntity?.id ?? null,
         },
       }
     : { kind: 'ids', docIds: Array.from(selectedIds) };
@@ -593,6 +648,26 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       showToast(`Could not delete the folder: ${e instanceof Error ? e.message : 'unknown error'}`, 'error');
     }
   };
+
+  const searchEntityOk = !filterEntity || similarMode || searchEntityEcho === filterEntity.id;
+  const listEntityOk = !filterEntity || listEntityEcho === filterEntity.id;
+  const ENTITY_UPDATING = 'Updating… refresh in a minute';
+
+  // Shown on the browse list and on (non-"similar") search results: the
+  // filter applies to both, and to select-all-matching and the exports.
+  // "X of N" once anything else (a query, another filter) narrows it further.
+  const mentionsChip = (shown: number) => filterEntity && (
+    <span className="filter-chip" style={{ marginLeft: 'var(--space-2)' }}>
+      {shown === filterEntity.total
+        ? <>Mentions: {filterEntity.name}</>
+        : <>{shown.toLocaleString()} of {filterEntity.total.toLocaleString()} mentioning {filterEntity.name}</>}
+      <button type="button" className="remove" aria-label={`Remove filter: mentions ${filterEntity.name}`}
+              title="Remove this filter"
+              onClick={() => { setFilterEntity(null); setDocPage(1); setSelectedIds(new Set()); setAllMatching(false); }}>
+        ✕
+      </button>
+    </span>
+  );
 
   const folderFilter = folders.length > 0 && (
     <>
@@ -742,6 +817,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                 </button>
                 Search results
                 <span className="section-count">{searchTotal}</span>
+                {!similarMode && mentionsChip(searchTotal)}
                 {lastExtras?.email && (
                   <span className="badge badge-blue" style={{ marginLeft: 'var(--space-2)', fontWeight: 400 }}>
                     {lastExtras.email.scope === 'from' ? 'From' : 'Involving'} {lastExtras.email.address}
@@ -812,7 +888,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   sort: searchSort, metadata: lastMetadata, fileType: filterFileType || undefined,
                   sourceParty: filterSourceParty || undefined, sourceType: sourceTypeParam, extras: lastExtras,
                   folderId: filterFolderId ?? undefined,
-                })} title="Bates, family, date, from, to, cc, subject and tags for every result">
+                  entityId: similarMode ? undefined : filterEntity?.id,
+                })} disabled={!searchEntityOk}
+                title={searchEntityOk ? 'Bates, family, date, from, to, cc, subject and tags for every result' : ENTITY_UPDATING}>
                   Export metadata (CSV)
                 </button>
               </div>
@@ -888,7 +966,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                   <>
                     <span>All {searchResults.length} on this page are selected.</span>
                     {searchUsedFulltext && searchTotal > searchResults.length && (
-                      <button className="btn btn-ghost btn-xs" onClick={() => setAllMatching(true)}>
+                      <button className="btn btn-ghost btn-xs" onClick={() => setAllMatching(true)}
+                              disabled={!searchEntityOk} title={searchEntityOk ? undefined : ENTITY_UPDATING}>
                         Select all {searchTotal.toLocaleString()} matching
                       </button>
                     )}
@@ -915,12 +994,13 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
         )}
 
         {/* Document browse list */}
-        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterSourceParty || workMode !== 'all') && (
+        {!hasSearched && !loading && (docTotal > 0 || filterTagId || filterFileType || filterSourceParty || workMode !== 'all' || filterEntity) && (
           <div>
             <div className="section-header">
               <h2 className="section-title">
                 All Documents
                 <span className="section-count">{docTotal}</span>
+                {mentionsChip(docTotal)}
               </h2>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
                 <label htmlFor="filter-tag" className="visually-hidden">Filter by tag</label>
@@ -986,7 +1066,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
                     Clear filters
                   </button>
                 )}
-                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportDocsCsv(production.id)}>
+                <button className="btn btn-ghost btn-sm desktop-only" onClick={() => exportDocsCsv(production.id, undefined, filterEntity?.id)}
+                        disabled={!listEntityOk} title={listEntityOk ? undefined : ENTITY_UPDATING}>
                   Export CSV
                 </button>
 <div className="view-toggle">
@@ -1344,6 +1425,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           <button
             className="btn btn-sm btn-secondary"
             onClick={() => { setShowBulkTagPicker(false); setShowFolderDialog(true); }}
+            disabled={allMatching && !searchEntityOk}
+            title={allMatching && !searchEntityOk ? ENTITY_UPDATING : undefined}
           >
             {allMatching ? 'Add all matching to folder…' : 'Add to folder…'}
           </button>
@@ -1356,6 +1439,8 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           <button
             className="btn btn-sm btn-primary"
             onClick={() => { setShowBulkTagPicker(false); setShowBulkDialog(true); }}
+            disabled={allMatching && !searchEntityOk}
+            title={allMatching && !searchEntityOk ? ENTITY_UPDATING : undefined}
           >
             {allMatching ? 'Tag all matching…' : 'Tag with options…'}
           </button>
@@ -1471,15 +1556,19 @@ function AppRouter() {
     );
   } else {
     content = (
-      <Home
-        key={activeProduction.id}
-        production={activeProduction}
-        productions={productions}
-        onSelectProduction={setActiveProduction}
-        onSwitchProduction={() => setActiveProduction(null)}
-        onIngestComplete={handleIngestComplete}
-        onOpenGuide={openGuide}
-      />
+      <>
+        <Home
+          key={activeProduction.id}
+          production={activeProduction}
+          productions={productions}
+          onSelectProduction={setActiveProduction}
+          onSwitchProduction={() => setActiveProduction(null)}
+          onIngestComplete={handleIngestComplete}
+          onOpenGuide={openGuide}
+        />
+        {/* Outside Home's early-return branches so it shows on every screen of the matter. */}
+        <AiActivityIndicator key={`ai-${activeProduction.id}`} productionId={activeProduction.id} />
+      </>
     );
   }
 

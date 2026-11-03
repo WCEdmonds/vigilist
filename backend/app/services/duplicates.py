@@ -174,13 +174,11 @@ async def detect_duplicates(
         _compute_groups, hash_rows, docs, embeddings)
 
     # Replace the previous results in one short transaction.
-    old_groups = await db.execute(
-        select(DuplicateGroup.id).where(DuplicateGroup.production_id == production_id)
-    )
-    old_ids = [row[0] for row in old_groups.all()]
-    if old_ids:
-        await db.execute(delete(DocumentDuplicate).where(DocumentDuplicate.group_id.in_(old_ids)))
-        await db.execute(delete(DuplicateGroup).where(DuplicateGroup.id.in_(old_ids)))
+    # By production via subquery -- a big matter can hold tens of thousands of
+    # groups, more than asyncpg's 32,767 bind-parameter cap.
+    old_group_ids = select(DuplicateGroup.id).where(DuplicateGroup.production_id == production_id)
+    await db.execute(delete(DocumentDuplicate).where(DocumentDuplicate.group_id.in_(old_group_ids)))
+    await db.execute(delete(DuplicateGroup).where(DuplicateGroup.production_id == production_id))
 
     counts = {}
     for kind, components in (("hash", hash_components), ("exact", exact_components),

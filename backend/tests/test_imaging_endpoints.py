@@ -115,7 +115,7 @@ def test_prepare_bulk_counts_and_skips(monkeypatch):
     out = asyncio.run(ri.prepare_pages_bulk(4, FolderAddDocuments(doc_ids=[d.id for d in docs]),
                                             db=db, user=FakeUser()))
     assert out == {"queued": 1, "already_imaged": 1, "in_progress": 1, "unsupported": 1,
-                   "has_redactions": 1, "failed_to_start": 0}
+                   "has_redactions": 1, "failed_to_start": 0, "entity_id": None}
     assert state["dispatched"] == [[str(todo.id)]]
     assert todo.imaging_status == "queued"
 

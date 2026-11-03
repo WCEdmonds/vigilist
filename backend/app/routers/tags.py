@@ -346,8 +346,11 @@ async def bulk_tag_by_query(
     plan = bt.plan_tagging(targets.keys(), already, conflicts, body.conflict_action)
     prior = await bt.existing_overrides(db, list(plan.coded)) if tag.is_privilege else {}
 
+    applied_entity = (str(body.query.entity_id)
+                      if body.query is not None and body.query.entity_id else None)
     if body.dry_run:
         return {
+            "entity_id": applied_entity,
             "matched": len(matched),
             "attachments_added": len(targets) - len(matched),
             "total": len(targets),
@@ -392,6 +395,7 @@ async def bulk_tag_by_query(
         )
     await db.commit()
     return {
+        "entity_id": applied_entity,
         "total": len(targets),
         "tagged": len(plan.to_tag),
         "already_tagged": len(plan.already_tagged),

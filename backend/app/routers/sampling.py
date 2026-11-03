@@ -12,6 +12,7 @@ from app.routers.auth import get_current_user
 from app.schemas import SampleCreate, SampleOut
 from app.services.audit import log_action
 from app.services.sampling_stats import Z, acceptance, sample_size, wilson_ci
+from app.services.sql_arrays import batches
 
 router = APIRouter(prefix="/api", tags=["sampling"])
 
@@ -161,12 +162,15 @@ async def get_sample(
 
 
 async def _tagged_in_sample(db: AsyncSession, smp: Sample, tag_id: int) -> int:
-    rows = (await db.execute(
-        select(DocumentTag.document_id).where(
-            DocumentTag.tag_id == tag_id,
-            DocumentTag.document_id.in_(list(smp.document_ids or [])),
-        )
-    )).all()
+    # Batched: a requested sample size has no upper bound.
+    rows = []
+    for chunk in batches(smp.document_ids or []):
+        rows.extend((await db.execute(
+            select(DocumentTag.document_id).where(
+                DocumentTag.tag_id == tag_id,
+                DocumentTag.document_id.in_(chunk),
+            )
+        )).all())
     sample_ids = set(smp.document_ids or [])
     return sum(1 for (did,) in rows if str(did) in sample_ids)
 

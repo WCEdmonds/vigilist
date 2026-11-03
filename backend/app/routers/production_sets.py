@@ -32,6 +32,7 @@ from app.schemas import (
     ProductionSetOut,
     ProductionSetRemoveDocuments,
 )
+from app.services.sql_arrays import ids_match, strings_match
 from app.services import tasks
 from app.services.audit import log_action
 from app.services.designations import combine_designations
@@ -249,7 +250,7 @@ async def add_documents(
         info_rows = (await db.execute(
             select(Document.id, Document.production_id, Document.family_id,
                    Document.source_type)
-            .where(Document.id.in_(candidates))
+            .where(ids_match(Document.id, candidates))
         )).all()
     found = {r[0] for r in info_rows}
     if (explicit - found) or any(r[1] != ps.production_id for r in info_rows):
@@ -262,7 +263,7 @@ async def add_documents(
             fam_rows = (await db.execute(
                 select(Document.id)
                 .where(Document.production_id == ps.production_id,
-                       Document.family_id.in_(fams))
+                       strings_match(Document.family_id, fams))
             )).all()
             fam_ids = {r[0] for r in fam_rows}
             families_added = len(fam_ids - candidates)
@@ -272,7 +273,7 @@ async def add_documents(
     if body.exclude_received:
         rec_rows = (await db.execute(
             select(Document.id)
-            .where(Document.id.in_(candidates),
+            .where(ids_match(Document.id, candidates),
                    Document.source_type == "received")
         )).all()
         for (rdid,) in rec_rows:
@@ -331,7 +332,7 @@ async def remove_documents(
     await db.execute(
         sa_delete(ProductionSetItem).where(
             ProductionSetItem.production_set_id == set_id,
-            ProductionSetItem.document_id.in_(body.document_ids),
+            ids_match(ProductionSetItem.document_id, body.document_ids),
         )
     )
     await log_action(db, user, "production_set_documents_removed", "production_set",
@@ -401,20 +402,20 @@ async def lock_production_set(
                Document.custodian, Document.date_sent, Document.date_received,
                Document.page_count, Document.privilege_disposition,
                Document.file_type, Document.native_path)
-        .where(Document.id.in_(doc_ids))
+        .where(ids_match(Document.id, doc_ids))
     )).all()
 
     priv_rows = (await db.execute(
         select(DocumentTag.document_id)
         .join(Tag, Tag.id == DocumentTag.tag_id)
-        .where(Tag.is_privilege.is_(True), DocumentTag.document_id.in_(doc_ids))
+        .where(Tag.is_privilege.is_(True), ids_match(DocumentTag.document_id, doc_ids))
     )).all()
     privileged = {r[0] for r in priv_rows}
 
     designation_rows = (await db.execute(
         select(DocumentTag.document_id, Tag.id, Tag.designation)
         .join(Tag, Tag.id == DocumentTag.tag_id)
-        .where(Tag.designation.is_not(None), DocumentTag.document_id.in_(doc_ids))
+        .where(Tag.designation.is_not(None), ids_match(DocumentTag.document_id, doc_ids))
     )).all()
     tag_designations: dict = {}
     for did, tag_id, text in designation_rows:
@@ -422,7 +423,7 @@ async def lock_production_set(
 
     red_rows = (await db.execute(
         select(Redaction.document_id, func.count(Redaction.id))
-        .where(Redaction.document_id.in_(doc_ids))
+        .where(ids_match(Redaction.document_id, doc_ids))
         .group_by(Redaction.document_id)
     )).all()
     red_counts = {r[0]: r[1] for r in red_rows}

@@ -137,7 +137,10 @@ async def prepare_pages_bulk(
 
     ids = list(targets)
     counts = {"queued": 0, "already_imaged": 0, "in_progress": 0, "unsupported": 0,
-              "has_redactions": 0, "failed_to_start": 0}
+              "has_redactions": 0, "failed_to_start": 0,
+              # Echo of the applied "Mentions" filter, like search/list.
+              "entity_id": (str(body.query.entity_id)
+                            if body.query is not None and body.query.entity_id else None)}
     if not ids:
         return counts
     redacted = {d for d, n in (await db.execute(

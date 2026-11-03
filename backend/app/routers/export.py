@@ -19,6 +19,7 @@ from app.routers.auth import get_current_user
 from app.dependencies import get_accessible_production_ids
 from app.services.metadata_report import METADATA_HEADERS, metadata_row
 from app.services.privilege_log import build_privilege_log_rows
+from app.services.search import mentions_entity, require_entity_in_scope
 from app.services.sql_arrays import ids_match
 
 router = APIRouter(prefix="/api/export", tags=["export"])
@@ -31,10 +32,12 @@ _HIGHLIGHT = re.compile(r"</?mark>")
 async def export_documents_csv(
     production_id: int | None = None,
     tag_id: int | None = None,
+    entity_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Export documents as CSV with metadata, tags, and note counts."""
+    """Export documents as CSV with metadata, tags, and note counts.
+    entity_id narrows it like the browse list's "Mentions" filter."""
     accessible = await get_accessible_production_ids(db, user)
     query = (
         select(Document)
@@ -46,6 +49,9 @@ async def export_documents_csv(
         query = query.where(Document.production_id == production_id)
     if tag_id:
         query = query.where(Document.tags.any(DocumentTag.tag_id == tag_id))
+    if entity_id:
+        await require_entity_in_scope(db, entity_id, accessible)
+        query = query.where(mentions_entity(entity_id))
 
     result = await db.execute(query)
     docs = result.scalars().unique().all()
@@ -56,7 +62,7 @@ async def export_documents_csv(
     if doc_ids:
         nc_result = await db.execute(
             select(Note.document_id, func.count(Note.id))
-            .where(Note.document_id.in_(doc_ids))
+            .where(ids_match(Note.document_id, doc_ids))
             .group_by(Note.document_id)
         )
         note_counts = dict(nc_result.all())
@@ -107,6 +113,7 @@ async def export_search_csv(
     date_to: date | None = None,
     tz: str | None = Query(None, max_length=64),
     folder_id: int | None = None,
+    entity_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -122,6 +129,7 @@ async def export_search_csv(
             raise HTTPException(status_code=400, detail="Invalid metadata JSON")
 
     accessible = await get_accessible_production_ids(db, user)
+    await require_entity_in_scope(db, entity_id, accessible)
     try:
         results, total = await search_svc.search_documents(
             db, q, page=1, per_page=10000, sort=sort,
@@ -137,6 +145,7 @@ async def export_search_csv(
             date_to=date_to,
             tz=tz,
             folder_id=folder_id,
+            entity_id=entity_id,
         )
     except ValueError as e:  # unknown timezone
         raise HTTPException(status_code=422, detail=str(e))

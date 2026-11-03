@@ -293,7 +293,7 @@ def test_add_include_families_pulls_family_members(monkeypatch):
     db = FakeSession(
         get_objects={("ProductionSet", 1): FakePS()},
         responders=[
-            ("family_id IN", FakeResult(rows=[(d1,), (d3,)])),
+            ("family_id = ANY", FakeResult(rows=[(d1,), (d3,)])),
             ("documents.production_id", FakeResult(rows=[(d1, 1, "F1", None)])),
         ],
     )

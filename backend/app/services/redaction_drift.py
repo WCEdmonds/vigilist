@@ -11,6 +11,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 
 from app.models import Redaction
+from app.services.sql_arrays import ids_match
 
 
 def drift_message(bates: list[str]) -> str:
@@ -25,7 +26,7 @@ async def redaction_drift(db, ps, items) -> list[str]:
     current = {doc: (n, latest) for doc, n, latest in (await db.execute(
         select(Redaction.document_id, func.count(Redaction.id),
                func.max(func.coalesce(Redaction.updated_at, Redaction.created_at)))
-        .where(Redaction.document_id.in_(doc_ids))
+        .where(ids_match(Redaction.document_id, doc_ids))
         .group_by(Redaction.document_id)
     )).all()}
     locked_at = getattr(ps, "locked_at", None)

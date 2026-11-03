@@ -998,8 +998,9 @@ async def trigger_timeline_review(
     from app.services import tasks as task_service
     configured = task_service.is_configured()
     if configured and prod is not None and prod.ai_hold:
-        # The Cloud Tasks path walks the whole pipeline, which would sweep the
-        # held documents into paid summaries/entities without the estimate.
+        # A held matter hasn't approved any AI spend yet; the hold is lifted
+        # from the matter page after the cost estimate. (The run itself is
+        # only the timeline-review stage -- see the enqueue below.)
         raise HTTPException(status_code=409,
                             detail="AI analysis is on hold for this matter. Run it from "
                                    "the matter page to see the cost estimate first.")
@@ -1015,7 +1016,10 @@ async def trigger_timeline_review(
             # (same pattern/comment as ingest.py's rebuild block).
             prod.ai_pipeline_status = {**status, "timeline_review": "queued"}
         await db.commit()
-        task_service.enqueue_pipeline(production_id)
+        # Only the timeline-review stage: a plain pipeline enqueue walks every
+        # pending stage, sweeping unsummarized/unextracted documents into paid
+        # AI work without the cost confirmation the run buttons show.
+        task_service.enqueue_pipeline(production_id, job="timeline_review")
         return {"status": "enqueued"}
 
     # Commit before handing off: the background run opens its own sessions.

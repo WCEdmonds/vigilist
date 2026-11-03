@@ -11,6 +11,8 @@ interface Props {
   productionId: number;
   openEntityId?: string | null;
   onViewDocument: (docId: string) => void;
+  /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
+  onViewEntityDocuments?: (entityId: string, name: string, documentCount: number) => void;
   onBack: () => void;
   onOpenEntityChange?: (id: string | null) => void;
 }
@@ -102,7 +104,7 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export default function EntityTimelineView({ productionId, openEntityId, onViewDocument, onBack, onOpenEntityChange }: Props) {
+export default function EntityTimelineView({ productionId, openEntityId, onViewDocument, onViewEntityDocuments, onBack, onOpenEntityChange }: Props) {
   // ── Chronology data ──
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [total, setTotal] = useState(0);
@@ -686,7 +688,8 @@ export default function EntityTimelineView({ productionId, openEntityId, onViewD
       {openEntityId && (
         <EntityPanel entityId={openEntityId} onClose={() => openEntity(null)}
                      onOpenEntity={openEntity}
-                     onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }} />
+                     onOpenDocument={docId => { openEntity(null); onViewDocument(docId); }}
+                     onViewAllDocuments={onViewEntityDocuments} />
       )}
     </div>
   );

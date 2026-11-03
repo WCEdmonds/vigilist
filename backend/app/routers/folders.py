@@ -177,7 +177,8 @@ async def add_folder_documents(
     await log_action(db, user, "folder_documents_added", "folder", str(folder_id),
                      production_id=folder.production_id, details=summary)
     await db.commit()
-    return {**summary, "document_count": await _count(db, folder_id)}
+    applied_entity = str(body.query.entity_id) if body.query is not None and body.query.entity_id else None
+    return {**summary, "document_count": await _count(db, folder_id), "entity_id": applied_entity}
 
 
 @router.post("/folders/{folder_id}/documents/remove")

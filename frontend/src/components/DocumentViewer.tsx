@@ -26,12 +26,14 @@ interface Props {
   onSearch?: (query: string) => void;
   onSimilarResults?: (label: string, results: import('../types').SearchResult[]) => void;
   docIds?: string[];
+  /** "View all N documents" in the entity panel: open the review list filtered to this entity. */
+  onViewEntityDocuments?: (entityId: string, name: string, documentCount: number) => void;
 }
 
 type RightTab = 'text' | 'metadata' | 'summary' | 'redactions';
 type CenterTab = 'images' | 'native';
 
-export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery, onSearch, onSimilarResults, docIds }: Props) {
+export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery, onSearch, onSimilarResults, docIds, onViewEntityDocuments }: Props) {
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [error, setError] = useState('');
   const [rightTab, setRightTab] = useState<RightTab>('text');
@@ -533,6 +535,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
                 onNavigate(targetDocId);
               }
             }}
+            onViewAllDocuments={onViewEntityDocuments}
           />
         )}
       </div>
@@ -755,6 +758,7 @@ export default function DocumentViewer({ docId, onNavigate, onBack, searchQuery,
               onNavigate(targetDocId);
             }
           }}
+          onViewAllDocuments={onViewEntityDocuments}
         />
       )}
     </div>

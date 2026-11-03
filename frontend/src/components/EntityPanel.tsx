@@ -49,6 +49,9 @@ interface Props {
    * that 404 on click, old names until a filter changes). */
   onRenamed?: (entityId: string, canonicalName: string, aliases: string[]) => void;
   onDeleted?: (entityId: string) => void;
+  /** Opens the matter's review document list filtered to every document
+   * that mentions this entity. Omitted where there's no list to go to. */
+  onViewAllDocuments?: (entityId: string, name: string, documentCount: number) => void;
 }
 
 /** Mention snippet with the entity's surface text marker-highlighted. */
@@ -64,7 +67,7 @@ function Snippet({ text, name }: { text: string; name: string }) {
   );
 }
 
-export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDocument, onRenamed, onDeleted }: Props) {
+export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDocument, onRenamed, onDeleted, onViewAllDocuments }: Props) {
   const [profile, setProfile] = useState<{ id: string; value: EntityProfile } | null>(null);
   const [mentions, setMentions] = useState<{ id: string; value: EntityMentionsPage } | null>(null);
   const [connections, setConnections] = useState<{ id: string; value: EntityConnections } | null>(null);
@@ -358,6 +361,16 @@ export default function EntityPanel({ entityId, onClose, onOpenEntity, onOpenDoc
             <div className="panel-header" style={{ padding: 0, background: 'none', border: 'none' }}>
               Mentions ({currentMentions.total} documents)
             </div>
+            {onViewAllDocuments && currentProfile && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                style={{ marginTop: 6 }}
+                onClick={() => onViewAllDocuments(entityId, entityDisplayName(currentProfile.canonical_name), currentMentions.total)}
+              >
+                View all {currentMentions.total.toLocaleString()} document{currentMentions.total === 1 ? '' : 's'}
+              </button>
+            )}
             {currentMentions.documents.map(d => (
               <div key={d.document_id} style={{ margin: '10px 0' }}>
                 <button className="btn btn-ghost btn-xs entity-bates" onClick={() => onOpenDocument(d.document_id, entityId)}>
