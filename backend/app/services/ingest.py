@@ -656,45 +656,71 @@ async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> Non
     await _persist_documents(db, job_id, [doc])
 
 
+async def generate_missing_titles(
+    db: AsyncSession,
+    production_id: int,
+    errors: list[str],
+    *,
+    ai_limit: int | None = None,
+) -> None:
+    """Title the production's untitled documents: AI titles (at most
+    ``ai_limit`` of them when set), then the original filename as a fallback."""
+    result = await db.execute(
+        select(Document).where(
+            Document.production_id == production_id,
+            Document.title.is_(None),
+        )
+    )
+    untitled_docs = list(result.scalars().all())
+
+    if settings.anthropic_api_key and untitled_docs:
+        targets = untitled_docs if ai_limit is None else untitled_docs[:ai_limit]
+        try:
+            texts_for_titles = [(str(d.id), d.text_content) for d in targets]
+            titles = await generate_titles_batch(texts_for_titles)
+            for d in targets:
+                t = titles.get(str(d.id))
+                if t:
+                    d.title = t
+        except Exception as e:
+            logger.exception("AI title generation failed")
+            errors.append(f"AI title generation skipped: {e}")
+
+    # Fallback: any doc still untitled (sparse/blank text, or no API key)
+    # keeps its original filename so it is never left blank. Scoped to docs
+    # that carry a "File Name" (the generic-PDF path); Relativity docs have
+    # none and stay NULL exactly as before.
+    for d in untitled_docs:
+        if not d.title and isinstance(d.metadata_, dict) and d.metadata_.get("File Name"):
+            d.title = os.path.splitext(d.metadata_["File Name"])[0][:200]
+    await db.commit()
+
+
 async def _finalize_job_if_done(
     db: AsyncSession,
     job: "IngestJob",
     production_id: int,
     errors: list[str],
 ) -> None:
-    """Finalize the job (AI titles + mark complete) once all files are accounted for."""
+    """Finalize the job (AI titles + mark complete) once all files are accounted for.
+
+    A job with large containers finalizes through ``large_ingest.maybe_finalize``
+    (fanned-out embeddings, no inline AI, no pipeline); a normal batch that
+    finishes last still has to trigger it.
+    """
     from datetime import datetime, timezone
 
+    # Refresh first: a mid-batch rollback expired the row, and a lazy load of
+    # field_mapping on the async session would MissingGreenlet.
     await db.refresh(job)
+    if (job.field_mapping or {}).get("large_containers"):
+        from app.services import large_ingest
+
+        await large_ingest.maybe_finalize(db, str(job.id))
+        return
+
     if job_is_done(job) and job.status == "processing":
-        result = await db.execute(
-            select(Document).where(
-                Document.production_id == production_id,
-                Document.title.is_(None),
-            )
-        )
-        untitled_docs = list(result.scalars().all())
-
-        if settings.anthropic_api_key and untitled_docs:
-            try:
-                texts_for_titles = [(str(d.id), d.text_content) for d in untitled_docs]
-                titles = await generate_titles_batch(texts_for_titles)
-                for d in untitled_docs:
-                    t = titles.get(str(d.id))
-                    if t:
-                        d.title = t
-            except Exception as e:
-                logger.exception("AI title generation failed")
-                errors.append(f"AI title generation skipped: {e}")
-
-        # Fallback: any doc still untitled (sparse/blank text, or no API key)
-        # keeps its original filename so it is never left blank. Scoped to docs
-        # that carry a "File Name" (the generic-PDF path); Relativity docs have
-        # none and stay NULL exactly as before.
-        for d in untitled_docs:
-            if not d.title and isinstance(d.metadata_, dict) and d.metadata_.get("File Name"):
-                d.title = os.path.splitext(d.metadata_["File Name"])[0][:200]
-        await db.commit()
+        await generate_missing_titles(db, production_id, errors)
 
         job.status = "complete"
         job.errors = errors

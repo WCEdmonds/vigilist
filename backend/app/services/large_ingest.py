@@ -77,8 +77,10 @@ CHUNK_ITEMS = 500
 
 
 async def maybe_finalize(db, job_id: str) -> None:
-    """Replaced in Unit 5."""
-    return None
+    """Advance the job's finalize if it is ready; see ``large_ingest_finalize``."""
+    from app.services import large_ingest_finalize
+
+    await large_ingest_finalize.maybe_finalize(db, job_id)
 
 
 class SelectionError(Exception):

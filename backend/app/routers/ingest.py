@@ -376,7 +376,9 @@ async def process_chunk_handler(
     db: AsyncSession = Depends(get_db),
     _verified: None = Depends(verify_cloud_tasks_request),
 ):
-    """Cloud Tasks worker: process one large-container chunk.
+    """Cloud Tasks worker: process one large-container chunk of any kind
+    (``items`` load, ``embed`` search embeddings, ``post`` threading/titles and
+    completion); ``run_chunk`` dispatches on the row's kind.
 
     Non-2xx makes Cloud Tasks retry; the chunk's attempt counter splits a range
     that keeps failing, so retries can't crash-loop forever.

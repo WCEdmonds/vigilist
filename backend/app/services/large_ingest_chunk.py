@@ -59,6 +59,7 @@ def _snapshot_chunk(chunk):
         slices=[list(s) for s in (chunk.slices or [])],
         type_filter=list(chunk.type_filter or []),
         global_offset=int(chunk.global_offset or 0), item_count=int(chunk.item_count or 0),
+        doc_ids=[str(d) for d in (getattr(chunk, "doc_ids", None) or [])],
     )
 
 
@@ -282,13 +283,25 @@ async def run_chunk(db, chunk_id: str) -> None:
     attempts = (await db.execute(text(_CLAIM_CHUNK_SQL), {"id": chunk_id})).scalar()
     await db.commit()
     if attempts is None:
-        return  # done, split, failed, or gone
+        # Done, split, failed, or gone. A redelivered task still nudges
+        # finalize: a crash between the done commit and maybe_finalize (or
+        # inside it, which rolls back) would otherwise leave nobody to call it.
+        chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
+        if chunk is not None:
+            await large_ingest.maybe_finalize(db, str(chunk.job_id))
+        return
     chunk = await db.get(IngestChunk, chunk_id, populate_existing=True)
     if chunk is None:
         return
     c = _snapshot_chunk(chunk)
+    if c.kind in ("embed", "post"):
+        from app.services import large_ingest_finalize as fin
+
+        handler = fin.run_embed_chunk if c.kind == "embed" else fin.run_post_chunk
+        await handler(db, c, attempts)
+        return
     if c.kind != "items":
-        logger.warning("Chunk %s has kind %r, not handled here", chunk_id, c.kind)
+        logger.warning("Chunk %s has unknown kind %r", chunk_id, c.kind)
         return
     job = await db.get(IngestJob, c.job_id, populate_existing=True)
     if job is None:

@@ -281,9 +281,11 @@ def test_short_slice_records_missing_items_as_failed(monkeypatch):
 
 
 def test_finished_chunk_returns_immediately(monkeypatch):
+    # A redelivered task for a finished chunk does no work, but still nudges
+    # finalize (a crash after the done commit may have skipped it).
     env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1), attempts=None)
     env.run()
-    assert env.opened == [] and env.docs() == [] and env.finalized == []
+    assert env.opened == [] and env.docs() == [] and env.finalized == ["j1"]
 
 
 def test_claim_is_one_conditional_statement(monkeypatch):

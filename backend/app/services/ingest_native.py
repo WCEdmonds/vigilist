@@ -828,6 +828,7 @@ async def ingest_native_batch(
     """Process one batch of native files. Mirrors ``ingest_pdf_batch``."""
     from app.services.ingest import (
         _finalize_job_if_done,
+        append_job_errors,
         _incr_skipped,
         _mark_source_done,
         _persist_document,
@@ -851,6 +852,11 @@ async def ingest_native_batch(
 
     items = list_native_sources(production_id, load_prefix)
     errors: list[str] = list(job.errors or [])
+    # A job with large containers has chunks (and the finalize reconciliation)
+    # appending errors concurrently: append only this batch's messages instead
+    # of overwriting with a snapshot.
+    append_errors = bool(fm.get("large_containers"))
+    errors_before = len(errors)
 
     slice_pairs = [(idx, items[idx]) for idx in range(start_idx, min(end_idx, len(items)))]
     storage_paths = [item["storage_path"] for _, item in slice_pairs]
@@ -925,5 +931,8 @@ async def ingest_native_batch(
             await db.rollback()
             await _incr_skipped(db, job_id, skip_key)
 
-    await _persist_job_errors(db, job_id, errors)
+    if append_errors:
+        await append_job_errors(db, job_id, errors[errors_before:])
+    else:
+        await _persist_job_errors(db, job_id, errors)
     await _finalize_job_if_done(db, job, production_id, errors)
