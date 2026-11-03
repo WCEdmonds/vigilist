@@ -621,9 +621,98 @@ async def ai_estimate(
             "usd_estimate": round(usd, 4)}
 
 
+# Self-heal: a processing/finalizing job whose chunks have been quiet this long
+# may be stuck waiting for a finalize nobody triggered (e.g. the last chunk's
+# own trigger was lost). Polling re-drives it, at most once per interval/job.
+SELF_HEAL_QUIET_MINUTES = 5
+SELF_HEAL_INTERVAL_S = SELF_HEAL_QUIET_MINUTES * 60
+_SELF_HEAL_AT: dict[str, float] = {}
+
+_QUIET_SQL = text(
+    "SELECT coalesce(max(updated_at) < now() - make_interval(mins => :mins), true) "
+    "FROM ingest_chunks WHERE job_id = :job_id"
+)
+
+
+async def _self_heal(job_id: str) -> None:
+    """Background: advance a quiet job's finalize. Never raises."""
+    try:
+        from app.database import async_session_factory
+        from app.services import large_ingest
+
+        async with async_session_factory() as db:
+            await large_ingest.maybe_finalize(db, job_id)
+    except Exception:
+        logger.exception("Self-heal finalize failed for ingest job %s", job_id)
+
+
+async def _maybe_schedule_self_heal(db, job, background_tasks: BackgroundTasks) -> None:
+    import time
+
+    if job.status not in ("processing", "finalizing"):
+        return
+    if not (job.field_mapping or {}).get("large_containers"):
+        return
+    key = str(job.id)
+    now = time.monotonic()
+    last = _SELF_HEAL_AT.get(key)
+    if last is not None and now - last < SELF_HEAL_INTERVAL_S:
+        return
+    try:
+        quiet = (await db.execute(
+            _QUIET_SQL, {"mins": SELF_HEAL_QUIET_MINUTES, "job_id": job.id})).scalar()
+    except Exception:
+        logger.exception("Self-heal activity check failed for ingest job %s", key)
+        return
+    if not quiet:
+        return
+    _SELF_HEAL_AT[key] = now
+    background_tasks.add_task(_self_heal, key)
+
+
+def _container_outs(job) -> list:
+    from app.schemas import ContainerOut, ContainerRecoverableOut, ContainerTypeOut
+    from app.services.large_ingest_estimate import estimate_load
+    from app.services.pst_reader import ITEM_TYPES, ContainerSurvey
+
+    fm = job.field_mapping or {}
+    survey_by_path = job.survey or {}
+    selection = job.selection or {}
+    outs = []
+    for path in fm.get("large_containers") or []:
+        raw = survey_by_path.get(path)
+        if not raw:
+            continue  # not surveyed yet
+        survey = ContainerSurvey.from_json(raw)
+        normal = {t: [0, 0] for t in ITEM_TYPES}
+        recov = {t: [0, 0] for t in ITEM_TYPES}
+        for f in survey.folders:
+            bucket = recov if f.recoverable else normal
+            for t, n in f.counts.items():
+                bucket.setdefault(t, [0, 0])[0] += int(n)
+            for t, n in f.bytes.items():
+                bucket.setdefault(t, [0, 0])[1] += int(n)
+        types = [ContainerTypeOut(type=t, count=c, bytes=b) for t, (c, b) in normal.items() if c or b]
+        rtypes = [ContainerTypeOut(type=t, count=c, bytes=b) for t, (c, b) in recov.items() if c or b]
+        chosen = selection.get(path)
+        estimate = (chosen or {}).get("estimate") or estimate_load(survey, {"email", "calendar"}, True)
+        outs.append(ContainerOut(
+            storage_path=path,
+            name=path.rsplit("/", 1)[-1],
+            size_bytes=sum(x.bytes for x in types) + sum(x.bytes for x in rtypes),
+            types=types,
+            recoverable=ContainerRecoverableOut(
+                count=sum(x.count for x in rtypes), bytes=sum(x.bytes for x in rtypes), types=rtypes),
+            selected=chosen is not None,
+            estimate=estimate,
+        ))
+    return outs
+
+
 @router.get("/ingest/{job_id}/status", response_model=IngestJobOut)
 async def get_ingest_status(
     job_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -635,8 +724,11 @@ async def get_ingest_status(
         raise HTTPException(status_code=403, detail="Access denied")
 
     from app.services.ingest import sources_attempted
+    from app.services.large_ingest_estimate import estimate_model
 
     prod = await db.get(Production, job.production_id)
+    await _maybe_schedule_self_heal(db, job, background_tasks)
+    is_large = bool((job.field_mapping or {}).get("large_containers"))
 
     return IngestJobOut(
         id=job.id,
@@ -650,7 +742,34 @@ async def get_ingest_status(
         errors=job.errors or [],
         created_at=job.created_at,
         completed_at=job.completed_at,
+        items_total=job.items_total or 0,
+        items_done=job.items_done or 0,
+        items_failed=job.items_failed or 0,
+        containers=_container_outs(job),
+        estimate_model=estimate_model() if is_large else {},
     )
+
+
+@router.get("/productions/{production_id}/ingest-awaiting")
+async def ingest_awaiting(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Large-container loads of the caller's waiting for their item-type choice."""
+    rows = (await db.execute(
+        select(IngestJob).where(
+            IngestJob.production_id == production_id,
+            IngestJob.user_id == user.id,
+            IngestJob.status == "awaiting_selection",
+        ).order_by(IngestJob.created_at)
+    )).scalars().all()
+    out = []
+    for job in rows:
+        for c in _container_outs(job):
+            if not c.selected:
+                out.append({"job_id": str(job.id), "name": c.name, "size_bytes": c.size_bytes})
+    return out
 
 
 @router.post("/ingest/reocr/{production_id}")

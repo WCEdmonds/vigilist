@@ -437,6 +437,31 @@ class PaginatedAuditLogs(BaseModel):
     per_page: int
 
 
+class ContainerTypeOut(BaseModel):
+    type: str
+    count: int
+    bytes: int
+
+
+class ContainerRecoverableOut(BaseModel):
+    count: int = 0
+    bytes: int = 0
+    types: list[ContainerTypeOut] = []
+
+
+class ContainerOut(BaseModel):
+    """One surveyed large container, for the "what to bring in" screen."""
+    storage_path: str
+    name: str
+    size_bytes: int
+    # Items outside recoverable/deleted folders, per type.
+    types: list[ContainerTypeOut] = []
+    recoverable: ContainerRecoverableOut = ContainerRecoverableOut()
+    selected: bool = False
+    # The chosen selection's estimate once applied, else the default selection's.
+    estimate: dict = {}
+
+
 class IngestJobOut(BaseModel):
     id: UUID
     production_id: int
@@ -451,6 +476,13 @@ class IngestJobOut(BaseModel):
     errors: list[str]
     created_at: datetime
     completed_at: datetime | None
+    # Large-container loads: message-level progress and the surveyed containers.
+    items_total: int = 0
+    items_done: int = 0
+    items_failed: int = 0
+    containers: list[ContainerOut] = []
+    # Constants of the linear cost model, so the client can recompute live.
+    estimate_model: dict = {}
 
     model_config = {"from_attributes": True}
 

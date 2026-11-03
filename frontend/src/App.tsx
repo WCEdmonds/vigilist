@@ -103,6 +103,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showPrivilegeLog, setShowPrivilegeLog] = useState(false);
   const [showIngestWizard, setShowIngestWizard] = useState(false);
+  const [resumeIngestJobId, setResumeIngestJobId] = useState<string | undefined>(undefined);
   const [showDashboard, setShowDashboard] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(
     initialUrl.batch ? Number(initialUrl.batch) : null,
@@ -696,6 +697,7 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
           onOpenEntities={() => setShowEntities(true)}
           onOpenGraph={() => setShowGraph(true)}
           onOpenTimeline={() => setShowTimeline(true)}
+          onResumeIngest={(jobId) => { setResumeIngestJobId(jobId); setShowIngestWizard(true); }}
         />
 
         {/* My Review Batches */}
@@ -1252,8 +1254,9 @@ function Home({ production, productions, onSelectProduction, onSwitchProduction,
       {showIngestWizard && (
         <IngestWizard
           existingProduction={{ id: production.id, name: production.name }}
-          onClose={() => setShowIngestWizard(false)}
-          onComplete={() => { setShowIngestWizard(false); onIngestComplete(); }}
+          resumeJobId={resumeIngestJobId}
+          onClose={() => { setShowIngestWizard(false); setResumeIngestJobId(undefined); }}
+          onComplete={() => { setShowIngestWizard(false); setResumeIngestJobId(undefined); onIngestComplete(); }}
         />
       )}
 

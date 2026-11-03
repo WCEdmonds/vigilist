@@ -46,14 +46,30 @@ def selected_totals(survey: ContainerSurvey, types: set[str], include_recoverabl
     return items, size
 
 
+def estimate_model() -> dict:
+    """The linear cost model behind ``estimate_load``, for clients that
+    recompute the estimate live as the uploader toggles item types:
+
+        usd     = round(items * usd_per_item + bytes * usd_per_byte, 2)
+        minutes = round(items / items_per_second / 60, 1)
+        storage = round(bytes / 1e9, 2) GB
+    """
+    return {
+        "usd_per_item": COMPUTE_USD_PER_ITEM,
+        "usd_per_byte": (
+            TEXT_BYTES_FRACTION * VOYAGE_USD_PER_TEXT_BYTE
+            + ATTACHMENT_BYTES_FRACTION * OCR_IMAGE_BYTES_FRACTION / AVG_OCR_IMAGE_BYTES * VISION_USD_PER_IMAGE
+        ),
+        "items_per_second": ITEMS_PER_SECOND_PER_WORKER * PARALLEL_WORKERS,
+        "budget_usd": BUDGET_USD,
+    }
+
+
 def estimate_load(survey: ContainerSurvey, types: set[str], include_recoverable: bool) -> dict:
     items, size = selected_totals(survey, set(types), include_recoverable)
-    compute = items * COMPUTE_USD_PER_ITEM
-    embeddings = size * TEXT_BYTES_FRACTION * VOYAGE_USD_PER_TEXT_BYTE
-    ocr_images = size * ATTACHMENT_BYTES_FRACTION * OCR_IMAGE_BYTES_FRACTION / AVG_OCR_IMAGE_BYTES
-    ocr = ocr_images * VISION_USD_PER_IMAGE
-    usd = round(compute + embeddings + ocr, 2)
-    minutes = round(items / (ITEMS_PER_SECOND_PER_WORKER * PARALLEL_WORKERS) / 60, 1)
+    m = estimate_model()
+    usd = round(items * m["usd_per_item"] + size * m["usd_per_byte"], 2)
+    minutes = round(items / m["items_per_second"] / 60, 1)
     return {
         "items": items,
         "bytes": size,

@@ -2,8 +2,8 @@ import { auth } from '../firebase';
 import type {
   AIReviewResult, Annotation, BatchDocument, BatesCandidates, CaseRole, ChipEntity, ClassifyEstimate, ClusterDocument, ClusterInfo, ConversationDetail, ConversationSummary, DashboardStats, DocEntity, DocumentDetail, DocumentTagEntry, EmailView, DuplicateEntry, EntityConnections, EntityListPage, EntityMentionsPage, EntityProfile, EntityRenameResult,
   DatePrecision, EventEditResult, FamilyThread, GraphData,
-  IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
-  PipelineInfo, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
+  AiEstimate, AwaitingIngest, IngestJob, MergeSuggestion, NoteEntry, PaginatedAuditLogs, PaginatedDocuments, PaginatedReviewResults, PendingInviteEntry,
+  PipelineInfo, PipelineStatus, ProductionAccessEntry, ProductionInfo, QCContext, QCStats, ReviewBatch, ReviewProject, ReviewQueue, SavedSearch,
   SearchResponse, SearchResult, Tag, TimelinePage, TimelineReviewStatus,
   SearchExtras, BulkTagByQueryBody, BulkTagDryRun, BulkTagApplied,
   PrivilegeDisposition, PrivilegeLogRow, FolderInfo, FolderAddResult, BulkTagQuery,
@@ -640,8 +640,35 @@ export const startProcessing = (
     load_id: loadId,
   }));
 
-export const getPipeline = (productionId: number): Promise<PipelineInfo> =>
-  request(`/api/productions/${productionId}/pipeline`);
+/**
+ * Batched AI stages store {"status": "waiting", "batch_id": ...} while a
+ * Message Batch is in flight; flatten those to their status string so the
+ * rest of the UI deals only in PipelineStageState.
+ */
+function flattenStageStates(status: unknown): PipelineStatus | null {
+  if (!status || typeof status !== 'object') return null;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(status as Record<string, unknown>)) {
+    out[k] = v && typeof v === 'object' && 'status' in v ? (v as { status: unknown }).status : v;
+  }
+  return out as PipelineStatus;
+}
+
+export const getPipeline = async (productionId: number): Promise<PipelineInfo> => {
+  const info = await request<PipelineInfo>(`/api/productions/${productionId}/pipeline`);
+  return { ...info, status: flattenStageStates(info.status) };
+};
+
+export const getAiEstimate = (productionId: number) =>
+  request<AiEstimate>(`/api/productions/${productionId}/ai-estimate`);
+
+export const getIngestAwaiting = (productionId: number) =>
+  request<AwaitingIngest[]>(`/api/productions/${productionId}/ingest-awaiting`);
+
+export const applyContainerSelection = (jobId: string, storagePath: string, types: string[], includeRecoverable: boolean) =>
+  request<{ job_id: string; estimate: unknown }>(`/api/ingest/${jobId}/selection`, json({
+    storage_path: storagePath, types, include_recoverable: includeRecoverable,
+  }));
 
 export interface IntakeSummary {
   documents: number;

@@ -4,6 +4,7 @@ import { firebaseStorage, auth } from '../firebase';
 import { analyzeLoadFile, createProductionForIngest, getClassifyEstimate, getIngestStatus, getIntakeSummary, startAutoClassification, startProcessing } from '../api/client';
 import type { IntakeSummary, ProposedColumn } from '../api/client';
 import { showToast } from './Toast';
+import ContainerSelection from './ContainerSelection';
 import type { ClassifyEstimate, IngestJob } from '../types';
 
 interface Props {
@@ -11,6 +12,8 @@ interface Props {
   onComplete: () => void;
   /** When set, the wizard offers adding this load to the open matter. */
   existingProduction?: { id: number; name: string };
+  /** Reopen an in-flight large-mailbox load (e.g. to make the pending selection). */
+  resumeJobId?: string;
 }
 
 type Stage = 'setup' | 'uploading' | 'mapping' | 'processing' | 'complete' | 'error';
@@ -22,7 +25,7 @@ const CANONICAL_FIELDS = [
   'email_cc', 'email_bcc', 'email_subject',
 ] as const;
 
-export default function IngestWizard({ onClose, onComplete, existingProduction }: Props) {
+export default function IngestWizard({ onClose, onComplete, existingProduction, resumeJobId }: Props) {
   const [name, setName] = useState('');
   const [target, setTarget] = useState<'existing' | 'new'>(existingProduction ? 'existing' : 'new');
   const [loadId] = useState(() => crypto.randomUUID().slice(0, 8));
@@ -34,7 +37,7 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
   const [sourceType, setSourceType] = useState<'collection' | 'received'>('collection');
   const [sourceParty, setSourceParty] = useState('');
   const [modeWarning, setModeWarning] = useState('');
-  const [stage, setStage] = useState<Stage>('setup');
+  const [stage, setStage] = useState<Stage>(resumeJobId ? 'processing' : 'setup');
   const [uploadProgress, setUploadProgress] = useState({ uploaded: 0, total: 0, bytesUploaded: 0, totalBytes: 0, startTime: 0 });
   const [job, setJob] = useState<IngestJob | null>(null);
   const [error, setError] = useState('');
@@ -216,6 +219,11 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
     }
   };
 
+  // Reopened on a running load: pick up its status.
+  useEffect(() => {
+    if (resumeJobId) pollStatus(resumeJobId);
+  }, [resumeJobId]);
+
   const handleConfirmMapping = async () => {
     if (mappingProdId === null) return;
     const fieldMapping = Object.fromEntries(
@@ -303,11 +311,25 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
   // Older API responses lack files_done; fall back to the record-count sum.
   const filesDone = (j: IngestJob) => j.files_done ?? j.processed_files + (j.skipped_files || 0);
 
+  // Large-mailbox loads count messages, not files.
+  const hasItemProgress = !!job && (job.items_total ?? 0) > 0;
+  const itemsLine = job && hasItemProgress
+    ? `${(job.items_done ?? 0).toLocaleString()} of ${(job.items_total ?? 0).toLocaleString()} messages${job.items_failed ? ` · ${job.items_failed.toLocaleString()} could not be read` : ''}`
+    : '';
+  const awaitingSelection = job?.status === 'awaiting_selection';
+
   const progressPercent = stage === 'uploading' && uploadProgress.totalBytes > 0
     ? Math.round((uploadProgress.bytesUploaded / uploadProgress.totalBytes) * 100)
+    : job && hasItemProgress
+    ? Math.min(100, Math.round(((job.items_done ?? 0) / (job.items_total ?? 1)) * 100))
     : job && job.total_files > 0
     ? Math.round((filesDone(job) / job.total_files) * 100)
     : 0;
+
+  // Finalize appends "{name}: X of Y loaded, ..." per large container.
+  const isReconciliation = (line: string) => /: [\d,]+ of [\d,]+ loaded/.test(line);
+  const reconciliation = (job?.errors ?? []).filter(isReconciliation);
+  const warnings = (job?.errors ?? []).filter(l => !isReconciliation(l));
 
   const isActive = stage === 'uploading' || stage === 'processing' || stage === 'mapping';
   const isDone = stage === 'complete' || stage === 'error';
@@ -325,7 +347,11 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
     : stage === 'mapping'
     ? `Review column mapping · ${columns.length} columns detected`
     : stage === 'processing'
-    ? job ? `Processing · ${filesDone(job)} / ${job.total_files} files · ${job.processed_files} documents ingested${job.skipped_files ? ` · ${job.skipped_files} files skipped` : ''}` : 'Processing…'
+    ? awaitingSelection ? 'Waiting for your selection'
+    : job?.status === 'surveying' ? 'Reading the mailbox…'
+    : job?.status === 'finalizing' ? 'Finishing up: threading and search'
+    : job && hasItemProgress ? `Processing · ${itemsLine}`
+    : job ? `Processing · ${filesDone(job)} / ${job.total_files} files · ${job.processed_files} documents ingested${job.skipped_files ? ` · ${job.skipped_files} files skipped` : ''}` : 'Processing…'
     : stage === 'complete'
     ? `Done · ${job?.processed_files ?? 0} documents`
     : error;
@@ -598,11 +624,21 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
               </>
             )}
 
-            {(stage === 'uploading' || stage === 'processing') && (
+            {stage === 'processing' && awaitingSelection && job && (
+              <ContainerSelection
+                job={job}
+                onApplied={() => { getIngestStatus(job.id).then(setJob).catch(() => { /* next poll catches up */ }); }}
+              />
+            )}
+
+            {(stage === 'uploading' || (stage === 'processing' && !awaitingSelection)) && (
               <div style={{ textAlign: 'center', padding: 'var(--space-4)' }}>
                 <div className="spinner spinner-md" style={{ margin: '0 auto var(--space-4)' }} />
                 <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-2)' }}>
-                  {stage === 'uploading' ? 'Uploading files…' : 'Processing production…'}
+                  {stage === 'uploading' ? 'Uploading files…'
+                    : job?.status === 'surveying' ? 'Reading the mailbox…'
+                    : job?.status === 'finalizing' ? 'Finishing up…'
+                    : 'Processing production…'}
                 </div>
                 <div style={{ width: '100%', height: 6, background: 'var(--color-neutral-200)', borderRadius: 3, overflow: 'hidden', marginBottom: 'var(--space-2)' }}>
                   <div style={{ width: `${progressPercent}%`, height: '100%', background: 'var(--color-brand-500)', borderRadius: 3, transition: 'width 0.3s ease' }} />
@@ -680,8 +716,13 @@ export default function IngestWizard({ onClose, onComplete, existingProduction }
                 <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-500)', marginBottom: 'var(--space-4)' }}>
                   {job?.processed_files} documents ingested
                   {job?.skipped_files ? ` · ${job.skipped_files} skipped` : ''}
-                  {job?.errors && job.errors.length > 0 && ` · ${job.errors.length} warnings`}
+                  {warnings.length > 0 && ` · ${warnings.length} warnings`}
                 </div>
+                {reconciliation.length > 0 && (
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-neutral-600)', marginBottom: 'var(--space-4)' }}>
+                    {reconciliation.map(line => <div key={line}>{line}</div>)}
+                  </div>
+                )}
                 {intakeSummary && (
                   <div style={{
                     display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 'var(--space-2)',
