@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from app.services.pst_reader import (
@@ -10,15 +12,61 @@ from app.services.pst_reader import (
 )
 
 
-class Item:
-    def __init__(self, message_class="IPM.Note", **kw):
-        self.message_class = message_class
-        self.__dict__.update(kw)
+class Entry:
+    def __init__(self, value):
+        self.data_as_string = value if isinstance(value, str) else None
+        self.data_as_integer = value if isinstance(value, int) else None
+
+
+class RecordSet:
+    def __init__(self, props):
+        self._props = props
+
+    def get_entry_by_type(self, tag):
+        return Entry(self._props[tag]) if tag in self._props else None
+
+
+class Recipients:
+    def __init__(self, rows):
+        self.record_sets = [RecordSet(r) for r in rows]
 
 
 class Att:
-    def __init__(self, name, data, content_id=None):
-        self.name, self.data, self.content_id = name, data, content_id
+    """Mirrors pypff.attachment: long_filename, size, read_buffer, record_sets."""
+
+    def __init__(self, name, data, content_id=None, short_name=None):
+        props = {}
+        if content_id:
+            props[0x3712] = content_id
+        if short_name:
+            props[0x3704] = short_name
+        self.long_filename = name
+        self.size = len(data)
+        self._data = data
+        self.record_sets = [RecordSet(props)]
+
+    def read_buffer(self, n):
+        return self._data[:n]
+
+
+class Item:
+    """Mirrors pypff.message: class/size/recipients live in MAPI record sets."""
+
+    def __init__(self, message_class="IPM.Note", size=None, props=None, recipients=None,
+                 attachments=(), **kw):
+        p = dict(props or {})
+        if message_class is not None:
+            p[0x001A] = message_class
+        if size is not None:
+            p[0x0E08] = size
+        self.record_sets = [RecordSet(p)]
+        self.recipients = Recipients(recipients) if recipients is not None else None
+        self._attachments = list(attachments)
+        self.number_of_attachments = len(self._attachments)
+        self.__dict__.update(kw)
+
+    def get_attachment(self, i):
+        return self._attachments[i]
 
 
 class Folder:
@@ -111,9 +159,54 @@ def test_to_parsed_message_tolerates_missing_fields():
     assert p.subject == "" and p.body_text == "" and p.date_sent is None
 
 
+def test_survey_reads_class_and_size_from_mapi_properties():
+    f = Folder("Inbox", [Item("IPM.Appointment", size=500), Item("IPM.Note", size=100),
+                         Item("IPM.Note", size=50)])
+    s = survey(Folder("", subs=[f]))
+    inbox = next(x for x in s.folders if x.path == "Inbox")
+    assert inbox.counts["calendar"] == 1 and inbox.counts["email"] == 2
+    assert inbox.bytes["email"] == 150 and inbox.bytes["calendar"] == 500
+
+
+def test_attachment_name_falls_back_to_short_filename_then_default():
+    item = Item(attachments=[Att("", b"x", short_name="SHORT~1.TXT"), Att("", b"y")])
+    names = [n for n, _ in to_parsed(item, "email").attachments]
+    assert names == ["SHORT~1.TXT", "attachment"]
+
+
+def test_headerless_email_falls_back_to_sender_and_recipients_table():
+    item = Item(
+        subject="Hi", sender_name="Alice Example",
+        delivery_time=datetime(2026, 1, 2, 3, 4, 5),
+        recipients=[
+            {0x3001: "Bob", 0x39FE: "bob@acme.test", 0x0C15: 1},
+            {0x3001: "Carol", 0x3003: "carol@acme.test", 0x0C15: 2},
+            {0x3001: "dave@acme.test", 0x39FE: "dave@acme.test", 0x0C15: 3},
+        ],
+    )
+    p = to_parsed(item, "email")
+    assert p.from_ == "Alice Example"
+    assert p.to == "Bob <bob@acme.test>"
+    assert p.cc == "Carol <carol@acme.test>"
+    assert p.bcc == "dave@acme.test"
+    assert p.date_sent == "2026-01-02T03:04:05"
+
+
 def test_to_parsed_renders_calendar_as_text():
-    cal = Item("IPM.Appointment", subject="Kickoff", organizer="bob@acme.test",
-               start_time="2026-01-01T10:00", location="Room 1")
+    cal = Item(
+        "IPM.Appointment", subject="Kickoff", sender_name="Bob Example",
+        client_submit_time=datetime(2026, 1, 1, 10, 0),
+        recipients=[{0x3001: "Carol", 0x39FE: "carol@acme.test", 0x0C15: 1}],
+    )
     p = to_parsed(cal, "calendar")
     assert p.subject == "Kickoff"
-    assert "Organizer:" in p.body_text and "Start:" in p.body_text and "Location:" in p.body_text
+    assert "Organizer: Bob Example" in p.body_text
+    assert "Attendees: Carol <carol@acme.test>" in p.body_text
+    assert "Sent: 2026-01-01T10:00:00" in p.body_text
+    assert "Start:" not in p.body_text and "Location:" not in p.body_text
+
+
+def test_contact_renders_only_non_empty_mapi_fields():
+    c = Item("IPM.Contact", subject="Dana", props={0x3001: "Dana Example", 0x3A16: "ACME"})
+    body = to_parsed(c, "contact").body_text
+    assert body == "Name: Dana Example\nCompany: ACME"

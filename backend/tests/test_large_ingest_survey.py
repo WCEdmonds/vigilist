@@ -96,3 +96,49 @@ def test_survey_sets_awaiting_selection_when_all_surveyed(monkeypatch):
     assert job.status == "surveying" and set(job.survey) == {"a.pst"}
     asyncio.run(run_survey(db, "j1", "b.pst"))
     assert job.status == "awaiting_selection" and set(job.survey) == {"a.pst", "b.pst"}
+
+
+def test_survey_locked_reread_does_not_use_stale_job(monkeypatch):
+    """The locked re-read must refresh from the DB: a concurrent survey's write
+    (present only on the fresh row) must survive."""
+    stale = SimpleNamespace(
+        id="j1", status="surveying", survey={},
+        field_mapping={"large_containers": ["a.pst", "b.pst"]},
+    )
+    fresh = SimpleNamespace(
+        id="j1", status="surveying",
+        survey={"a.pst": {"storage_path": "a.pst", "folders": []}},
+        field_mapping={"large_containers": ["a.pst", "b.pst"]},
+    )
+
+    class SeqSession(UuidFakeSession):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def get(self, model, key, **kw):
+            self.calls.append(kw)
+            return stale if len(self.calls) == 1 else fresh
+
+    db = SeqSession()
+    monkeypatch.setattr(large_ingest, "_survey_container",
+                        lambda p: {"storage_path": p, "folders": []})
+    asyncio.run(run_survey(db, "j1", "b.pst"))
+    assert db.calls[1].get("with_for_update") and db.calls[1].get("populate_existing")
+    assert set(fresh.survey) == {"a.pst", "b.pst"}
+    assert fresh.status == "awaiting_selection"
+
+
+def test_inline_mode_reports_and_skips_large_containers(monkeypatch):
+    monkeypatch.setattr(task_service, "is_configured", lambda: False)
+    monkeypatch.setattr(native_mod, "list_native_sources", lambda pid, lp=None: [SMALL, BIG])
+    db = UuidFakeSession(get_objects={("Production", 1): FakeProduction()})
+    bg = FakeBackgroundTasks()
+    asyncio.run(ri.start_processing(
+        body={"production_id": 1, "source_format": "native", "total_files": 2},
+        background_tasks=bg, db=db, user=FakeUser()))
+    job = db.added[0]
+    assert job.errors == ["big.pst: large mailbox loading requires Cloud Tasks"]
+    skipped = [p for p in db.executed_params if p and p.get("key") == "native:" + BIG["storage_path"]]
+    assert len(skipped) == 1 and skipped[0]["jid"] == str(job.id)
+    assert len(bg.tasks) == 1

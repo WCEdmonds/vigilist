@@ -54,7 +54,9 @@ async def run_survey(db, job_id: str, storage_path: str) -> None:
 
     # Re-read under a row lock so two surveys finishing together can't lose
     # each other's write or both miss the "all surveyed" transition.
-    job = await db.get(IngestJob, job_id, with_for_update=True)
+    # Sessions use expire_on_commit=False, so without populate_existing the
+    # identity map would hand back the stale pre-survey object.
+    job = await db.get(IngestJob, job_id, with_for_update=True, populate_existing=True)
     surveys = dict(job.survey or {})
     surveys[storage_path] = survey_json
     job.survey = surveys

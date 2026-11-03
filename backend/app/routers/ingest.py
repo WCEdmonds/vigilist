@@ -274,6 +274,9 @@ async def start_processing(
     await db.commit()
     await db.refresh(job)
 
+    if source_format == "native":
+        await _skip_large_containers_inline(db, job, production.id, load_prefix)
+
     background_tasks.add_task(
         run_ingest_job,
         job_id=str(job.id),
@@ -292,6 +295,28 @@ async def start_processing(
         created_at=job.created_at,
         completed_at=None,
     )
+
+
+async def _skip_large_containers_inline(db, job, production_id: int, load_prefix) -> None:
+    """Inline mode has no worker for the chunked path: report each large
+    mailbox as an error and count it skipped so the job can still finish."""
+    from app.services.ingest import _incr_skipped
+    from app.services.ingest_native import list_native_sources
+    from app.services.large_ingest import is_large_container, large_source_key
+
+    try:
+        large = [it for it in list_native_sources(production_id, load_prefix) if is_large_container(it)]
+    except Exception:
+        logger.exception("Could not list sources to check for large containers")
+        return
+    if not large:
+        return
+    job.errors = list(job.errors or []) + [
+        f"{it['filename']}: large mailbox loading requires Cloud Tasks" for it in large
+    ]
+    await db.commit()
+    for it in large:
+        await _incr_skipped(db, str(job.id), large_source_key(it["storage_path"]))
 
 
 @router.post("/ingest/process-batch")

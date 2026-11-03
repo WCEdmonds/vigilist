@@ -143,9 +143,59 @@ def _folders(handle) -> list[tuple[str, object]]:
     return out
 
 
+# MAPI property tags (non-named, so readable straight from record sets).
+PR_MESSAGE_CLASS = 0x001A
+PR_MESSAGE_SIZE = 0x0E08
+PR_RECIPIENT_TYPE = 0x0C15
+PR_DISPLAY_NAME = 0x3001
+PR_EMAIL_ADDRESS = 0x3003
+PR_ATTACH_FILENAME = 0x3704
+PR_ATTACH_CONTENT_ID = 0x3712
+PR_COMPANY_NAME = 0x3A16
+PR_BUSINESS_PHONE = 0x3A08
+PR_MOBILE_PHONE = 0x3A1C
+PR_SMTP_ADDRESS = 0x39FE
+
+
+def _prop(obj, tag: int):
+    """First record entry with MAPI property ``tag`` across obj.record_sets."""
+    try:
+        record_sets = list(obj.record_sets or [])
+    except Exception:
+        return None
+    for rs in record_sets:
+        try:
+            entry = rs.get_entry_by_type(tag)
+        except Exception:
+            entry = None
+        if entry is not None:
+            return entry
+    return None
+
+
+def _prop_str(obj, tag: int) -> str:
+    entry = _prop(obj, tag)
+    if entry is None:
+        return ""
+    try:
+        return _text(entry.data_as_string).strip()
+    except Exception:
+        return ""
+
+
+def _prop_int(obj, tag: int) -> int | None:
+    entry = _prop(obj, tag)
+    if entry is None:
+        return None
+    try:
+        v = entry.data_as_integer
+    except Exception:
+        return None
+    return int(v) if v is not None else None
+
+
 def _item_size(item) -> int:
-    size = getattr(item, "size", None)
-    return int(size) if isinstance(size, int) else 0
+    return _prop_int(item, PR_MESSAGE_SIZE) or 0
 
 
 def survey(handle) -> ContainerSurvey:
@@ -155,7 +205,7 @@ def survey(handle) -> ContainerSurvey:
         sizes = {t: 0 for t in ITEM_TYPES}
         for i in range(folder.get_number_of_sub_messages()):
             item = folder.get_sub_message(i)
-            kind = item_type(getattr(item, "message_class", None))
+            kind = item_type(_prop_str(item, PR_MESSAGE_CLASS) or None)
             counts[kind] += 1
             sizes[kind] += _item_size(item)
         result.folders.append(FolderSurvey(idx, path, is_recoverable(path), counts, sizes))
@@ -200,16 +250,19 @@ def _headers(raw: str) -> dict[str, str]:
 
 
 def _attachments(item) -> list:
-    if hasattr(item, "attachments"):
-        return list(item.attachments or [])
     n = getattr(item, "number_of_attachments", 0) or 0
     return [item.get_attachment(i) for i in range(n)]
 
 
+def _attachment_name(att) -> str:
+    return (
+        _text(getattr(att, "long_filename", None)).strip()
+        or _prop_str(att, PR_ATTACH_FILENAME)
+        or "attachment"
+    )
+
+
 def _attachment_bytes(att) -> bytes:
-    data = getattr(att, "data", None)
-    if data is not None:
-        return bytes(data)
     size = getattr(att, "size", 0) or 0
     return bytes(att.read_buffer(size)) if size else b""
 
@@ -220,33 +273,67 @@ def _fmt(value) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else _text(value)
 
 
-_PROPERTY_LABELS = {
-    "calendar": [
-        ("Organizer", "organizer"),
-        ("Start", "start_time"),
-        ("End", "end_time"),
-        ("Location", "location"),
-        ("Attendees", "attendees"),
-    ],
-    "contact": [
-        ("Name", "display_name"),
-        ("Email", "email_address"),
-        ("Company", "company"),
-        ("Phone", "phone"),
-    ],
-    "task": [("Owner", "owner"), ("Due", "due_date"), ("Status", "status")],
-}
+def _recipients(item) -> list[tuple[int, str]]:
+    """(recipient type, 'Name <addr>') per recipient; type 1=to 2=cc 3=bcc."""
+    table = getattr(item, "recipients", None)
+    if table is None:
+        return []
+    out: list[tuple[int, str]] = []
+    try:
+        record_sets = list(table.record_sets or [])
+    except Exception:
+        return []
+    for rs in record_sets:
+        holder = _RecordSets(rs)
+        name = _prop_str(holder, PR_DISPLAY_NAME)
+        addr = _prop_str(holder, PR_SMTP_ADDRESS) or _prop_str(holder, PR_EMAIL_ADDRESS)
+        rtype = _prop_int(holder, PR_RECIPIENT_TYPE) or 1
+        if name and addr and name != addr:
+            label = f"{name} <{addr}>"
+        else:
+            label = addr or name
+        if label:
+            out.append((rtype, label))
+    return out
+
+
+class _RecordSets:
+    """Adapter so a single record set can go through the obj.record_sets helpers."""
+
+    def __init__(self, rs):
+        self.record_sets = [rs]
+
+
+def _line(label: str, value: str) -> str | None:
+    value = (value or "").strip()
+    return f"{label}: {value}" if value else None
 
 
 def _render_properties(item, kind: str) -> str:
-    lines = [
-        f"{label}: {_fmt(getattr(item, attr, None))}".rstrip()
-        for label, attr in _PROPERTY_LABELS.get(kind, [])
-    ]
+    lines: list[str | None] = []
+    if kind == "contact":
+        lines += [
+            _line("Name", _prop_str(item, PR_DISPLAY_NAME)),
+            _line("Company", _prop_str(item, PR_COMPANY_NAME)),
+            _line("Business phone", _prop_str(item, PR_BUSINESS_PHONE)),
+            _line("Mobile phone", _prop_str(item, PR_MOBILE_PHONE)),
+        ]
+    else:
+        names = [a for _, a in _recipients(item)]
+        label = "Organizer" if kind == "calendar" else "From"
+        lines.append(_line(label, _text(getattr(item, "sender_name", None))))
+        lines.append(_line("Attendees" if kind == "calendar" else "To", "; ".join(names)))
+        for lbl, attr in (
+            ("Sent", "client_submit_time"),
+            ("Delivered", "delivery_time"),
+            ("Created", "creation_time"),
+        ):
+            lines.append(_line(lbl, _fmt(getattr(item, attr, None))))
+    rendered = [ln for ln in lines if ln]
     body = _text(getattr(item, "plain_text_body", None)).strip()
     if body:
-        lines += ["", body]
-    return "\n".join(lines)
+        rendered += ["", body]
+    return "\n".join(rendered)
 
 
 def to_parsed(item, kind: str) -> ParsedMessage:
@@ -259,6 +346,11 @@ def to_parsed(item, kind: str) -> ParsedMessage:
     def hv(name: str) -> str:
         return decode_header_value(h.get(name, ""))
 
+    recips = _recipients(item)
+
+    def addrs(rtype: int) -> str:
+        return ", ".join(a for t, a in recips if t == rtype)
+
     html = _text(getattr(item, "html_body", None))
     body_text = _text(getattr(item, "plain_text_body", None)).strip()
     if not body_text and html:
@@ -267,19 +359,24 @@ def to_parsed(item, kind: str) -> ParsedMessage:
     attachments: list[tuple[str, bytes]] = []
     inline: set[str] = set()
     for att in _attachments(item):
-        name = _text(getattr(att, "name", None)) or "attachment"
+        name = _attachment_name(att)
         attachments.append((name, _attachment_bytes(att)))
-        cid = _text(getattr(att, "content_id", None)).strip().strip("<>")
+        cid = _prop_str(att, PR_ATTACH_CONTENT_ID).strip("<>")
         if cid and html and re.search("cid:" + re.escape(cid), html, re.I):
             inline.add(name)
 
-    date_sent = hv("date") or _fmt(getattr(item, "client_submit_time", None)) or None
+    date_sent = (
+        hv("date")
+        or _fmt(getattr(item, "client_submit_time", None))
+        or _fmt(getattr(item, "delivery_time", None))
+        or None
+    )
 
     return ParsedMessage(
-        from_=hv("from"),
-        to=hv("to"),
-        cc=hv("cc"),
-        bcc=hv("bcc"),
+        from_=hv("from") or _text(getattr(item, "sender_name", None)).strip(),
+        to=hv("to") or addrs(1),
+        cc=hv("cc") or addrs(2),
+        bcc=hv("bcc") or addrs(3),
         subject=subject or hv("subject"),
         date_sent=date_sent,
         body_text=body_text,
