@@ -27,6 +27,37 @@ def _extract_text(response) -> str | None:
     return None
 
 
+# ── Refusals ──
+
+class _Refusal(str):
+    """Type of ``REFUSED``."""
+
+
+# Returned instead of text when the model refused (stop_reason "refusal").
+# It is an empty string, so code that only checks truthiness treats it as "no
+# result"; the per-document stages check ``is_refusal`` and record a sentinel
+# so the document is not resubmitted on every run.
+REFUSED = _Refusal("")
+
+
+def is_refusal(value) -> bool:
+    return value is REFUSED
+
+
+def is_refusal_response(message) -> bool:
+    return getattr(message, "stop_reason", None) == "refusal"
+
+
+def mark_ai_refused(doc, stage: str) -> None:
+    """Record on the document that ``stage`` was refused by the model."""
+    meta = dict(getattr(doc, "metadata_", None) or {})
+    refused = list(meta.get("ai_refused") or [])
+    if stage not in refused:
+        refused.append(stage)
+    meta["ai_refused"] = refused
+    doc.metadata_ = meta  # reassign: in-place JSONB mutation isn't tracked
+
+
 # ── Interactive Chat (AI Agent) ──
 
 # A capable model for open-ended analysis over selected documents.
@@ -148,6 +179,60 @@ def build_chat_system_prompt(documents: list) -> str:
     )
 
 
+# ── Per-document model ──
+
+# Per-document stages (summaries, entity extraction, AI titles). Thinking is
+# off and effort low: these are short, high-volume calls. No temperature /
+# top_p / top_k: the API rejects sampling parameters (400).
+PER_DOC_MODEL = "claude-haiku-5-5"
+# Callers size max_tokens for thinking disabled; turning thinking on would need
+# larger max_tokens (thinking tokens count against it).
+PER_DOC_REQUEST_OPTIONS = {
+    "thinking": {"type": "disabled"},
+    "output_config": {"effort": "low"},
+}
+
+
+def per_doc_params(**params) -> dict:
+    """Message params for one per-document request on ``PER_DOC_MODEL``."""
+    return {"model": PER_DOC_MODEL, **params,
+            **{k: dict(v) for k, v in PER_DOC_REQUEST_OPTIONS.items()}}
+
+
+# ── Per-document AI cost estimate ──
+
+# Haiku 5.5 Message Batches pricing (half of the $0.10 / $0.50 per MTok
+# standard rate). Large runs go through batches, so estimates use this rate.
+PER_DOC_BATCH_INPUT_USD_PER_MTOK = 0.05
+PER_DOC_BATCH_OUTPUT_USD_PER_MTOK = 0.25
+# Characters per input token (rough), the summary input cap, and the output
+# allowance per document for each stage.
+CHARS_PER_TOKEN = 4
+SUMMARY_INPUT_CHARS = 12_000
+SUMMARY_OUTPUT_TOKENS = 300
+ENTITY_OUTPUT_TOKENS = 1_000
+# Fixed prompt tokens every request carries on top of the document text:
+# len(prompt strings) / CHARS_PER_TOKEN, measured from SUMMARY_PROMPT (~340
+# chars) and EXTRACTION_SYSTEM_PROMPT plus the extraction prompt wrapper
+# (~3,380 chars). Entity extraction sends one request per text slice; the
+# estimate counts one per document. A test keeps these near the prompts.
+SUMMARY_PROMPT_OVERHEAD_TOKENS = 90
+ENTITY_PROMPT_OVERHEAD_TOKENS = 850
+
+
+def estimate_per_doc_usd(summary_docs: int, summary_chars: int,
+                         entity_docs: int, entity_chars: int) -> float:
+    """USD for summarizing ``summary_docs`` documents (``summary_chars`` of
+    already-capped input) and extracting entities from ``entity_docs``
+    documents (``entity_chars`` of input), at batch pricing."""
+    input_tokens = ((summary_chars + entity_chars) / CHARS_PER_TOKEN
+                    + summary_docs * SUMMARY_PROMPT_OVERHEAD_TOKENS
+                    + entity_docs * ENTITY_PROMPT_OVERHEAD_TOKENS)
+    output_tokens = summary_docs * SUMMARY_OUTPUT_TOKENS + entity_docs * ENTITY_OUTPUT_TOKENS
+    return (input_tokens * PER_DOC_BATCH_INPUT_USD_PER_MTOK
+            + output_tokens * PER_DOC_BATCH_OUTPUT_USD_PER_MTOK) / 1_000_000
+
+
 # ── Document Summarization ──
 
 SUMMARY_PROMPT = """You are a legal document analyst. Summarize this litigation document in 2-4 sentences.
@@ -157,23 +242,33 @@ Be precise and objective. Use language suitable for a legal professional reviewi
 Respond with ONLY the summary, no preamble."""
 
 
+def summary_request_params(text: str | None) -> dict | None:
+    """Message params summarizing one document, or None for empty text.
+    Shared by the synchronous call and the Message Batches path."""
+    # Use more text for summaries than titles — first ~3000 tokens
+    truncated = (text or "")[:SUMMARY_INPUT_CHARS].strip()
+    if not truncated:
+        return None
+    return per_doc_params(
+        max_tokens=SUMMARY_OUTPUT_TOKENS,
+        messages=[{"role": "user", "content": f"{SUMMARY_PROMPT}\n\n---\n\n{truncated}"}],
+    )
+
+
 async def generate_summary(text: str) -> str | None:
     """Generate a summary for a document from its extracted text."""
     client = _get_client()
     if not client or not text or not text.strip():
         return None
 
-    # Use more text for summaries than titles — first ~3000 tokens
-    truncated = text[:12000].strip()
-    if not truncated:
+    params = summary_request_params(text)
+    if params is None:
         return None
 
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=300,
-            messages=[{"role": "user", "content": f"{SUMMARY_PROMPT}\n\n---\n\n{truncated}"}],
-        )
+        response = await client.messages.create(**params)
+        if is_refusal_response(response):
+            return REFUSED
         return _extract_text(response)
     except Exception:
         logger.warning("Failed to generate summary", exc_info=True)
@@ -280,11 +375,12 @@ async def generate_title(text: str) -> str | None:
         return None
 
     try:
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
+        response = await client.messages.create(**per_doc_params(
             max_tokens=120,
             messages=[{"role": "user", "content": f"{TITLE_PROMPT}\n\n---\n\n{truncated}"}],
-        )
+        ))
+        if is_refusal_response(response):
+            return REFUSED
         title = _extract_text(response)
         if not title:
             return None

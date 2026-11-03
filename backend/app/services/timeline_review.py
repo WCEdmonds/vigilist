@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 REVIEW_MODEL = "claude-opus-5"   # Opus 5 (2026-07-24) — same price/surface as 4.8
 REVIEW_MIN_CONFIDENCE = 0.8
+# One review call sees at most this many events. Above it the review keeps a
+# deterministic subset (see cap_events) and records that it sampled.
+MAX_TIMELINE_EVENTS = 3_000
 _REVIEW_MAX_ATTEMPTS = 3
 _RETRYABLE_ERRORS: tuple[type[BaseException], ...] | None = None
 
@@ -42,6 +45,31 @@ def _retryable_errors() -> tuple[type[BaseException], ...]:
         except Exception:
             _RETRYABLE_ERRORS = ()
     return _RETRYABLE_ERRORS
+
+
+# ── Event cap ──
+
+def cap_events(events: list, mentions: dict | None = None,
+               limit: int = MAX_TIMELINE_EVENTS) -> list:
+    """At most ``limit`` events, chosen deterministically whatever the input
+    order: highest mention count first, then earliest date (undated last),
+    then lowest id.
+
+    ``mentions`` maps event id -> mention count (the review passes each
+    event's participant count); without it an event's ``mention_count``
+    attribute is used, defaulting to 0.
+    """
+    if len(events) <= limit:
+        return list(events)
+
+    def count(e) -> int:
+        if mentions is not None:
+            return int(mentions.get(e.id, 0))
+        return int(getattr(e, "mention_count", 0) or 0)
+
+    ranked = sorted(events, key=lambda e: (-count(e), e.event_date is None,
+                                           e.event_date or date.min, e.id))
+    return ranked[:limit]
 
 
 # ── Serialization ──
@@ -375,8 +403,8 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
         select(OntologyEvent, Document.bates_begin)
         .join(Document, OntologyEvent.document_id == Document.id)
         .where(OntologyEvent.production_id == production_id))).all()
-    events = [r[0] for r in rows]
-    if not events:
+    all_events = [r[0] for r in rows]
+    if not all_events:
         return {"status": "empty", "merged": 0, "deleted": 0, "edited": 0,
                 "rerated": 0, "skipped": 0, "skip_reasons": []}
     bates = {r[0].id: r[1] for r in rows}
@@ -384,10 +412,18 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
     name_rows = (await db.execute(
         select(EventParticipant.event_id, Entity.canonical_name)
         .join(Entity, EventParticipant.entity_id == Entity.id)
-        .where(EventParticipant.event_id.in_([e.id for e in events])))).all()
+        .where(EventParticipant.event_id.in_([e.id for e in all_events])))).all()
     participants: dict[int, list[str]] = {}
     for ev_id, name in name_rows:
         participants.setdefault(ev_id, []).append(name)
+
+    # Cap what one call sees: a large matter's full timeline overflows the
+    # context window. Events left out are kept untouched (silence = keep).
+    events = cap_events(all_events, {k: len(v) for k, v in participants.items()})
+    sampled = len(events) < len(all_events)
+    if sampled:
+        logger.info("Timeline review for production %s sampled %d of %d events",
+                    production_id, len(events), len(all_events))
 
     serialized = serialize_timeline(events, bates, participants)
     # The model call takes minutes. End the read transaction first so the
@@ -407,10 +443,15 @@ async def run_timeline_review(db, production_id: int, actor) -> dict:
     verdicts = parse_review_response(raw)
     summary = await apply_verdicts(db, production_id, verdicts, actor)
     summary["status"] = "done"
+    summary["sampled"] = sampled
+    summary["events_total"] = len(all_events)
+    summary["events_reviewed"] = len(events)
     await log_action(db, actor, "timeline_review_completed", "production",
                      str(production_id), production_id=production_id,
                      details={"model": REVIEW_MODEL, "usage": usage,
                               "event_count": len(events),
+                              "sampled": sampled,
+                              "events_total": len(all_events),
                               "verdict_count": len(verdicts),
                               "skip_reasons": summary["skip_reasons"],
                               **{k: summary[k] for k in

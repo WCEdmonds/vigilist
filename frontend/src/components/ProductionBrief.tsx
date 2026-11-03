@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getByBates, getPipeline, listEntities, runPipeline } from '../api/client';
 import { entityDisplayName, isEntityNoise } from '../utils/entityDisplay';
 import { showToast } from './Toast';
+import MatterNotices from './MatterNotices';
 import type { EntityListItem, PipelineInfo, PipelineStageState, PipelineStatus, ProductionInfo } from '../types';
 
 const POLL_MS = 5000;
@@ -25,9 +26,20 @@ function safeSet(key: string, value: string) {
   try { window.localStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
 
+// "waiting" (a Message Batch is in flight) and "applying" (its results are
+// being written) are live states of the batched stages, not stalls.
+const isLive = (s: PipelineStageState | undefined) => s === 'running' || s === 'waiting' || s === 'applying';
+
 function anyStageRunning(status: PipelineStatus | null | undefined): boolean {
   if (!status) return false;
-  return status.clustering === 'running' || status.summaries === 'running' || status.brief === 'running';
+  return isLive(status.clustering) || isLive(status.summaries) || isLive(status.brief)
+    || isLive(status.entities) || isLive(status.timeline_review);
+}
+
+/** A batch can legitimately take hours to return; its updated_at stays old meanwhile. */
+function anyStageBatched(status: PipelineStatus | null | undefined): boolean {
+  if (!status) return false;
+  return [status.summaries, status.entities].some(s => s === 'waiting' || s === 'applying');
 }
 
 /**
@@ -39,6 +51,7 @@ function anyStageRunning(status: PipelineStatus | null | undefined): boolean {
  */
 function isActivelyRunning(status: PipelineStatus | null | undefined): boolean {
   if (!anyStageRunning(status)) return false;
+  if (anyStageBatched(status)) return true;
   const ts = status?.updated_at;
   if (!ts) return true;
   const updated = new Date(ts).getTime();
@@ -55,6 +68,8 @@ function stageGlyph(state: PipelineStageState | undefined): string {
   switch (state) {
     case 'done': return '✓';
     case 'running': return '…';
+    case 'waiting': return '… Waiting on batch';
+    case 'applying': return '… Applying results';
     case 'failed': return '!';
     default: return '·';
   }
@@ -115,9 +130,25 @@ interface ProductionBriefProps {
   onOpenEntities?: () => void;
   onOpenGraph?: () => void;
   onOpenTimeline?: () => void;
+  /** Reopen the ingest wizard on a large load waiting for its selection. */
+  onResumeIngest?: (jobId: string) => void;
 }
 
-export default function ProductionBrief({ production, onViewDocument, onPipelineSettled, onOpenEntity, onOpenEntities, onOpenGraph, onOpenTimeline }: ProductionBriefProps) {
+export default function ProductionBrief(props: ProductionBriefProps) {
+  const [refreshKey, setRefreshKey] = useState(0);
+  return (
+    <>
+      <MatterNotices
+        productionId={props.production.id}
+        onResumeIngest={props.onResumeIngest}
+        onAnalysisStarted={() => setRefreshKey(k => k + 1)}
+      />
+      <ProductionBriefBody key={refreshKey} {...props} />
+    </>
+  );
+}
+
+function ProductionBriefBody({ production, onViewDocument, onPipelineSettled, onOpenEntity, onOpenEntities, onOpenGraph, onOpenTimeline }: ProductionBriefProps) {
   const [info, setInfo] = useState<PipelineInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [starting, setStarting] = useState(false);

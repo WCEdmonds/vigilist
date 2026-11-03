@@ -34,6 +34,40 @@ _PST_EXTS = {".pst", ".ost"}
 _MBOX_EXTS = {".mbox"}
 
 
+class OversizedAttachment(bytes):
+    """Empty stand-in for an attachment too large to read whole; ``size`` is
+    its declared size and ``limit`` the cap it exceeded. The attachment becomes
+    an error document with no native file."""
+
+    def __new__(cls, size: int, limit: int):
+        obj = super().__new__(cls, b"")
+        obj.size = int(size)
+        obj.limit = int(limit)
+        return obj
+
+
+class RawEmbeddedMessage(bytes):
+    """An embedded-message attachment that could not be parsed as a message:
+    its raw bytes, kept as the attachment's native file with ``note`` saying
+    why (the document is 'partial', not dropped)."""
+
+    def __new__(cls, data: bytes, note: str):
+        obj = super().__new__(cls, data)
+        obj.note = str(note)
+        return obj
+
+
+class UnreadableAttachment(bytes):
+    """Empty stand-in for an attachment whose bytes could not be read from the
+    container; ``error`` says why. It becomes an error document with no native
+    file, so the attachment is reported instead of silently dropped."""
+
+    def __new__(cls, error: str):
+        obj = super().__new__(cls, b"")
+        obj.error = str(error)
+        return obj
+
+
 @dataclass
 class ParsedMessage:
     from_: str = ""
@@ -50,6 +84,11 @@ class ParsedMessage:
     message_id: str = ""
     in_reply_to: str = ""
     references: str = ""
+    # Attachment filenames referenced inline (cid:) by the HTML body.
+    inline_names: set[str] = field(default_factory=set)
+    # Fields the container reader could not read ("subject: OSError: ...").
+    # The message is kept with what could be read; these are reported.
+    read_errors: list[str] = field(default_factory=list)
 
 
 def _ext(filename: str) -> str:
@@ -95,6 +134,7 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     attachments: list[tuple[str, bytes]] = []
 
     inline_images: dict[str, str] = {}
+    att_cids: dict[str, str] = {}  # attachment filename -> Content-ID
     if msg.is_multipart():
         for part in msg.walk():
             if part.is_multipart():
@@ -106,6 +146,9 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
                 name = part.get_filename() or "attachment"
                 payload = part.get_payload(decode=True) or b""
                 attachments.append((name, payload))
+                cid = (part.get("Content-ID") or "").strip().strip("<>")
+                if cid:
+                    att_cids[name] = cid
             elif content_type == "text/plain":
                 body_parts.append(_decode_part(part))
             elif content_type == "text/html":
@@ -126,7 +169,11 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
     body_text = "\n".join(p for p in body_parts if p).strip()
     if not body_text and html_fallback:
         body_text = _strip_html("\n".join(html_fallback)).strip()
-    body_html = _inline_cid_images("\n".join(html_fallback), inline_images)
+    html_all = "\n".join(html_fallback)
+    body_html = _inline_cid_images(html_all, inline_images)
+    # Inline = the HTML body references the part as cid:<Content-ID>. Checked
+    # against the raw HTML, so images too large to embed still count.
+    inline_names = {n for n, cid in att_cids.items() if references_cid(html_all, cid)}
 
     return ParsedMessage(
         from_=_header(msg, "From"),
@@ -141,6 +188,7 @@ def _parse_eml_bytes(data: bytes) -> ParsedMessage:
         message_id=_header(msg, "Message-ID"),
         in_reply_to=_header(msg, "In-Reply-To"),
         references=" ".join(_header(msg, "References").split()),
+        inline_names=inline_names,
     )
 
 
@@ -160,6 +208,16 @@ def _collect_inline_image(part: Message, out: dict[str, str]) -> None:
     if not payload or len(payload) > _INLINE_IMAGE_MAX_BYTES:
         return
     out[cid] = f"data:{part.get_content_type()};base64,{base64.b64encode(payload).decode('ascii')}"
+
+
+def references_cid(html: str, cid: str) -> bool:
+    """True if ``html`` references the whole Content-ID ``cid`` (``cid:logo1``
+    must not match ``cid:logo10``). The token ends where ``_inline_cid_images``
+    ends it: a quote, whitespace, ``>`` or ``)``, or the end of the text."""
+    import re
+
+    return bool(cid) and re.search(
+        "cid:" + re.escape(cid) + r"""(?=["'\s>)]|$)""", html or "", re.I) is not None
 
 
 def _inline_cid_images(html: str, images: dict[str, str]) -> str:

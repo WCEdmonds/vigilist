@@ -995,11 +995,19 @@ async def trigger_timeline_review(
                             detail="A timeline review is already queued or running; "
                                    "retry with force=true if it appears stuck")
 
+    from app.services import tasks as task_service
+    configured = task_service.is_configured()
+    if configured and prod is not None and prod.ai_hold:
+        # The Cloud Tasks path walks the whole pipeline, which would sweep the
+        # held documents into paid summaries/entities without the estimate.
+        raise HTTPException(status_code=409,
+                            detail="AI analysis is on hold for this matter. Run it from "
+                                   "the matter page to see the cost estimate first.")
+
     await log_action(db, user, "timeline_review_triggered", "production",
                      str(production_id), production_id=production_id)
 
-    from app.services import tasks as task_service
-    if task_service.is_configured():
+    if configured:
         if prod is not None:
             # Reassign (not mutate in place) so SQLAlchemy detects the JSONB
             # change -- in-place mutation of the existing dict is invisible

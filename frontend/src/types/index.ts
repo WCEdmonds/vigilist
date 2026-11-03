@@ -236,11 +236,50 @@ export interface PendingInviteEntry {
   created_at: string;
 }
 
+export type IngestJobStatus =
+  | 'pending' | 'surveying' | 'awaiting_selection' | 'processing' | 'finalizing' | 'complete' | 'failed';
+
+export interface ContainerTypeCount {
+  type: string;
+  count: number;
+  bytes: number;
+}
+
+/** Load estimate for one container selection (mirrors the backend's estimate_load). */
+export interface LoadEstimate {
+  items: number;
+  bytes: number;
+  minutes: number;
+  usd: number;
+  storage_gb: number;
+  over_budget: boolean;
+}
+
+/** One surveyed large mailbox container awaiting (or past) the "what to bring in" choice. */
+export interface IngestContainer {
+  storage_path: string;
+  name: string;
+  size_bytes: number;
+  /** Items outside recoverable/deleted folders, per type. */
+  types: ContainerTypeCount[];
+  recoverable: { count: number; bytes: number; types: ContainerTypeCount[] };
+  selected: boolean;
+  estimate: LoadEstimate;
+}
+
+/** Linear cost model constants from the API, for live client-side estimates. */
+export interface EstimateModel {
+  usd_per_item: number;
+  usd_per_byte: number;
+  items_per_second: number;
+  budget_usd: number;
+}
+
 export interface IngestJob {
   id: string;
   production_id: number;
   production_name: string;
-  status: 'pending' | 'processing' | 'complete' | 'failed';
+  status: IngestJobStatus;
   total_files: number;
   processed_files: number;
   skipped_files: number;
@@ -249,6 +288,26 @@ export interface IngestJob {
   errors: string[];
   created_at: string;
   completed_at: string | null;
+  /** Large-container loads: messages selected / loaded / failed. */
+  items_total?: number;
+  items_done?: number;
+  items_failed?: number;
+  containers?: IngestContainer[];
+  estimate_model?: EstimateModel | Record<string, never>;
+}
+
+export interface AwaitingIngest {
+  job_id: string;
+  name: string;
+  size_bytes: number;
+}
+
+export interface AiEstimate {
+  held: boolean;
+  documents_pending: number;
+  usd_estimate: number;
+  /** Caller may start analysis (manager or admin on this matter). */
+  can_run: boolean;
 }
 
 export interface AuditLogEntry {
@@ -457,12 +516,14 @@ export interface ProductionBriefData {
   model: string;
 }
 
-export type PipelineStageState = 'pending' | 'running' | 'done' | 'failed';
+export type PipelineStageState = 'pending' | 'running' | 'done' | 'failed' | 'waiting' | 'applying';
 
 export interface PipelineStatus {
   clustering?: PipelineStageState;
   summaries?: PipelineStageState;
   brief?: PipelineStageState;
+  entities?: PipelineStageState;
+  timeline_review?: PipelineStageState;
   errors?: Record<string, string>;
   updated_at?: string;
 }

@@ -18,10 +18,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, IngestJob, Production
-from app.services.email_parse import ParsedMessage, expand_email
-from app.services.extractors import extract
+from app.services.email_parse import (
+    OversizedAttachment,
+    ParsedMessage,
+    RawEmbeddedMessage,
+    UnreadableAttachment,
+    expand_email,
+)
+from app.services.extractors import extract, extract_attachment
+from app.services.large_ingest import is_large_container
 from app.services.metadata_normalize import normalize_date
-from app.services.storage import get_download_bytes, list_files
+from app.services.storage import get_download_bytes, get_size, list_files
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +60,16 @@ def list_native_sources(production_id: int, load_prefix: str | None = None) -> l
     items: list[dict] = []
     for path in all_files:
         relative_path = path[len(prefix):] if path.startswith(prefix) else path
+        filename = os.path.basename(relative_path)
+        # Only mailbox containers need a size (large-container routing); a
+        # metadata lookup per loose file would be wasted round trips.
+        size = get_size(path) if os.path.splitext(filename)[1].lower() in _PST_EXTS else 0
         items.append(
             {
                 "storage_path": path,
                 "relative_path": relative_path,
-                "filename": os.path.basename(relative_path),
+                "filename": filename,
+                "size": size,
             }
         )
     return items
@@ -95,7 +107,7 @@ def build_email_documents(
     msg_bytes: bytes,
     *,
     native_path: str | None = None,
-    extract_fn=extract,
+    extract_fn=None,
     ocr_fn=None,
     store_fn=None,
 ) -> list[Document]:
@@ -145,7 +157,44 @@ def build_email_documents(
     docs: list[Document] = [parent]
     for k, (att_name, att_bytes) in enumerate(parsed.attachments, start=1):
         att_control = f"{message_control} .{k:04d}"
-        res = extract_fn(att_name, att_bytes, ocr_fn=ocr_fn)
+        if isinstance(att_bytes, (OversizedAttachment, UnreadableAttachment)):
+            # Never read: no text, no stored native, no hash.
+            if isinstance(att_bytes, OversizedAttachment):
+                why = (f"attachment too large to load ({att_bytes.size:,} bytes; "
+                       f"limit {att_bytes.limit:,}); not extracted or stored")
+            else:
+                why = f"{att_bytes.error}; not extracted or stored"[:500]
+            docs.append(Document(
+                production_id=production_id,
+                bates_begin=att_control,
+                bates_end=att_control,
+                page_count=1,
+                metadata_={"File Name": att_name, "Parent": message_control},
+                title=(att_name[:200] or None),
+                text_content=None,
+                native_path=None,
+                image_paths=[],
+                family_id=message_control,
+                file_name=att_name,
+                file_type=os.path.splitext(att_name)[1].lower().lstrip(".") or "unknown",
+                source_path=source_path,
+                custodian=custodian,
+                extraction_status="error",
+                extraction_error=why,
+            ))
+            continue
+        if isinstance(att_bytes, RawEmbeddedMessage):
+            # Not text we can read: keep the raw bytes as the native file.
+            from app.services.extractors import ExtractResult
+
+            res = ExtractResult("", "email", "partial", att_bytes.note[:500])
+        elif extract_fn is None:
+            res = extract_attachment(
+                att_name, att_bytes,
+                inline=(att_name in parsed.inline_names), ocr_fn=ocr_fn,
+            )
+        else:
+            res = extract_fn(att_name, att_bytes, ocr_fn=ocr_fn)
         # Store the attachment itself so it can be previewed and produced
         # natively. Best-effort: without it the document still has its text.
         att_native = None
@@ -816,6 +865,7 @@ async def ingest_native_batch(
     """Process one batch of native files. Mirrors ``ingest_pdf_batch``."""
     from app.services.ingest import (
         _finalize_job_if_done,
+        append_job_errors,
         _incr_skipped,
         _mark_source_done,
         _persist_document,
@@ -839,6 +889,11 @@ async def ingest_native_batch(
 
     items = list_native_sources(production_id, load_prefix)
     errors: list[str] = list(job.errors or [])
+    # A job with large containers has chunks (and the finalize reconciliation)
+    # appending errors concurrently: append only this batch's messages instead
+    # of overwriting with a snapshot.
+    append_errors = bool(fm.get("large_containers"))
+    errors_before = len(errors)
 
     slice_pairs = [(idx, items[idx]) for idx in range(start_idx, min(end_idx, len(items)))]
     storage_paths = [item["storage_path"] for _, item in slice_pairs]
@@ -853,6 +908,9 @@ async def ingest_native_batch(
         existing = {row[0] for row in result.all()}
 
     for global_index, item in slice_pairs:
+        if is_large_container(item):
+            # Surveyed and loaded by the chunked large-container path.
+            continue
         control_number = f"{prefix} {offset + global_index + 1:06d}"
         skip_key = f"native:{item['storage_path']}"
         if item["storage_path"] in existing:
@@ -910,5 +968,8 @@ async def ingest_native_batch(
             await db.rollback()
             await _incr_skipped(db, job_id, skip_key)
 
-    await _persist_job_errors(db, job_id, errors)
+    if append_errors:
+        await append_job_errors(db, job_id, errors[errors_before:])
+    else:
+        await _persist_job_errors(db, job_id, errors)
     await _finalize_job_if_done(db, job, production_id, errors)

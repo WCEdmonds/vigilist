@@ -65,9 +65,44 @@ def _get_signing_context() -> tuple[object | None, str | None]:
     return _signing_credentials, _signing_sa_email
 
 
+def _ensure_app() -> None:
+    """Initialize the default Firebase app if nothing has yet. The API does it
+    when the auth router is imported; the explode Job never imports it."""
+    if firebase_admin._apps:
+        return
+    try:
+        firebase_admin.initialize_app()
+    except ValueError:
+        pass  # initialized concurrently
+
+
+# HTTP connections per Storage client. requests' default pool is 10, which
+# the explode Job's 32 upload threads (and the 16-way sliced download) would
+# overflow: connections get discarded and re-opened.
+STORAGE_POOL_SIZE = 64
+
+
+def _widen_pool(bucket) -> None:
+    """Mount a larger connection pool on the bucket client's session (once)."""
+    try:
+        session = bucket.client._http
+    except Exception:
+        return
+    if getattr(session, "_vigilist_pool", False) or not hasattr(session, "mount"):
+        return
+    from requests.adapters import HTTPAdapter
+
+    adapter = HTTPAdapter(pool_connections=STORAGE_POOL_SIZE, pool_maxsize=STORAGE_POOL_SIZE)
+    session.mount("https://", adapter)
+    session._vigilist_pool = True
+
+
 def get_bucket():
     """Get the Firebase Storage bucket."""
-    return storage.bucket(settings.firebase_storage_bucket)
+    _ensure_app()
+    bucket = storage.bucket(settings.firebase_storage_bucket)
+    _widen_pool(bucket)
+    return bucket
 
 
 def download_file(remote_path: str, local_path: str) -> str:
@@ -117,6 +152,33 @@ def get_download_bytes(remote_path: str) -> bytes:
     bucket = get_bucket()
     blob = bucket.blob(remote_path)
     return blob.download_as_bytes()
+
+
+def get_size(remote_path: str) -> int:
+    """Object size in bytes (0 when the object is missing)."""
+    blob = get_bucket().get_blob(remote_path)
+    return int(blob.size or 0) if blob is not None else 0
+
+
+# Sliced download of a large object: parallel ranged reads into one local
+# file (measured ~207 s for an 11.2 GB PST at ~1x read amplification).
+SLICED_CHUNK_BYTES = 64 * 1024 * 1024
+SLICED_WORKERS = 16
+
+
+def download_sliced(remote_path: str, local_path: str) -> str:
+    """Download a large object to ``local_path`` with parallel ranged reads.
+    Only the explode Job calls this (its /tmp is in memory)."""
+    from google.cloud.storage import transfer_manager
+
+    blob = get_bucket().blob(remote_path)
+    blob.reload()  # the chunked download needs the object size
+    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    transfer_manager.download_chunks_concurrently(
+        blob, local_path, chunk_size=SLICED_CHUNK_BYTES, max_workers=SLICED_WORKERS,
+        worker_type=transfer_manager.THREAD,
+    )
+    return local_path
 
 
 def get_signed_url(

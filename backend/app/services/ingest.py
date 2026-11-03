@@ -13,7 +13,7 @@ from app.config import settings
 from app.models import Document, Production
 from app.services.field_mapping import match_aliases
 from app.services.images import convert_document_images
-from app.services.ai import generate_titles_batch
+from app.services.ai import generate_titles_batch, is_refusal, mark_ai_refused
 from app.services.metadata_normalize import derive_file_type, promote_record
 from app.utils.parsers import parse_dat, parse_opt
 
@@ -572,13 +572,52 @@ async def _persist_job_errors(db: AsyncSession, job_id: str, errors: list[str]) 
     await db.commit()
 
 
-async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]) -> None:
+# Appends in one statement: parallel chunks each add their own messages and
+# never overwrite another writer's (unlike _persist_job_errors' snapshot).
+_APPEND_JOB_ERRORS_SQL = (
+    "UPDATE ingest_jobs SET errors = errors || cast(:new as jsonb) WHERE id = :jid"
+)
+
+
+async def append_job_errors(db: AsyncSession, job_id: str, messages: list[str],
+                            *, commit: bool = True) -> None:
+    """Atomically append ``messages`` to the job's errors.
+
+    ``commit=False`` leaves it in the caller's transaction, so it can commit
+    together with a related counter or status change.
+    """
+    if not messages:
+        return
+    await db.execute(text(_APPEND_JOB_ERRORS_SQL), {"new": json.dumps(list(messages)), "jid": job_id})
+    if commit:
+        await db.commit()
+
+
+_INCR_JOB_ITEMS_SQL = (
+    "UPDATE ingest_jobs SET items_done = items_done + :d, items_failed = items_failed + :f "
+    "WHERE id = :jid"
+)
+
+
+async def incr_job_items(db: AsyncSession, job_id: str, done: int = 0, failed: int = 0,
+                         *, commit: bool = True) -> None:
+    """Atomically add to the job's large-container item counters."""
+    await db.execute(text(_INCR_JOB_ITEMS_SQL), {"d": done, "f": failed, "jid": job_id})
+    if commit:
+        await db.commit()
+
+
+async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document],
+                             *, items_done: int = 0) -> None:
     """Persist a group of Documents atomically: one flush + one commit for all.
 
     Used for email families (parent + attachments), which must commit together —
     a failure before the single commit leaves nothing persisted, so a Cloud Tasks
     retry re-expands the whole container cleanly instead of skipping it on a
     partially-committed parent (whose native_path would satisfy the dedup check).
+
+    ``items_done`` (large-container path) is counted in the same UPDATE, so a
+    crash can never commit a family without its count, or count it twice.
     """
     if not docs:
         return
@@ -596,10 +635,19 @@ async def _persist_documents(db: AsyncSession, job_id: str, docs: list[Document]
             ),
             {"id": doc.id},
         )
-    await db.execute(
-        text("UPDATE ingest_jobs SET processed_files = processed_files + :n WHERE id = :jid"),
-        {"n": len(docs), "jid": job_id},
-    )
+    if items_done:
+        await db.execute(
+            text(
+                "UPDATE ingest_jobs SET processed_files = processed_files + :n, "
+                "items_done = items_done + :d WHERE id = :jid"
+            ),
+            {"n": len(docs), "d": items_done, "jid": job_id},
+        )
+    else:
+        await db.execute(
+            text("UPDATE ingest_jobs SET processed_files = processed_files + :n WHERE id = :jid"),
+            {"n": len(docs), "jid": job_id},
+        )
     await db.commit()
 
 
@@ -608,45 +656,116 @@ async def _persist_document(db: AsyncSession, job_id: str, doc: Document) -> Non
     await _persist_documents(db, job_id, [doc])
 
 
+async def generate_missing_titles(
+    db: AsyncSession,
+    production_id: int,
+    errors: list[str],
+    *,
+    ai_limit: int | None = None,
+    ai_timeout_s: float | None = None,
+) -> None:
+    """Title the production's untitled documents: AI titles (at most
+    ``ai_limit`` of them, within ``ai_timeout_s``, when set), then the original
+    filename as a fallback."""
+    result = await db.execute(
+        select(Document).where(
+            Document.production_id == production_id,
+            Document.title.is_(None),
+        )
+    )
+    untitled_docs = list(result.scalars().all())
+
+    # A document the model refused to title is not asked again.
+    askable = [d for d in untitled_docs
+               if "titles" not in ((d.metadata_ or {}).get("ai_refused") or [])]
+    targets = askable if ai_limit is None else askable[:max(ai_limit, 0)]
+    if settings.anthropic_api_key and targets:
+        try:
+            texts_for_titles = [(str(d.id), d.text_content) for d in targets]
+            if ai_timeout_s is None:
+                titles = await generate_titles_batch(texts_for_titles)
+            else:
+                titles = await asyncio.wait_for(
+                    generate_titles_batch(texts_for_titles), timeout=max(ai_timeout_s, 0))
+            for d in targets:
+                t = titles.get(str(d.id))
+                if is_refusal(t):
+                    mark_ai_refused(d, "titles")
+                elif t:
+                    d.title = t
+        except TimeoutError:
+            logger.warning("AI titles deferred: time budget reached for production %s", production_id)
+            errors.append("AI titles deferred: time budget reached; filename titles kept")
+        except Exception as e:
+            logger.exception("AI title generation failed")
+            errors.append(f"AI title generation skipped: {e}")
+
+    # Fallback: any doc still untitled (sparse/blank text, or no API key)
+    # keeps its original filename so it is never left blank. Scoped to docs
+    # that carry a "File Name" (the generic-PDF path); Relativity docs have
+    # none and stay NULL exactly as before.
+    for d in untitled_docs:
+        if not d.title and isinstance(d.metadata_, dict) and d.metadata_.get("File Name"):
+            d.title = os.path.splitext(d.metadata_["File Name"])[0][:200]
+    await db.commit()
+
+
+# A normal load adding more documents than this holds the ambient pipeline
+# (per-document AI) until someone explicitly runs analysis.
+AI_HOLD_DOC_THRESHOLD = 5_000
+
+
+def should_hold(production, docs_added: int, had_large_container: bool) -> bool:
+    """True when the ambient pipeline must not start on its own.
+
+    The hold is sticky: once set on the production it stays until an explicit
+    analysis run clears it, so later small loads into a held matter don't
+    quietly start paid work either.
+    """
+    return bool(
+        getattr(production, "ai_hold", False)
+        or had_large_container
+        or docs_added > AI_HOLD_DOC_THRESHOLD
+    )
+
+
 async def _finalize_job_if_done(
     db: AsyncSession,
     job: "IngestJob",
     production_id: int,
     errors: list[str],
 ) -> None:
-    """Finalize the job (AI titles + mark complete) once all files are accounted for."""
+    """Finalize the job (AI titles + mark complete) once all files are accounted for.
+
+    A job with large containers finalizes through ``large_ingest.maybe_finalize``
+    (fanned-out embeddings, no inline AI, no pipeline); a normal batch that
+    finishes last still has to trigger it.
+    """
     from datetime import datetime, timezone
 
+    # Refresh first: a mid-batch rollback expired the row, and a lazy load of
+    # field_mapping on the async session would MissingGreenlet.
     await db.refresh(job)
+    if (job.field_mapping or {}).get("large_containers"):
+        from app.services import large_ingest
+
+        await large_ingest.maybe_finalize(db, str(job.id))
+        return
+
     if job_is_done(job) and job.status == "processing":
-        result = await db.execute(
-            select(Document).where(
-                Document.production_id == production_id,
-                Document.title.is_(None),
-            )
-        )
-        untitled_docs = list(result.scalars().all())
+        production = await db.get(Production, production_id)
+        held = should_hold(production, job.processed_files or 0, False)
+        if held:
+            # A held load gets the same bounded AI titling as a large-container
+            # load; the rest keep the filename fallback until analysis runs.
+            from app.services.large_ingest_finalize import POST_AI_TITLE_LIMIT
 
-        if settings.anthropic_api_key and untitled_docs:
-            try:
-                texts_for_titles = [(str(d.id), d.text_content) for d in untitled_docs]
-                titles = await generate_titles_batch(texts_for_titles)
-                for d in untitled_docs:
-                    t = titles.get(str(d.id))
-                    if t:
-                        d.title = t
-            except Exception as e:
-                logger.exception("AI title generation failed")
-                errors.append(f"AI title generation skipped: {e}")
-
-        # Fallback: any doc still untitled (sparse/blank text, or no API key)
-        # keeps its original filename so it is never left blank. Scoped to docs
-        # that carry a "File Name" (the generic-PDF path); Relativity docs have
-        # none and stay NULL exactly as before.
-        for d in untitled_docs:
-            if not d.title and isinstance(d.metadata_, dict) and d.metadata_.get("File Name"):
-                d.title = os.path.splitext(d.metadata_["File Name"])[0][:200]
-        await db.commit()
+            await generate_missing_titles(db, production_id, errors,
+                                          ai_limit=POST_AI_TITLE_LIMIT)
+            if production is not None:
+                production.ai_hold = True
+        else:
+            await generate_missing_titles(db, production_id, errors)
 
         job.status = "complete"
         job.errors = errors
@@ -676,6 +795,10 @@ async def _finalize_job_if_done(
         # Ambient AI pipeline (clustering -> summaries -> brief). Best-effort:
         # never blocks ingest completion. Prod fans out via Cloud Tasks so the
         # long-running work doesn't ride on this request; locally we detach.
+        # A held production waits for an explicit run (with its estimate).
+        if held:
+            logger.info("AI hold: ambient pipeline not started for production %s", production_id)
+            return
         try:
             from app.services import tasks as task_service
             from app.services.pipeline import run_ambient_pipeline

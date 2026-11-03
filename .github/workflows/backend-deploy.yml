@@ -21,6 +21,8 @@ jobs:
       REGION: us-central1
       SERVICE_NAME: vigilist-api
       WORKER_NAME: vigilist-worker
+      # Must match settings.explode_job_name (backend/app/config.py).
+      EXPLODE_JOB_NAME: vigilist-pst-explode
       TASKS_QUEUE: vigilist-ingest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +56,12 @@ jobs:
         run: |
           gcloud tasks queues describe $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID 2>/dev/null \
             || gcloud tasks queues create $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID
+          # Throttle dispatch to what the worker can take, so Cloud Tasks queues
+          # work instead of collecting 429s and backing off. 30 concurrent
+          # dispatches = vigilist-worker --max-instances 30 x --concurrency 1
+          # (below); change them together. max-attempts stays at the default 100.
+          gcloud tasks queues update $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID \
+            --max-concurrent-dispatches=30 --max-dispatches-per-second=10 --min-backoff=5s
 
       - name: Grant Cloud Run compute SA cloudtasks.enqueuer
         run: |
@@ -131,6 +139,9 @@ jobs:
           IMAGE=$(echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].image')
           # Same configuration as the web service (values are never echoed).
           echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].env[]? | select(.value != null) | "\(.name): \(.value | @json)"' > "$RUNNER_TEMP/worker-env.yaml"
+          # --timeout must match large_ingest_chunk.WORKER_REQUEST_TIMEOUT_S (chunk stale window = it + 300 s).
+          # --max-instances 30 is provisional pending a speed test; the queue's
+          # --max-concurrent-dispatches (queue step above) must match it.
           gcloud run deploy $WORKER_NAME \
             --image "$IMAGE" \
             --region $REGION \
@@ -138,12 +149,12 @@ jobs:
             --platform managed \
             --no-allow-unauthenticated \
             --service-account ${{ steps.meta.outputs.compute_sa }} \
-            --timeout 3600 \
+            --timeout 1800 \
             --memory 4Gi \
             --cpu 2 \
-            --concurrency 4 \
+            --concurrency 1 \
             --min-instances 0 \
-            --max-instances 5 \
+            --max-instances 30 \
             --env-vars-file "$RUNNER_TEMP/worker-env.yaml" \
             --quiet
           rm -f "$RUNNER_TEMP/worker-env.yaml"
@@ -171,3 +182,59 @@ jobs:
                 --update-env-vars="VIGILIST_CLOUD_TASKS_WORKER_URL=$WORKER_URL" --quiet
             fi
           done
+
+      # Large PSTs (>= 1 GB) are unpacked once by a Cloud Run Job
+      # (backend/app/jobs/explode_pst.py): it downloads the PST into its
+      # in-memory /tmp, surveys it and explodes every item to Storage, so the
+      # chunk workers never open the PST. Same image and configuration as the
+      # worker; sized to hold an 11+ GB PST in memory.
+      - name: Deploy PST explode job (worker's image)
+        run: |
+          IMAGE=$(gcloud run services describe $WORKER_NAME --region=$REGION --project=$PROJECT_ID \
+            --format='value(spec.template.spec.containers[0].image)')
+          if [ -z "$IMAGE" ]; then
+            echo "::error::Could not resolve the $WORKER_NAME image."
+            exit 1
+          fi
+          # The worker's env (values are never echoed), VIGILIST_DATABASE_URL
+          # included, resolved from the service JSON with jq as above.
+          # Secret-ref env vars (valueFrom) are intentionally not copied, as
+          # for the worker: only plain values are carried over.
+          # The file holds the DB URL: remove it however this step exits.
+          trap 'rm -f "$RUNNER_TEMP/explode-env.yaml"' EXIT
+          gcloud run services describe $WORKER_NAME --region=$REGION --project=$PROJECT_ID --format=json \
+            | jq -r '.spec.template.spec.containers[0].env[]? | select(.value != null) | "\(.name): \(.value | @json)"' \
+            > "$RUNNER_TEMP/explode-env.yaml"
+          if ! grep -q '^VIGILIST_DATABASE_URL:' "$RUNNER_TEMP/explode-env.yaml"; then
+            echo "::error::Could not resolve VIGILIST_DATABASE_URL from $WORKER_NAME for the explode job."
+            rm -f "$RUNNER_TEMP/explode-env.yaml"
+            exit 1
+          fi
+          # --max-retries must match pst_explode.EXPLODE_JOB_MAX_RETRIES (2:
+          # three runs = large_ingest.MAX_SURVEY_ATTEMPTS; the last run gives
+          # the container up). Runs are started per container
+          # with arg overrides (pst_explode.trigger_explode_job).
+          gcloud run jobs deploy $EXPLODE_JOB_NAME \
+            --image "$IMAGE" \
+            --region $REGION \
+            --project $PROJECT_ID \
+            --service-account ${{ steps.meta.outputs.compute_sa }} \
+            --cpu 8 \
+            --memory 32Gi \
+            --task-timeout 4h \
+            --max-retries 2 \
+            --tasks 1 \
+            --command python \
+            --args=-m,app.jobs.explode_pst \
+            --env-vars-file "$RUNNER_TEMP/explode-env.yaml" \
+            --quiet
+          rm -f "$RUNNER_TEMP/explode-env.yaml"
+
+      # jobs.run with container overrides needs run.jobs.runWithOverrides
+      # (roles/run.developer), bound on this job only, not the project.
+      - name: Allow the compute SA to run the explode job with overrides
+        run: |
+          gcloud run jobs add-iam-policy-binding $EXPLODE_JOB_NAME \
+            --member="serviceAccount:${{ steps.meta.outputs.compute_sa }}" \
+            --role="roles/run.developer" \
+            --region=$REGION --project=$PROJECT_ID --quiet

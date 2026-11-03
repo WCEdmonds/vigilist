@@ -146,6 +146,63 @@ async def chunk_and_embed_document(db: AsyncSession, doc_id: str) -> int:
     return embedded
 
 
+async def embed_documents(db: AsyncSession, doc_ids) -> int:
+    """Chunk several documents and embed all of their chunks together, packed
+    into as few Voyage calls as ``_pack_batches`` allows, then store each
+    document's chunks with its own commit (replacing any it had).
+
+    Returns the number of documents stored. Raises if the embedding calls
+    fail (nothing is stored) or if storing any document failed (the others
+    are kept), so the caller can retry.
+    """
+    from app.models import Document, DocumentChunk
+
+    ids = list(doc_ids)
+    if not ids:
+        return 0
+    rows = (await db.execute(
+        select(Document.id, Document.text_content).where(Document.id.in_(ids))
+    )).all()
+    await db.commit()  # release the connection during the Voyage calls
+
+    per_doc: list[tuple] = []
+    texts: list[str] = []
+    for doc_id, text in rows:
+        chunks = chunk_text(text) if text else []
+        if chunks:
+            per_doc.append((doc_id, len(texts), chunks))
+            texts.extend(chunks)
+    if not texts:
+        return 0
+
+    vectors = await asyncio.to_thread(embed_texts, texts)
+    if len(vectors) != len(texts):
+        logger.error("Embedding count mismatch: %d chunks, %d embeddings", len(texts), len(vectors))
+        return 0
+
+    stored = 0
+    failed = 0
+    for doc_id, start, chunks in per_doc:
+        try:
+            await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == doc_id))
+            for i, chunk in enumerate(chunks):
+                vector = vectors[start + i]
+                if vector is None:  # rejected by Voyage; the rest still embed
+                    continue
+                db.add(DocumentChunk(document_id=doc_id, chunk_index=i, content=chunk,
+                                     embedding=vector))
+            await db.commit()
+            stored += 1
+        except Exception:
+            await db.rollback()
+            logger.exception("Storing embeddings failed for doc %s", doc_id)
+            failed += 1
+    logger.info("Embedded %d documents (%d chunks)", stored, len(texts))
+    if failed:
+        raise RuntimeError(f"storing embeddings failed for {failed} of {len(per_doc)} documents")
+    return stored
+
+
 async def embed_production_documents(db: AsyncSession, production_id: int) -> int:
     """Chunk and embed every document in a production that has text but no
     chunks yet. Called at the end of ingest so semantic search, clustering,

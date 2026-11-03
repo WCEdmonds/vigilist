@@ -89,6 +89,9 @@ class Production(Base):
     case_context = Column(Text, nullable=True)
     brief = Column(JSONB, nullable=True)
     ai_pipeline_status = Column(JSONB, nullable=True)
+    # Set when a load contains a large container or adds many documents; sticks
+    # until someone explicitly runs analysis.
+    ai_hold = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     documents = relationship("Document", back_populates="production")
@@ -350,11 +353,51 @@ class IngestJob(Base):
     done_keys = Column(JSONB, nullable=False, default=list, server_default="[]")
     errors = Column(JSONB, nullable=False, default=list)
     field_mapping = Column(JSONB, nullable=False, default=dict)
+    # Large-container ingest: keyed by storage_path.
+    survey = Column(JSONB, nullable=False, default=dict, server_default="{}")
+    selection = Column(JSONB, nullable=False, default=dict, server_default="{}")
+    items_total = Column(Integer, nullable=False, default=0, server_default="0")
+    items_done = Column(Integer, nullable=False, default=0, server_default="0")
+    items_failed = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     completed_at = Column(DateTime, nullable=True)
 
     production = relationship("Production")
     user = relationship("User")
+
+
+class IngestChunk(Base):
+    """One independently retryable unit of a large-container load."""
+
+    __tablename__ = "ingest_chunks"
+    __table_args__ = (Index("ix_ingest_chunks_job_status", "job_id", "status"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("ingest_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(10), nullable=False)  # items | embed | post
+    container_path = Column(String(500), nullable=True)
+    slices = Column(JSONB, nullable=False, default=list, server_default="[]")  # [[folder_index, start, end], ...]
+    doc_ids = Column(JSONB, nullable=False, default=list, server_default="[]")  # embed chunks
+    type_filter = Column(JSONB, nullable=False, default=list, server_default="[]")
+    global_offset = Column(Integer, nullable=False, default=0, server_default="0")
+    item_count = Column(Integer, nullable=False, default=0, server_default="0")
+    status = Column(String(12), nullable=False, default="pending", server_default="pending")
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    error = Column(Text, nullable=True)
+    parent_id = Column(UUID(as_uuid=True), nullable=True)
+    # items chunks: local position of the item being built, written before
+    # each build and cleared when an attempt releases after an error. Left
+    # set only by a worker that died mid-item.
+    cursor = Column(Integer, nullable=True)
+    # Consecutive attempts that started building the item at ``cursor``. The
+    # item is skipped as poison only after two attempts died on it.
+    cursor_hits = Column(Integer, nullable=False, default=0, server_default="0")
+    # Requests for this chunk that failed before its claim (e.g. database
+    # unavailable). Past the cap the task is acknowledged and the failure
+    # recorded on the job, instead of crash-looping under Cloud Tasks.
+    preclaim_failures = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
 class AuditLog(Base):

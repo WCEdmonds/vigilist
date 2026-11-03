@@ -154,3 +154,111 @@ def extract(filename: str, data: bytes, ocr_fn=None) -> ExtractResult:
         return ExtractResult("", ft, "unsupported")
     except Exception as e:  # never raise — a bad file is an error row, not a crash
         return ExtractResult("", ft, "error", str(e)[:500])
+
+
+TINY_IMAGE_BYTES = 20_000
+TINY_IMAGE_SIDE_PX = 150
+
+
+def should_ocr_image(name: str, data: bytes, inline: bool) -> bool:
+    """False for inline (cid:) images and for tiny ones (logos, signature
+    icons, tracking pixels) where OCR spend buys nothing. An image PIL cannot
+    read is OCR'd, since we cannot prove it is junk."""
+    if inline or len(data) < TINY_IMAGE_BYTES:
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            return min(im.size) >= TINY_IMAGE_SIDE_PX
+    except Exception:
+        return True
+
+
+# Pages OCR'd per PDF attachment. A scanned attachment of thousands of pages
+# would otherwise be billed (and rendered) page by page inside one worker
+# request; pages past the cap keep their text layer only.
+MAX_OCR_PAGES_PER_ATTACHMENT = 50
+
+
+def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
+    """Text for a PDF attachment: PyMuPDF text layer per page, OCR only for
+    pages under the ``ingest_pdf`` sparse-text gate, at most
+    ``MAX_OCR_PAGES_PER_ATTACHMENT`` of them. ``ocr_fn(jpeg) -> str``."""
+    import fitz
+
+    from app.services.ingest_pdf import MIN_TEXT_CHARS, RENDER_DPI
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as e:
+        return ExtractResult("", "pdf", "error", str(e)[:500])
+    parts: list[str] = []
+    page_errors: list[str] = []
+    ocr_pages = 0
+    over_cap = 0
+    try:
+        for page in doc:
+            embedded = page.get_text().strip()
+            if sum(1 for c in embedded if not c.isspace()) >= MIN_TEXT_CHARS:
+                parts.append(embedded)
+            elif ocr_fn is not None and ocr_pages >= MAX_OCR_PAGES_PER_ATTACHMENT:
+                over_cap += 1
+                if embedded:
+                    parts.append(embedded)
+            elif ocr_fn is not None:
+                ocr_pages += 1
+                try:
+                    jpeg = page.get_pixmap(dpi=RENDER_DPI, alpha=False).tobytes("jpeg")
+                    t = (ocr_fn(jpeg) or "").strip()
+                except Exception as e:  # one bad page must not drop the rest
+                    page_errors.append(f"page {page.number + 1}: OCR failed: {str(e)[:100]}")
+                    continue
+                if t:
+                    parts.append(t)
+    except Exception as e:
+        text = "\n\n".join(parts)
+        return ExtractResult(text, "pdf", "error", str(e)[:500])
+    finally:
+        doc.close()
+    text = "\n\n".join(parts)
+    if over_cap:
+        page_errors.insert(0, f"{over_cap} pages past the {MAX_OCR_PAGES_PER_ATTACHMENT}-page OCR cap "
+                              "were not OCR'd (text layer only)")
+    if page_errors:
+        return ExtractResult(text, "pdf", "partial", "; ".join(page_errors)[:500])
+    return ExtractResult(text, "pdf", _status_for(text))
+
+
+def _extract_eml(data: bytes) -> ExtractResult:
+    """Text of an attached message (e.g. an embedded PST message): its
+    headers, body and attachment names."""
+    try:
+        from app.services.email_parse import _parse_eml_bytes
+
+        p = _parse_eml_bytes(data)
+        lines = [f"{label}: {value}" for label, value in (
+            ("From", p.from_), ("To", p.to), ("Cc", p.cc), ("Date", p.date_sent or ""),
+            ("Subject", p.subject)) if value]
+        if p.body_text:
+            lines += ["", p.body_text]
+        names = [n for n, _ in p.attachments]
+        if names:
+            lines += ["", "Attachments: " + "; ".join(names)]
+        text = "\n".join(lines)
+        return ExtractResult(text, "email", _status_for(text))
+    except Exception as e:
+        return ExtractResult("", "email", "error", str(e)[:500])
+
+
+def extract_attachment(name: str, data: bytes, *, inline: bool, ocr_fn) -> ExtractResult:
+    """Extraction for an email attachment: PDFs get text, tiny/inline images
+    skip OCR (empty text, status ok), everything else uses ``extract``."""
+    ext = _ext(name)
+    if ext == ".pdf":
+        return extract_pdf_text(data, ocr_fn)
+    if ext == ".eml":
+        return _extract_eml(data)
+    if ext in _IMAGE_EXTS and not should_ocr_image(name, data, inline):
+        return ExtractResult("", "image", "ok")
+    return extract(name, data, ocr_fn=ocr_fn)

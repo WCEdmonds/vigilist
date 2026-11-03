@@ -1,9 +1,10 @@
 """Ingest endpoints: start processing, process batch, check status."""
 
+import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 import re
 
 from sqlalchemy import select, text
@@ -178,6 +179,7 @@ async def start_processing(
             field_mapping["control_offset"] = offset
     batch_size = 10 if source_format in ("generic_pdf", "native") else INGEST_BATCH_SIZE
 
+    large_containers: list[str] = []
     if task_service.is_configured():
         # Count source items to set an accurate total_files, then enqueue tasks
         try:
@@ -186,7 +188,12 @@ async def start_processing(
                 total_files = len(list_pdf_sources(production.id, load_prefix))
             elif source_format == "native":
                 from app.services.ingest_native import list_native_sources
-                total_files = len(list_native_sources(production.id, load_prefix))
+                from app.services.large_ingest import is_large_container
+                native_items = list_native_sources(production.id, load_prefix)
+                total_files = len(native_items)
+                large_containers = [
+                    it["storage_path"] for it in native_items if is_large_container(it)
+                ]
             else:
                 records, _ = bootstrap_ingest_source(production.id, load_prefix)
                 total_files = len(records)
@@ -197,10 +204,14 @@ async def start_processing(
         if total_files == 0:
             raise HTTPException(status_code=400, detail="No ingestable files found in upload")
 
+        if large_containers:
+            field_mapping = {**field_mapping, "large_containers": large_containers}
         job = IngestJob(
             production_id=production.id,
             user_id=user.id,
-            status="processing",
+            # Large containers are surveyed before any paid work; the normal
+            # batches for the other files still run in parallel.
+            status="surveying" if large_containers else "processing",
             source_format=source_format,
             total_files=total_files,
             field_mapping=field_mapping,
@@ -228,6 +239,10 @@ async def start_processing(
         if enqueue_errors:
             job.errors = enqueue_errors
             await db.commit()
+
+        if large_containers:
+            await _start_unpack_jobs(db, job, [it for it in native_items
+                                               if it["storage_path"] in large_containers])
 
         logger.info("Enqueued %d batches for job %s", enqueued, job.id)
 
@@ -257,6 +272,9 @@ async def start_processing(
     await db.commit()
     await db.refresh(job)
 
+    if source_format == "native":
+        await _skip_large_containers_inline(db, job, production.id, load_prefix)
+
     background_tasks.add_task(
         run_ingest_job,
         job_id=str(job.id),
@@ -275,6 +293,99 @@ async def start_processing(
         created_at=job.created_at,
         completed_at=None,
     )
+
+
+async def _start_unpack_jobs(db, job, items: list[dict]) -> None:
+    """Start one explode Job per large container. One too large to unpack, or
+    one whose Job can't be started, is given up on at once, so the job never
+    waits on a Job that isn't running."""
+    from app.services import large_ingest, pst_explode
+    from app.services.pst_reader import short_error
+
+    for item in items:
+        path = item["storage_path"]
+        size = int(item.get("size") or 0)
+        if size > pst_explode.MAX_UNPACK_BYTES:
+            line = pst_explode.too_large_line(item.get("filename") or path.rsplit("/", 1)[-1], size)
+            await large_ingest._give_up_survey(db, str(job.id), path, 0, line, line=line)
+            continue
+        try:
+            await asyncio.to_thread(large_ingest.start_unpack, str(job.id), path)
+        except Exception as e:
+            logger.exception("Failed to start the unpack job for %s", path)
+            await large_ingest._give_up_survey(
+                db, str(job.id), path, 0, short_error(e),
+                reason="the unpack job could not be started")
+
+
+async def _skip_large_containers_inline(db, job, production_id: int, load_prefix) -> None:
+    """Inline mode has no worker for the chunked path: report each large
+    mailbox as an error and count it skipped so the job can still finish."""
+    from app.services.ingest import _incr_skipped
+    from app.services.ingest_native import list_native_sources
+    from app.services.large_ingest import is_large_container, large_source_key
+
+    try:
+        large = [it for it in list_native_sources(production_id, load_prefix) if is_large_container(it)]
+    except Exception:
+        logger.exception("Could not list sources to check for large containers")
+        return
+    if not large:
+        return
+    job.errors = list(job.errors or []) + [
+        f"{it['filename']}: large mailbox loading requires Cloud Tasks" for it in large
+    ]
+    await db.commit()
+    for it in large:
+        await _incr_skipped(db, str(job.id), large_source_key(it["storage_path"]))
+
+
+# A batch-poll request that fails before its stage claim (the database is
+# unavailable) has no row to count on, so the task's own retry count caps it:
+# past this many attempts it is logged and acknowledged with 200, instead of
+# crash-looping for days under the queue's maxAttempts 100.
+PRE_CLAIM_MAX_ATTEMPTS = 3
+_RETRY_HEADER = "X-CloudTasks-TaskRetryCount"
+
+# A chunk request that fails before its claim counts on the chunk row
+# (``ingest_chunks.preclaim_failures``; the retry header resets when a task is
+# re-created). At the cap it is recorded on the job and acknowledged with 200.
+# A failure that can't even be counted answers 500 (Cloud Tasks retries,
+# bounded by the queue's maxAttempts). A dropped chunk task is re-sent by
+# finalize's orphan sweep once the chunk sits stale.
+CHUNK_PRE_CLAIM_MAX_FAILURES = 15
+_BUMP_PRECLAIM_SQL = text(
+    "UPDATE ingest_chunks SET preclaim_failures = preclaim_failures + 1 "
+    "WHERE id = :id RETURNING preclaim_failures, job_id"
+)
+
+
+def _task_attempt(retry_count) -> int:
+    """1-based attempt number from the X-CloudTasks-TaskRetryCount header."""
+    try:
+        return int(retry_count) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+async def _count_chunk_claim_failure(db, chunk_id: str):
+    """Persist one pre-claim failure: ``(failures, job_id)``, or None when the
+    chunk row does not exist. Raises when the count can't be written."""
+    await db.rollback()
+    row = (await db.execute(_BUMP_PRECLAIM_SQL, {"id": chunk_id})).first()
+    await db.commit()
+    return None if row is None else (int(row[0]), row[1])
+
+
+async def _record_chunk_claim_failure(db, chunk_id: str, job_id, failures: int, error: str) -> None:
+    """Best-effort: append the dropped chunk task to its job's errors."""
+    from app.services.ingest import append_job_errors
+
+    try:
+        await append_job_errors(db, str(job_id), [
+            f"Chunk {chunk_id}: could not be started after {failures} attempts: {error[:300]}"])
+    except Exception:
+        logger.exception("Could not record the claim failure of chunk %s", chunk_id)
 
 
 @router.post("/ingest/process-batch")
@@ -307,6 +418,96 @@ async def process_batch_handler(
     return {"ok": True}
 
 
+@router.post("/ingest/process-chunk")
+async def process_chunk_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+    retry_count: str | None = Header(None, alias=_RETRY_HEADER),
+):
+    """Cloud Tasks worker: process one large-container chunk of any kind
+    (``items`` load, ``embed`` search embeddings, ``post`` threading/titles and
+    completion); ``run_chunk`` dispatches on the row's kind.
+
+    Non-2xx makes Cloud Tasks retry; the chunk's attempt counter splits a range
+    that keeps failing, so retries can't crash-loop forever.
+    """
+    from app.services import large_ingest_chunk
+
+    chunk_id = body.get("chunk_id")
+    if not chunk_id:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    try:
+        await large_ingest_chunk.run_chunk(db, str(chunk_id))
+    except large_ingest_chunk.ChunkClaimError as e:
+        try:
+            counted = await _count_chunk_claim_failure(db, str(chunk_id))
+        except Exception:
+            logger.exception("Ingest chunk %s could not be claimed, and the failure could not "
+                             "be counted", chunk_id)
+            raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
+        if counted is None:
+            logger.error("Ingest chunk %s does not exist; dropping the task: %s", chunk_id, e)
+            return {"ok": False, "dropped": True}
+        failures, job_id = counted
+        if failures < CHUNK_PRE_CLAIM_MAX_FAILURES:
+            logger.exception("Ingest chunk %s could not be claimed (failure %d)", chunk_id, failures)
+            raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
+        logger.error("Ingest chunk %s could not be claimed %d times; dropping the task: %s",
+                     chunk_id, failures, e)
+        await _record_chunk_claim_failure(db, str(chunk_id), job_id, failures, str(e))
+        return {"ok": False, "dropped": True}
+    except large_ingest_chunk.ChunkBusy as e:
+        # Another live attempt holds the chunk: Cloud Tasks backs off and
+        # retries; the claim succeeds once that attempt is done or stale.
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.exception("Ingest chunk %s failed", chunk_id)
+        raise HTTPException(status_code=500, detail=f"Ingest chunk failed: {e}")
+    return {"ok": True}
+
+
+@router.post("/ingest/{job_id}/selection")
+async def apply_container_selection(
+    job_id: UUID,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The uploader's item-type choice for one surveyed large container.
+
+    Body: ``{"storage_path": str, "types": [item types], "include_recoverable": bool}``.
+    Plans the selected items into chunks and starts loading them.
+    """
+    from app.services.large_ingest import SelectionError, apply_selection
+    from app.services.pst_reader import ITEM_TYPES
+
+    job = await db.get(IngestJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    storage_path = body.get("storage_path")
+    types = body.get("types")
+    include_recoverable = body.get("include_recoverable", True)
+    if not isinstance(storage_path, str) or not storage_path:
+        raise HTTPException(status_code=422, detail="storage_path is required")
+    if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+        raise HTTPException(status_code=422, detail="types must be a list of item types")
+    unknown = sorted(set(types) - set(ITEM_TYPES))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown item types: {', '.join(unknown)}")
+    if not isinstance(include_recoverable, bool):
+        raise HTTPException(status_code=422, detail="include_recoverable must be a boolean")
+
+    try:
+        estimate = await apply_selection(db, str(job_id), storage_path, types, include_recoverable)
+    except SelectionError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"job_id": str(job_id), "storage_path": storage_path, "estimate": estimate}
+
+
 @router.post("/ingest/run-pipeline")
 async def run_pipeline_handler(
     body: dict,
@@ -331,6 +532,36 @@ async def run_pipeline_handler(
 
     from app.services.pipeline import run_ambient_pipeline
     await run_ambient_pipeline(int(production_id), force)
+    return {"ok": True}
+
+
+@router.post("/ingest/poll-batch")
+async def poll_batch_handler(
+    body: dict,
+    _verified: None = Depends(verify_cloud_tasks_request),
+    retry_count: str | None = Header(None, alias=_RETRY_HEADER),
+):
+    """Cloud Tasks worker: poll one pipeline stage's Message Batch; apply the
+    results and continue the pipeline once it has ended."""
+    from app.services import pipeline
+
+    production_id = body.get("production_id")
+    stage = body.get("stage")
+    if not production_id or stage not in pipeline.BATCHED_STAGES:
+        raise HTTPException(status_code=400, detail="production_id and a batched stage required")
+    try:
+        await pipeline.poll_batch_stage(int(production_id), stage)
+    except pipeline.BatchPollClaimError as e:
+        attempt = _task_attempt(retry_count)
+        if attempt < PRE_CLAIM_MAX_ATTEMPTS:
+            logger.exception("Batch poll for production %s %s failed (attempt %d)",
+                             production_id, stage, attempt)
+            raise HTTPException(status_code=500, detail=str(e))
+        # No ingest job here. The stage stays 'waiting': once it is older than
+        # BATCH_STALE_HOURS the next pipeline run resubmits it.
+        logger.error("Batch poll for production %s %s failed %d times; dropping the task: %s",
+                     production_id, stage, attempt, e)
+        return {"ok": False, "dropped": True}
     return {"ok": True}
 
 
@@ -362,6 +593,12 @@ async def trigger_entity_extraction(
     role = await get_user_role_for_production(db, user, production_id)
     if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    prod = await db.get(Production, production_id)
+    if prod is not None:
+        # An explicit run clears the sticky AI hold (committed below, before
+        # the enqueue).
+        prod.ai_hold = False
 
     if rebuild:
         from sqlalchemy import delete, update
@@ -395,7 +632,6 @@ async def trigger_entity_extraction(
         # are derived from entities, so both must regenerate too) rather than
         # enqueueing with force=True, which would needlessly re-run
         # clustering and summaries whose outputs the rebuild leaves intact.
-        prod = await db.get(Production, production_id)
         if prod is not None:
             status = dict(prod.ai_pipeline_status or {})
             errors = dict(status.get("errors") or {})
@@ -421,9 +657,223 @@ async def trigger_entity_extraction(
     return {"status": "started"}
 
 
+# The held estimate sums text lengths over every pending document, so it is
+# cached per production per instance (in-process, like the other throttles).
+AI_ESTIMATE_CACHE_S = 600
+# Throttle/cache entries older than this are pruned whenever one is written.
+THROTTLE_PRUNE_S = 3600
+_AI_ESTIMATE_CACHE: dict[int, tuple[float, dict]] = {}
+
+
+def _monotonic() -> float:
+    import time
+
+    return time.monotonic()
+
+
+def _prune(cache: dict, now: float) -> None:
+    """Drop entries written more than THROTTLE_PRUNE_S ago. Values are a
+    timestamp or a (timestamp, payload) tuple."""
+    for key, value in list(cache.items()):
+        at = value[0] if isinstance(value, tuple) else value
+        if now - at > THROTTLE_PRUNE_S:
+            cache.pop(key, None)
+
+
+@router.get("/productions/{production_id}/ai-estimate")
+async def ai_estimate(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Whether the production's AI is on hold, how many documents still need
+    per-document AI (a summary or entity extraction), and what running it
+    would cost at Haiku 5.5 batch pricing. Shown before any paid work."""
+    from sqlalchemy import case, func
+
+    from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
+    from app.services.ai import SUMMARY_INPUT_CHARS, estimate_per_doc_usd
+
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+    # Same gate as POST /pipeline/run: only managers/admins can start analysis.
+    role = await get_user_role_for_production(db, user, production_id)
+    can_run = ROLE_RANK.get(role, 0) >= ROLE_RANK["manager"]
+    if not prod.ai_hold:
+        # Nothing is waiting on a decision: skip the text scan.
+        return {"held": False, "documents_pending": 0, "usd_estimate": 0, "can_run": can_run}
+
+    now = _monotonic()
+    cached = _AI_ESTIMATE_CACHE.get(production_id)
+    if cached is not None and now - cached[0] < AI_ESTIMATE_CACHE_S:
+        return {"held": True, **cached[1], "can_run": can_run}
+
+    needs_summary = Document.summary.is_(None)
+    needs_entities = Document.entities_extracted_at.is_(None)
+    length = func.char_length(Document.text_content)
+    row = (await db.execute(
+        select(
+            func.count(),
+            func.count(case((needs_summary, 1))),
+            func.coalesce(func.sum(case((needs_summary, func.least(length, SUMMARY_INPUT_CHARS)),
+                                        else_=0)), 0),
+            func.count(case((needs_entities, 1))),
+            func.coalesce(func.sum(case((needs_entities, length), else_=0)), 0),
+        ).where(
+            Document.production_id == production_id,
+            Document.text_content.isnot(None),
+            needs_summary | needs_entities,
+        )
+    )).one()
+    pending, summary_docs, summary_chars, entity_docs, entity_chars = (int(v or 0) for v in row)
+    usd = estimate_per_doc_usd(summary_docs, summary_chars, entity_docs, entity_chars)
+    result = {"documents_pending": pending, "usd_estimate": round(usd, 4)}
+    _prune(_AI_ESTIMATE_CACHE, now)
+    _AI_ESTIMATE_CACHE[production_id] = (now, result)
+    return {"held": True, **result, "can_run": can_run}
+
+
+# Self-heal: a processing/finalizing job whose chunks have been quiet this long
+# may be stuck waiting for a finalize nobody triggered (e.g. the last chunk's
+# own trigger was lost). Polling re-drives it, at most once per interval/job.
+SELF_HEAL_QUIET_MINUTES = 5
+SELF_HEAL_INTERVAL_S = SELF_HEAL_QUIET_MINUTES * 60
+_SELF_HEAL_AT: dict[str, float] = {}
+# The quiet check itself runs at most this often per job per instance (the
+# status endpoint is polled every ~2 s).
+QUIET_CHECK_INTERVAL_S = 30
+_QUIET_CHECKED_AT: dict[str, float] = {}
+
+# Surveying jobs: the stall check (pure, from the job row) runs at most once
+# per QUIET_CHECK_INTERVAL_S per job per instance.
+_SURVEY_CHECKED_AT: dict[str, float] = {}
+
+_QUIET_SQL = text(
+    "SELECT coalesce(max(updated_at) < now() - make_interval(mins => :mins), true) "
+    "FROM ingest_chunks WHERE job_id = :job_id"
+)
+
+
+async def _self_heal(job_id: str) -> None:
+    """Background: advance a quiet job's finalize. Never raises."""
+    try:
+        from app.database import async_session_factory
+        from app.services import large_ingest
+
+        async with async_session_factory() as db:
+            await large_ingest.maybe_finalize(db, job_id)
+    except Exception:
+        logger.exception("Self-heal finalize failed for ingest job %s", job_id)
+
+
+async def _survey_self_heal(job_id: str) -> None:
+    """Background: give up containers whose unpack stalled. Never raises."""
+    try:
+        from app.database import async_session_factory
+        from app.services import large_ingest
+
+        async with async_session_factory() as db:
+            await large_ingest.give_up_stalled_surveys(db, job_id)
+    except Exception:
+        logger.exception("Survey self-heal failed for ingest job %s", job_id)
+
+
+def _maybe_schedule_survey_heal(job, background_tasks: BackgroundTasks) -> None:
+    import time
+
+    from app.services import large_ingest
+
+    key = str(job.id)
+    now = time.monotonic()
+    checked = _SURVEY_CHECKED_AT.get(key)
+    if checked is not None and now - checked < QUIET_CHECK_INTERVAL_S:
+        return
+    _prune(_SURVEY_CHECKED_AT, now)
+    _SURVEY_CHECKED_AT[key] = now
+    if large_ingest.stalled_survey_paths(job, large_ingest._utcnow()):
+        background_tasks.add_task(_survey_self_heal, key)
+
+
+async def _maybe_schedule_self_heal(db, job, background_tasks: BackgroundTasks) -> None:
+    import time
+
+    if job.status == "surveying" and (job.field_mapping or {}).get("large_containers"):
+        _maybe_schedule_survey_heal(job, background_tasks)
+        return
+    if job.status not in ("processing", "finalizing"):
+        return
+    if not (job.field_mapping or {}).get("large_containers"):
+        return
+    key = str(job.id)
+    now = time.monotonic()
+    last = _SELF_HEAL_AT.get(key)
+    if last is not None and now - last < SELF_HEAL_INTERVAL_S:
+        return
+    checked = _QUIET_CHECKED_AT.get(key)
+    if checked is not None and now - checked < QUIET_CHECK_INTERVAL_S:
+        return
+    _prune(_QUIET_CHECKED_AT, now)
+    _QUIET_CHECKED_AT[key] = now
+    try:
+        quiet = (await db.execute(
+            _QUIET_SQL, {"mins": SELF_HEAL_QUIET_MINUTES, "job_id": job.id})).scalar()
+    except Exception:
+        logger.exception("Self-heal activity check failed for ingest job %s", key)
+        return
+    if not quiet:
+        return
+    _prune(_SELF_HEAL_AT, now)
+    _SELF_HEAL_AT[key] = now
+    background_tasks.add_task(_self_heal, key)
+
+
+def _container_outs(job) -> list:
+    from app.schemas import ContainerOut, ContainerRecoverableOut, ContainerTypeOut
+    from app.services.large_ingest_estimate import estimate_load
+    from app.services.pst_reader import ITEM_TYPES, ContainerSurvey
+
+    fm = job.field_mapping or {}
+    survey_by_path = job.survey or {}
+    selection = job.selection or {}
+    outs = []
+    for path in fm.get("large_containers") or []:
+        raw = survey_by_path.get(path)
+        if not raw:
+            continue  # not surveyed yet
+        survey = ContainerSurvey.from_json(raw)
+        normal = {t: [0, 0] for t in ITEM_TYPES}
+        recov = {t: [0, 0] for t in ITEM_TYPES}
+        for f in survey.folders:
+            bucket = recov if f.recoverable else normal
+            for t, n in f.counts.items():
+                bucket.setdefault(t, [0, 0])[0] += int(n)
+            for t, n in f.bytes.items():
+                bucket.setdefault(t, [0, 0])[1] += int(n)
+        types = [ContainerTypeOut(type=t, count=c, bytes=b) for t, (c, b) in normal.items() if c or b]
+        rtypes = [ContainerTypeOut(type=t, count=c, bytes=b) for t, (c, b) in recov.items() if c or b]
+        chosen = selection.get(path)
+        estimate = (chosen or {}).get("estimate") or estimate_load(survey, {"email", "calendar"}, True)
+        outs.append(ContainerOut(
+            storage_path=path,
+            name=path.rsplit("/", 1)[-1],
+            size_bytes=sum(x.bytes for x in types) + sum(x.bytes for x in rtypes),
+            types=types,
+            recoverable=ContainerRecoverableOut(
+                count=sum(x.count for x in rtypes), bytes=sum(x.bytes for x in rtypes), types=rtypes),
+            selected=chosen is not None,
+            estimate=estimate,
+        ))
+    return outs
+
+
 @router.get("/ingest/{job_id}/status", response_model=IngestJobOut)
 async def get_ingest_status(
     job_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -435,8 +885,11 @@ async def get_ingest_status(
         raise HTTPException(status_code=403, detail="Access denied")
 
     from app.services.ingest import sources_attempted
+    from app.services.large_ingest_estimate import estimate_model
 
     prod = await db.get(Production, job.production_id)
+    await _maybe_schedule_self_heal(db, job, background_tasks)
+    is_large = bool((job.field_mapping or {}).get("large_containers"))
 
     return IngestJobOut(
         id=job.id,
@@ -450,7 +903,34 @@ async def get_ingest_status(
         errors=job.errors or [],
         created_at=job.created_at,
         completed_at=job.completed_at,
+        items_total=job.items_total or 0,
+        items_done=job.items_done or 0,
+        items_failed=job.items_failed or 0,
+        containers=_container_outs(job),
+        estimate_model=estimate_model() if is_large else {},
     )
+
+
+@router.get("/productions/{production_id}/ingest-awaiting")
+async def ingest_awaiting(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Large-container loads of the caller's waiting for their item-type choice."""
+    rows = (await db.execute(
+        select(IngestJob).where(
+            IngestJob.production_id == production_id,
+            IngestJob.user_id == user.id,
+            IngestJob.status == "awaiting_selection",
+        ).order_by(IngestJob.created_at)
+    )).scalars().all()
+    out = []
+    for job in rows:
+        for c in _container_outs(job):
+            if not c.selected:
+                out.append({"job_id": str(job.id), "name": c.name, "size_bytes": c.size_bytes})
+    return out
 
 
 @router.post("/ingest/reocr/{production_id}")

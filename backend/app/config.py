@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # hours). Unset = tasks target cloud_run_service_url, as before.
     cloud_tasks_worker_url: str = ""
 
+    # .pst/.ost at or above this many bytes take the large-container (unpack
+    # once, chunked) path instead of readpst. Lowered only for local manual testing.
+    large_container_bytes: int = 1_000_000_000
+    # Cloud Run Job that unpacks each large container once (backend-deploy.yml).
+    explode_job_name: str = "vigilist-pst-explode"
+
     @property
     def tasks_target_url(self) -> str:
         """Base URL (and OIDC audience) that Cloud Tasks are sent to."""
