@@ -13,7 +13,7 @@ from app.config import settings
 from app.models import Document, Production
 from app.services.field_mapping import match_aliases
 from app.services.images import convert_document_images
-from app.services.ai import generate_titles_batch
+from app.services.ai import generate_titles_batch, is_refusal, mark_ai_refused
 from app.services.metadata_normalize import derive_file_type, promote_record
 from app.utils.parsers import parse_dat, parse_opt
 
@@ -675,7 +675,10 @@ async def generate_missing_titles(
     )
     untitled_docs = list(result.scalars().all())
 
-    targets = untitled_docs if ai_limit is None else untitled_docs[:max(ai_limit, 0)]
+    # A document the model refused to title is not asked again.
+    askable = [d for d in untitled_docs
+               if "titles" not in ((d.metadata_ or {}).get("ai_refused") or [])]
+    targets = askable if ai_limit is None else askable[:max(ai_limit, 0)]
     if settings.anthropic_api_key and targets:
         try:
             texts_for_titles = [(str(d.id), d.text_content) for d in targets]
@@ -686,7 +689,9 @@ async def generate_missing_titles(
                     generate_titles_batch(texts_for_titles), timeout=max(ai_timeout_s, 0))
             for d in targets:
                 t = titles.get(str(d.id))
-                if t:
+                if is_refusal(t):
+                    mark_ai_refused(d, "titles")
+                elif t:
                     d.title = t
         except TimeoutError:
             logger.warning("AI titles deferred: time budget reached for production %s", production_id)

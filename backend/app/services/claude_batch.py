@@ -8,6 +8,7 @@ any order, so they are always keyed by ``custom_id``, never by position.
 import logging
 
 from app.config import settings
+from app.services.ai import REFUSED, is_refusal_response
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,8 @@ def _first_text(message) -> str | None:
 async def fetch_if_done(batch_id: str) -> dict[str, str | None] | None:
     """None while the batch is still processing; otherwise ``custom_id ->
     text`` for every request, with None for an errored, canceled or expired
-    request (or a success with no text block)."""
+    request (or a success with no text block) and ``ai.REFUSED`` for a
+    refusal."""
     client = _client()
     batch = await client.messages.batches.retrieve(batch_id)
     if batch.processing_status != "ended":
@@ -57,7 +59,9 @@ async def fetch_if_done(batch_id: str) -> dict[str, str | None] | None:
     out: dict[str, str | None] = {}
     async for item in await client.messages.batches.results(batch_id):
         result = item.result
-        if result.type == _SUCCEEDED:
+        if result.type == _SUCCEEDED and is_refusal_response(result.message):
+            out[item.custom_id] = REFUSED
+        elif result.type == _SUCCEEDED:
             out[item.custom_id] = _first_text(result.message)
         else:
             out[item.custom_id] = None

@@ -27,6 +27,37 @@ def _extract_text(response) -> str | None:
     return None
 
 
+# ── Refusals ──
+
+class _Refusal(str):
+    """Type of ``REFUSED``."""
+
+
+# Returned instead of text when the model refused (stop_reason "refusal").
+# It is an empty string, so code that only checks truthiness treats it as "no
+# result"; the per-document stages check ``is_refusal`` and record a sentinel
+# so the document is not resubmitted on every run.
+REFUSED = _Refusal("")
+
+
+def is_refusal(value) -> bool:
+    return value is REFUSED
+
+
+def is_refusal_response(message) -> bool:
+    return getattr(message, "stop_reason", None) == "refusal"
+
+
+def mark_ai_refused(doc, stage: str) -> None:
+    """Record on the document that ``stage`` was refused by the model."""
+    meta = dict(getattr(doc, "metadata_", None) or {})
+    refused = list(meta.get("ai_refused") or [])
+    if stage not in refused:
+        refused.append(stage)
+    meta["ai_refused"] = refused
+    doc.metadata_ = meta  # reassign: in-place JSONB mutation isn't tracked
+
+
 # ── Interactive Chat (AI Agent) ──
 
 # A capable model for open-ended analysis over selected documents.
@@ -154,6 +185,8 @@ def build_chat_system_prompt(documents: list) -> str:
 # off and effort low: these are short, high-volume calls. No temperature /
 # top_p / top_k: the API rejects sampling parameters (400).
 PER_DOC_MODEL = "claude-haiku-5-5"
+# Callers size max_tokens for thinking disabled; turning thinking on would need
+# larger max_tokens (thinking tokens count against it).
 PER_DOC_REQUEST_OPTIONS = {
     "thinking": {"type": "disabled"},
     "output_config": {"effort": "low"},
@@ -234,6 +267,8 @@ async def generate_summary(text: str) -> str | None:
 
     try:
         response = await client.messages.create(**params)
+        if is_refusal_response(response):
+            return REFUSED
         return _extract_text(response)
     except Exception:
         logger.warning("Failed to generate summary", exc_info=True)
@@ -344,6 +379,8 @@ async def generate_title(text: str) -> str | None:
             max_tokens=120,
             messages=[{"role": "user", "content": f"{TITLE_PROMPT}\n\n---\n\n{truncated}"}],
         ))
+        if is_refusal_response(response):
+            return REFUSED
         title = _extract_text(response)
         if not title:
             return None

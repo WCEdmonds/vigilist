@@ -396,19 +396,27 @@ def extraction_request_params(chunk: str) -> dict:
 async def extract_document_entities(text: str) -> dict | None:
     """Run LLM extraction over the document (sliced if long). None = hard
     failure or missing key (retry later); a dict with empty lists is a real
-    'nothing found' result."""
+    'nothing found' result. ``"refused": True`` in the dict means at least one
+    slice was refused (the others are merged as usual)."""
     if not settings.anthropic_api_key:
         return None
     import anthropic  # lazy: keep the SDK off the startup path
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    from app.services.ai import is_refusal_response
+
     retryable = _retryable_errors()
     parsed_slices: list[dict] = []
+    refused = False
     for chunk in slice_text(text):
         raw = None
         for attempt in range(_EXTRACT_MAX_ATTEMPTS):
             try:
                 response = await client.messages.create(**extraction_request_params(chunk))
+                if is_refusal_response(response):
+                    refused = True
+                    raw = ""
+                    break
                 raw = next((b.text for b in response.content if b.type == "text"), "")
                 break
             except retryable as e:
@@ -424,8 +432,13 @@ async def extract_document_entities(text: str) -> dict | None:
                 return None
         if raw is None:
             return None
-        parsed_slices.append(parse_extraction_response(raw))
-    return merge_parsed(parsed_slices)
+        if raw:
+            parsed_slices.append(parse_extraction_response(raw))
+    merged = merge_parsed(parsed_slices)
+    if refused:
+        # A refused slice is not retried; the caller records it on the doc.
+        merged["refused"] = True
+    return merged
 
 
 def header_candidates(doc) -> list[dict]:

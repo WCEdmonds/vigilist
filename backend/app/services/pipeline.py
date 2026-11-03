@@ -19,7 +19,7 @@ from app.database import async_session
 from app.models import Document, Production
 from app.services import claude_batch
 from app.services import tasks as task_service
-from app.services.ai import generate_summaries_batch, summary_request_params
+from app.services.ai import generate_summaries_batch, is_refusal, mark_ai_refused, summary_request_params
 from app.services.audit import log_action, resolve_audit_actor
 from app.services.brief import generate_brief
 from app.services.clustering import cluster_production
@@ -233,7 +233,14 @@ async def _log_summary_batch_completed(db, production_id: int, written_count: in
 
 
 def _apply_summary(doc, summary: str | None) -> bool:
-    """Persist one document's summary (sync and batch paths). True if written."""
+    """Persist one document's summary (sync and batch paths). True if written.
+
+    A refusal stores an empty summary (so ``summary IS NULL`` no longer picks
+    the document up) and records the refusal on the document."""
+    if is_refusal(summary):
+        doc.summary = ""
+        mark_ai_refused(doc, "summaries")
+        return True
     if not summary:
         return False
     doc.summary = summary
@@ -273,7 +280,7 @@ async def _run_summaries_sync(production_id: int) -> None:
             )
             wrote_any = False
             for doc_id, summary in results.items():
-                if summary:
+                if summary or is_refusal(summary):
                     doc = await db.get(Document, doc_id)
                     if doc is not None and _apply_summary(doc, summary):
                         wrote_any = True
@@ -322,7 +329,10 @@ async def _extract_one_document(db, doc) -> bool:
         parsed = await extract_document_entities(doc.text_content or "")
         if parsed is None:
             return False
+        refused = parsed.pop("refused", False)
         await _persist_document_entities(db, doc, parsed)
+        if refused:
+            mark_ai_refused(doc, "entities")
         return True
     except Exception:
         logger.exception("Entity extraction failed for document %s", doc.id)
@@ -463,7 +473,7 @@ def _as_uuid(value: str):
 async def _apply_summary_results(production_id: int, results: dict,
                                  deadline: float) -> tuple[int, int, bool]:
     """Apply summary results. Returns (usable, unprocessed, finished)."""
-    ids = sorted(cid for cid, text in results.items() if text)
+    ids = sorted(cid for cid, text in results.items() if text or is_refusal(text))
     unprocessed = len(results) - len(ids)
     for start in range(0, len(ids), BATCH_APPLY_GROUP):
         if time.monotonic() > deadline:
@@ -492,7 +502,8 @@ async def _apply_entity_results(production_id: int, results: dict,
         if not doc_id or not idx.isdigit():
             continue
         by_doc.setdefault(doc_id, {})[int(idx)] = text
-    usable = sorted(d for d, slices in by_doc.items() if all(slices.values()))
+    usable = sorted(d for d, slices in by_doc.items()
+                    if all(t or is_refusal(t) for t in slices.values()))
     unprocessed = len(by_doc) - len(usable)
     for doc_id in usable:
         if time.monotonic() > deadline:
@@ -508,8 +519,12 @@ async def _apply_entity_results(production_id: int, results: dict,
             if sorted(slices) != list(range(len(slice_text(doc.text_content or "")))):
                 continue  # text changed since submit: re-extract on a later run
             try:
-                parsed = merge_parsed([parse_extraction_response(slices[i]) for i in sorted(slices)])
+                # Refused slices are not retried: merge the rest and record it.
+                parsed = merge_parsed([parse_extraction_response(slices[i]) for i in sorted(slices)
+                                       if not is_refusal(slices[i])])
                 await _persist_document_entities(db, doc, parsed)
+                if any(is_refusal(t) for t in slices.values()):
+                    mark_ai_refused(doc, "entities")
                 await db.commit()
             except Exception:
                 logger.exception("Applying batched extraction failed for document %s", doc_id)
