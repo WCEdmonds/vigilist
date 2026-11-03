@@ -318,3 +318,44 @@ def test_prompt_overhead_constants_track_the_prompts():
     entity = (len(EXTRACTION_SYSTEM_PROMPT) + len(build_extraction_prompt(""))) / 4
     assert summary * 0.8 <= SUMMARY_PROMPT_OVERHEAD_TOKENS <= summary * 1.25
     assert entity * 0.8 <= ENTITY_PROMPT_OVERHEAD_TOKENS <= entity * 1.25
+
+
+# --- no hold while a requested analysis is running ------------------------------
+
+INFO = "AI analysis already running; new documents will be included in the next run"
+
+
+def _now(**delta):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+
+
+def _waiting_status():
+    return {"clustering": "done", "updated_at": _now(),
+            "summaries": {"status": "waiting", "submitted_at": _now(), "exhausted": True,
+                          "batches": [{"id": "b1", "state": "processing",
+                                       "submitted_at": _now(), "doc_count": 600}]}}
+
+
+def test_normal_large_load_into_a_running_analysis_does_not_hold(monkeypatch):
+    calls = _patch_finalize(monkeypatch)
+    prod = SimpleNamespace(id=1, ai_hold=False, ai_pipeline_status=_waiting_status())
+    job = _job(6_000)
+    asyncio.run(ingest_service._finalize_job_if_done(FinalizeSession(prod), job, 1, []))
+    assert job.status == "complete"
+    assert prod.ai_hold is False
+    assert INFO in job.errors
+    # The running analysis owns the matter: no second pipeline run is started.
+    assert calls["enqueue"] == []
+    # Still a large load: bounded inline AI titling.
+    assert calls["title_limits"][0] is not None
+
+
+def test_normal_large_load_into_an_idle_production_still_holds(monkeypatch):
+    calls = _patch_finalize(monkeypatch)
+    prod = SimpleNamespace(id=1, ai_hold=False, ai_pipeline_status={"brief": "done"})
+    job = _job(6_000)
+    asyncio.run(ingest_service._finalize_job_if_done(FinalizeSession(prod), job, 1, []))
+    assert prod.ai_hold is True
+    assert INFO not in job.errors
+    assert calls["enqueue"] == []
