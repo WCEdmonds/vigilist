@@ -125,13 +125,25 @@ def get_size(remote_path: str) -> int:
     return int(blob.size or 0) if blob is not None else 0
 
 
-def open_blob_reader(remote_path: str, chunk_size: int):
-    """Seekable, read-only file object streaming ranges of the blob.
+# Sliced download of a large object: parallel ranged reads into one local
+# file (measured ~207 s for an 11.2 GB PST at ~1x read amplification).
+SLICED_CHUNK_BYTES = 64 * 1024 * 1024
+SLICED_WORKERS = 16
 
-    Nothing is written to local disk; memory is bounded by ``chunk_size``.
-    """
+
+def download_sliced(remote_path: str, local_path: str) -> str:
+    """Download a large object to ``local_path`` with parallel ranged reads.
+    Only the explode Job calls this (its /tmp is in memory)."""
+    from google.cloud.storage import transfer_manager
+
     blob = get_bucket().blob(remote_path)
-    return blob.open("rb", chunk_size=chunk_size)
+    blob.reload()  # the chunked download needs the object size
+    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    transfer_manager.download_chunks_concurrently(
+        blob, local_path, chunk_size=SLICED_CHUNK_BYTES, max_workers=SLICED_WORKERS,
+        worker_type=transfer_manager.THREAD,
+    )
+    return local_path
 
 
 def get_signed_url(

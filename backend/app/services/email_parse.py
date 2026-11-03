@@ -46,6 +46,17 @@ class OversizedAttachment(bytes):
         return obj
 
 
+class UnreadableAttachment(bytes):
+    """Empty stand-in for an attachment whose bytes could not be read from the
+    container; ``error`` says why. It becomes an error document with no native
+    file, so the attachment is reported instead of silently dropped."""
+
+    def __new__(cls, error: str):
+        obj = super().__new__(cls, b"")
+        obj.error = str(error)
+        return obj
+
+
 @dataclass
 class ParsedMessage:
     from_: str = ""
@@ -64,6 +75,9 @@ class ParsedMessage:
     references: str = ""
     # Attachment filenames referenced inline (cid:) by the HTML body.
     inline_names: set[str] = field(default_factory=set)
+    # Fields the container reader could not read ("subject: OSError: ...").
+    # The message is kept with what could be read; these are reported.
+    read_errors: list[str] = field(default_factory=list)
 
 
 def _ext(filename: str) -> str:

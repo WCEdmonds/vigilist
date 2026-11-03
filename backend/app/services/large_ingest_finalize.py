@@ -10,7 +10,7 @@ concurrent callers can't run them twice:
   production's AI hold and writes ``embed`` chunks.
 - **Phase B**: once no ``embed`` chunk is pending or running, writes the single
   ``post`` chunk (threading + titles). The post chunk marks the job
-  ``complete``. Nothing here enqueues the ambient pipeline: the AI hold keeps
+  ``complete`` and deletes the job's exploded PST objects. Nothing here enqueues the ambient pipeline: the AI hold keeps
   it off until someone runs analysis.
 
 A ``split`` parent is terminal for these checks: its children are inserted in
@@ -18,6 +18,7 @@ the same transaction as the split, and they are the rows that carry the
 remaining work.
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -424,6 +425,7 @@ async def run_post_chunk(db, c, attempts: int) -> None:
             await append_job_errors(db, c.job_id, [msg], commit=False)
             await db.execute(text(_COMPLETE_JOB_SQL), {"jid": c.job_id, "now": _now()})
         await db.commit()
+        await _delete_exploded(production_id, c.job_id)
         return
 
     import time
@@ -457,4 +459,14 @@ async def run_post_chunk(db, c, attempts: int) -> None:
         await append_job_errors(db, c.job_id, errors, commit=False)
         await db.execute(text(_COMPLETE_JOB_SQL), {"jid": c.job_id, "now": _now()})
     await db.commit()
+    await _delete_exploded(production_id, c.job_id)
     logger.info("Large-container job %s complete", c.job_id)
+
+
+async def _delete_exploded(production_id: int, job_id) -> None:
+    """Delete everything the explode Job wrote for this ingest job. Best-effort
+    and idempotent (a redelivered post chunk deletes nothing more)."""
+    from app.services import pst_explode
+
+    await asyncio.to_thread(pst_explode.delete_exploded,
+                            pst_explode.job_explode_prefix(production_id, str(job_id)))

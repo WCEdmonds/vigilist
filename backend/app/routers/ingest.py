@@ -1,5 +1,6 @@
 """Ingest endpoints: start processing, process batch, check status."""
 
+import asyncio
 import logging
 from uuid import UUID
 
@@ -235,16 +236,12 @@ async def start_processing(
                 logger.exception("Failed to enqueue batch %d-%d", start, end)
                 enqueue_errors.append(f"Enqueue failed for batch {start}-{end}: {e}")
 
-        for path in large_containers:
-            try:
-                task_service.enqueue_survey(str(job.id), path)
-            except Exception as e:
-                logger.exception("Failed to enqueue survey for %s", path)
-                enqueue_errors.append(f"Enqueue failed for survey of {path}: {e}")
-
         if enqueue_errors:
             job.errors = enqueue_errors
             await db.commit()
+
+        if large_containers:
+            await _start_unpack_jobs(db, job, large_containers)
 
         logger.info("Enqueued %d batches for job %s", enqueued, job.id)
 
@@ -295,6 +292,23 @@ async def start_processing(
         created_at=job.created_at,
         completed_at=None,
     )
+
+
+async def _start_unpack_jobs(db, job, paths: list[str]) -> None:
+    """Start one explode Job per large container. One that can't be started
+    is given up on at once, so the job never waits on a Job that isn't
+    running."""
+    from app.services import large_ingest
+    from app.services.pst_reader import short_error
+
+    for path in paths:
+        try:
+            await asyncio.to_thread(large_ingest.start_unpack, str(job.id), path)
+        except Exception as e:
+            logger.exception("Failed to start the unpack job for %s", path)
+            await large_ingest._give_up_survey(
+                db, str(job.id), path, 0, short_error(e),
+                reason="the unpack job could not be started")
 
 
 async def _skip_large_containers_inline(db, job, production_id: int, load_prefix) -> None:
@@ -379,32 +393,6 @@ async def process_batch_handler(
         logger.exception("Ingest batch failed")
         raise HTTPException(status_code=500, detail=f"Ingest batch failed: {e}")
 
-    return {"ok": True}
-
-
-@router.post("/ingest/survey-container")
-async def survey_container_handler(
-    body: dict,
-    db: AsyncSession = Depends(get_db),
-    _verified: None = Depends(verify_cloud_tasks_request),
-):
-    """Cloud Tasks worker: survey one large mailbox container (read-only).
-
-    ``run_survey`` counts attempts on the job and gives the container up after
-    ``MAX_SURVEY_ATTEMPTS`` (returning normally, so this answers 200 and Cloud
-    Tasks stops); earlier failures answer 500 so Cloud Tasks retries.
-    """
-    from app.services.large_ingest import run_survey
-
-    job_id = body.get("job_id")
-    storage_path = body.get("storage_path")
-    if not job_id or not storage_path:
-        raise HTTPException(status_code=400, detail="Missing required fields")
-    try:
-        await run_survey(db, job_id, storage_path)
-    except Exception as e:
-        logger.exception("Container survey failed")
-        raise HTTPException(status_code=500, detail=f"Container survey failed: {e}")
     return {"ok": True}
 
 

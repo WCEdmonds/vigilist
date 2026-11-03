@@ -18,7 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Document, IngestJob, Production
-from app.services.email_parse import OversizedAttachment, ParsedMessage, expand_email
+from app.services.email_parse import (
+    OversizedAttachment,
+    ParsedMessage,
+    UnreadableAttachment,
+    expand_email,
+)
 from app.services.extractors import extract, extract_attachment
 from app.services.large_ingest import is_large_container
 from app.services.metadata_normalize import normalize_date
@@ -151,8 +156,13 @@ def build_email_documents(
     docs: list[Document] = [parent]
     for k, (att_name, att_bytes) in enumerate(parsed.attachments, start=1):
         att_control = f"{message_control} .{k:04d}"
-        if isinstance(att_bytes, OversizedAttachment):
+        if isinstance(att_bytes, (OversizedAttachment, UnreadableAttachment)):
             # Never read: no text, no stored native, no hash.
+            if isinstance(att_bytes, OversizedAttachment):
+                why = (f"attachment too large to load ({att_bytes.size:,} bytes; "
+                       f"limit {att_bytes.limit:,}); not extracted or stored")
+            else:
+                why = f"{att_bytes.error}; not extracted or stored"[:500]
             docs.append(Document(
                 production_id=production_id,
                 bates_begin=att_control,
@@ -169,8 +179,7 @@ def build_email_documents(
                 source_path=source_path,
                 custodian=custodian,
                 extraction_status="error",
-                extraction_error=(f"attachment too large to load ({att_bytes.size:,} bytes; "
-                                  f"limit {att_bytes.limit:,}); not extracted or stored"),
+                extraction_error=why,
             ))
             continue
         if extract_fn is None:

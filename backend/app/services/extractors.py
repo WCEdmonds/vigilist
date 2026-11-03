@@ -230,12 +230,35 @@ def extract_pdf_text(data: bytes, ocr_fn) -> ExtractResult:
     return ExtractResult(text, "pdf", _status_for(text))
 
 
+def _extract_eml(data: bytes) -> ExtractResult:
+    """Text of an attached message (e.g. an embedded PST message): its
+    headers, body and attachment names."""
+    try:
+        from app.services.email_parse import _parse_eml_bytes
+
+        p = _parse_eml_bytes(data)
+        lines = [f"{label}: {value}" for label, value in (
+            ("From", p.from_), ("To", p.to), ("Cc", p.cc), ("Date", p.date_sent or ""),
+            ("Subject", p.subject)) if value]
+        if p.body_text:
+            lines += ["", p.body_text]
+        names = [n for n, _ in p.attachments]
+        if names:
+            lines += ["", "Attachments: " + "; ".join(names)]
+        text = "\n".join(lines)
+        return ExtractResult(text, "email", _status_for(text))
+    except Exception as e:
+        return ExtractResult("", "email", "error", str(e)[:500])
+
+
 def extract_attachment(name: str, data: bytes, *, inline: bool, ocr_fn) -> ExtractResult:
     """Extraction for an email attachment: PDFs get text, tiny/inline images
     skip OCR (empty text, status ok), everything else uses ``extract``."""
     ext = _ext(name)
     if ext == ".pdf":
         return extract_pdf_text(data, ocr_fn)
+    if ext == ".eml":
+        return _extract_eml(data)
     if ext in _IMAGE_EXTS and not should_ocr_image(name, data, inline):
         return ExtractResult("", "image", "ok")
     return extract(name, data, ocr_fn=ocr_fn)

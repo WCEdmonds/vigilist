@@ -217,6 +217,10 @@ def env(monkeypatch):
 
         monkeypatch.setattr(email_threading, "derive_threads", fake_threads)
         monkeypatch.setattr(ingest_mod, "generate_missing_titles", fake_titles)
+        s.deleted_prefixes = []
+        from app.services import pst_explode
+
+        monkeypatch.setattr(pst_explode, "delete_exploded", lambda p: s.deleted_prefixes.append(p) or 0)
         return s
 
     return make
@@ -734,3 +738,22 @@ def test_embed_chunk_makes_one_batched_call_for_all_its_documents(env):
     _run(s, cid)
     assert s.embed_calls == [ids]
     assert s.chunks[cid].status == "done"
+
+
+# --- Unit 8: the post chunk deletes the exploded objects ---------------------
+
+
+def test_post_chunk_deletes_the_exploded_prefix(env):
+    s = env(status="finalizing")
+    cid = s.add_chunk("post", "pending", item_count=0)
+    _run(s, cid)
+    assert s.job.status == "complete"
+    assert s.deleted_prefixes == ["productions/1/exploded/j1/"]
+
+
+def test_post_chunk_past_its_attempts_still_deletes_the_prefix(env):
+    s = env(status="finalizing")
+    cid = s.add_chunk("post", "pending", item_count=0, attempts=MAX_CHUNK_ATTEMPTS)
+    _run(s, cid)
+    assert s.job.status == "complete"
+    assert s.deleted_prefixes == ["productions/1/exploded/j1/"]

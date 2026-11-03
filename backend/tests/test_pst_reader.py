@@ -13,7 +13,8 @@ from app.services.pst_reader import (
 
 
 class Entry:
-    def __init__(self, value):
+    def __init__(self, value, entry_type=None):
+        self.entry_type = entry_type
         self.data_as_string = value if isinstance(value, str) else None
         self.data_as_integer = value if isinstance(value, int) else None
 
@@ -23,7 +24,11 @@ class RecordSet:
         self._props = props
 
     def get_entry_by_type(self, tag):
-        return Entry(self._props[tag]) if tag in self._props else None
+        return Entry(self._props[tag], tag) if tag in self._props else None
+
+    @property
+    def entries(self):
+        return [Entry(v, t) for t, v in self._props.items()]
 
 
 class Recipients:
@@ -34,12 +39,14 @@ class Recipients:
 class Att:
     """Mirrors pypff.attachment: long_filename, size, read_buffer, record_sets."""
 
-    def __init__(self, name, data, content_id=None, short_name=None):
+    def __init__(self, name, data, content_id=None, short_name=None, method=None):
         props = {}
         if content_id:
             props[0x3712] = content_id
         if short_name:
             props[0x3704] = short_name
+        if method is not None:
+            props[0x3705] = method
         self.long_filename = name
         self.size = len(data)
         self._data = data
@@ -220,3 +227,219 @@ def test_survey_records_type_positions_as_runs(fake_pst):
     assert runs["Top/Recoverable Items"] == [["email", 1], ["contact", 1]]
     assert runs["Top"] == []
     assert ContainerSurvey.from_json(s.to_json()).folders[-1].runs == [["email", 1], ["contact", 1]]
+
+
+# --- Unit 8: per-field read errors, attachment methods, bare items -----------
+
+from app.services.email_parse import (  # noqa: E402
+    OversizedAttachment,
+    UnreadableAttachment,
+    _parse_eml_bytes,
+)
+
+
+def _raises(exc):
+    def get(self):
+        raise exc
+
+    return property(get)
+
+
+def _item_with(**raising):
+    """An Item subclass whose named attributes raise on access."""
+    return type("RaisingItem", (Item,), {k: _raises(v) for k, v in raising.items()})
+
+
+def test_partial_item_keeps_readable_fields_and_records_the_failed_field():
+    cls = _item_with(subject=OSError("libpff_message_get_subject: unable to read"))
+    item = cls(plain_text_body="still here",
+               transport_headers="From: alice@acme.test\r\nSubject: From headers\r\n")
+    p = to_parsed(item, "email")
+    assert p.body_text == "still here" and p.from_ == "alice@acme.test"
+    assert p.subject == "From headers"  # header fallback still applies
+    (err,) = p.read_errors
+    assert err.startswith("subject: OSError") and "unable to read" in err
+
+
+def test_missing_html_body_is_not_a_read_error():
+    cls = _item_with(html_body=OSError("libpff_message_get_html_body: missing value data"))
+    p = to_parsed(cls(subject="s", plain_text_body="b"), "email")
+    assert p.read_errors == [] and p.body_html == "" and p.body_text == "b"
+
+
+def test_other_html_body_error_is_recorded():
+    cls = _item_with(html_body=OSError("corrupt block"))
+    p = to_parsed(cls(subject="s"), "email")
+    assert [e.split(":")[0] for e in p.read_errors] == ["html_body"]
+
+
+def test_every_field_failure_is_recorded_for_non_email_kinds():
+    cls = _item_with(plain_text_body=OSError("bad body"), sender_name=OSError("bad sender"))
+    p = to_parsed(cls("IPM.Appointment", subject="Kickoff"), "calendar")
+    assert p.subject == "Kickoff"
+    assert sorted(e.split(":")[0] for e in p.read_errors) == ["plain_text_body", "sender_name"]
+
+
+def test_headers_and_recipients_failures_are_recorded():
+    class BadTable:
+        @property
+        def record_sets(self):
+            raise OSError("bad recipients table")
+
+    cls = _item_with(transport_headers=OSError("bad headers"))
+    item = cls(subject="s", sender_name="Alice")
+    item.recipients = BadTable()
+    p = to_parsed(item, "email")
+    assert p.from_ == "Alice"
+    assert sorted(e.split(":")[0] for e in p.read_errors) == ["recipients", "transport_headers"]
+
+
+class SizeFails(Att):
+    @property
+    def size(self):
+        raise OSError("libpff_attachment_get_data_size: failed to retrieve data size")
+
+    @size.setter
+    def size(self, v):
+        pass
+
+
+def test_unreadable_attachment_becomes_an_error_marker_not_a_drop():
+    item = Item(subject="s", attachments=[Att("ok.txt", b"fine"), SizeFails("bad.bin", b"", method=7)])
+    p = to_parsed(item, "email")
+    assert [n for n, _ in p.attachments] == ["ok.txt", "bad.bin"]
+    bad = p.attachments[1][1]
+    assert isinstance(bad, UnreadableAttachment) and bytes(bad) == b""
+    assert "failed to retrieve data size" in bad.error
+    (err,) = p.read_errors
+    assert err.startswith("attachment 2 (bad.bin)") and "failed to retrieve data size" in err
+
+
+def test_attachment_that_cannot_be_opened_is_an_error_marker():
+    class Broken(Item):
+        def get_attachment(self, i):
+            raise OSError("unable to open attachment")
+
+    item = Broken(subject="s", attachments=[Att("x", b"")])
+    ((name, data),) = to_parsed(item, "email").attachments
+    assert name == "attachment 1" and isinstance(data, UnreadableAttachment)
+
+
+class Embedded(Att):
+    """Method-5 attachment exposing its embedded message as sub item 0."""
+
+    def __init__(self, name, inner):
+        super().__init__(name, b"RAW-MAPI-BLOB", method=5)
+        self._inner = inner
+        self.number_of_sub_items = 1 if inner is not None else 0
+
+    def get_sub_item(self, i):
+        if self._inner is None:
+            raise OSError("no sub item")
+        return self._inner
+
+    def read_buffer(self, n):
+        if self._inner is not None:
+            raise AssertionError("an embedded message must not be read as raw bytes")
+        return super().read_buffer(n)
+
+
+def test_method5_attachment_is_read_as_an_embedded_message():
+    inner = Item(subject="Inner note", plain_text_body="inner body",
+                 transport_headers="From: bob@acme.test\r\nTo: carol@acme.test\r\n",
+                 attachments=[Att("deep.txt", b"deep data")])
+    item = Item(subject="Outer", attachments=[Embedded("fwd", inner)])
+    p = to_parsed(item, "email")
+    ((name, data),) = p.attachments
+    assert name == "Inner note.eml"
+    nested = _parse_eml_bytes(bytes(data))
+    assert nested.subject == "Inner note" and nested.from_ == "bob@acme.test"
+    assert nested.to == "carol@acme.test" and "inner body" in nested.body_text
+    assert ("deep.txt", b"deep data") in nested.attachments
+    assert p.read_errors == []
+
+
+def test_method5_that_cannot_be_opened_keeps_raw_bytes_and_records_it():
+    item = Item(subject="Outer", attachments=[Embedded("fwd.msg", None)])
+    p = to_parsed(item, "email")
+    ((name, data),) = p.attachments
+    assert name == "fwd.msg" and data == b"RAW-MAPI-BLOB"
+    (err,) = p.read_errors
+    assert err.startswith("attachment 1 (fwd.msg)") and "embedded message" in err
+
+
+class OleFails(Att):
+    def read_buffer(self, n):
+        raise OSError("unable to read OLE stream")
+
+
+def test_ole_attachment_that_cannot_be_read_is_an_error_marker():
+    item = Item(subject="s", attachments=[OleFails("chart.bin", b"xx", method=6)])
+    p = to_parsed(item, "email")
+    ((name, data),) = p.attachments
+    assert name == "chart.bin" and isinstance(data, UnreadableAttachment)
+    assert "OLE" in data.error and "unable to read OLE stream" in data.error
+    assert len(p.read_errors) == 1
+
+
+def test_ole_attachment_that_reads_keeps_its_bytes():
+    item = Item(subject="s", attachments=[Att("chart.bin", b"ole-bytes", method=6)])
+    assert to_parsed(item, "email").attachments == [("chart.bin", b"ole-bytes")]
+
+
+def test_oversized_attachment_still_uses_the_cap_marker(monkeypatch):
+    import app.services.pst_reader as pr
+
+    monkeypatch.setattr(pr, "MAX_ATTACHMENT_BYTES", 3)
+    ((_, data),) = to_parsed(Item(attachments=[Att("big.zip", b"xxxx")]), "email").attachments
+    assert isinstance(data, OversizedAttachment) and data.size == 4
+
+
+class BareItem:
+    """pypff.item that is not a message: record sets only, no message accessors."""
+
+    def __init__(self, props):
+        self.record_sets = [RecordSet(props)]
+
+
+def test_bare_item_is_rendered_from_its_record_properties():
+    from app.services.pst_reader import item_kind
+
+    bare = BareItem({0x001A: "IPM.Microsoft.ScheduleData.FreeBusy", 0x0037: "Busy times",
+                     0x3001: "Scheduler", 0x0E08: 1234})
+    assert item_kind(bare) == "other"
+    p = to_parsed(bare, "other")
+    assert p.subject == "Busy times"
+    assert "Message class: IPM.Microsoft.ScheduleData.FreeBusy" in p.body_text
+    assert "Scheduler" in p.body_text
+    assert p.read_errors == []
+
+
+def test_inline_cid_match_is_word_bounded():
+    item = Item(html_body='<img src="cid:logo10">',
+                attachments=[Att("a.png", b"a", "<logo1>"), Att("b.png", b"b", "<logo10>")])
+    assert to_parsed(item, "email").inline_names == {"b.png"}
+
+
+def test_open_pst_opens_a_local_file(monkeypatch):
+    import sys
+    import types
+
+    import app.services.pst_reader as pr
+
+    opened = []
+
+    class FakeFile:
+        def open(self, path):
+            opened.append(path)
+
+        def get_root_folder(self):
+            return Folder("")
+
+        def close(self):
+            opened.append("closed")
+
+    monkeypatch.setitem(sys.modules, "pypff", types.SimpleNamespace(file=FakeFile))
+    with pr.open_pst("/tmp/x.pst", "productions/1/raw/x.pst") as handle:
+        assert handle.storage_path == "productions/1/raw/x.pst"
+    assert opened == ["/tmp/x.pst", "closed"]

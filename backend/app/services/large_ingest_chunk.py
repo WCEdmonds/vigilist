@@ -1,8 +1,10 @@
-"""Large-container chunk worker: stream one chunk's PST slice and load it.
+"""Large-container chunk worker: load one chunk's slice of an exploded PST.
 
-One Cloud Task per ``ingest_chunks`` row. Each message's family commits on its
-own; a range that keeps failing is split in half until a single item fails
-alone and is recorded as failed.
+One Cloud Task per ``ingest_chunks`` row. The PST was unpacked once by the
+``vigilist-pst-explode`` Job; the worker reads the slice's exploded objects
+(``exploded_reader``) and never opens the PST. Each message's family commits
+on its own; a range that keeps failing is split in half until a single item
+fails alone and is recorded as failed.
 """
 
 import asyncio
@@ -13,7 +15,7 @@ import uuid
 from sqlalchemy import text
 
 from app.models import IngestChunk, IngestJob
-from app.services import large_ingest, pst_reader
+from app.services import exploded_reader, large_ingest
 from app.services.large_ingest import split_chunk
 from app.services.pst_reader import ContainerSurvey
 
@@ -114,9 +116,9 @@ def _folder_path(survey_json: dict | None, folder_index: int) -> str:
 
 
 def _next_selected(gen, type_filter: set[str] | None):
-    """Advance ``iter_slice`` to the next selected item (blocking pypff I/O)."""
+    """Advance ``iter_slice`` to the next selected item (blocking Storage I/O)."""
     for _seq, info, raw_pos, item in gen:
-        kind = pst_reader.item_kind(item)
+        kind = exploded_reader.item_kind(item)
         if type_filter and kind not in type_filter:
             continue
         return info, raw_pos, item, kind
@@ -125,18 +127,19 @@ def _next_selected(gen, type_filter: set[str] | None):
 
 def _subject_of(item) -> str:
     try:
-        return pst_reader._text(getattr(item, "subject", None)).strip()
+        return str(getattr(item, "subject", None) or "").strip()
     except Exception:
         return ""
 
 
 def _build_item(item, kind: str, control: str, folder_path: str, production_id: int,
                 source_path: str, custodian):
-    """One PST item -> [parent, *attachments] (blocking: parse, extract, store)."""
+    """One exploded item -> ([parent, *attachments], read errors) (blocking:
+    fetch, extract, store)."""
     from app.services import ingest_native
     from app.services.ingest_pdf import _ocr_jpeg_text
 
-    parsed = pst_reader.to_parsed(item, kind)
+    parsed = exploded_reader.to_parsed(item, kind)
     docs = ingest_native.build_email_documents(
         parsed,
         message_control=control,
@@ -154,14 +157,18 @@ def _build_item(item, kind: str, control: str, folder_path: str, production_id: 
         meta = {**(doc.metadata_ or {}), "PST Folder": folder_path}
         if i == 0 and kind != "email":
             meta["PST Item Type"] = kind
+        if i == 0 and parsed.read_errors:
+            # Partly read: kept with what could be read; say what could not.
+            meta["Read Errors"] = "; ".join(parsed.read_errors)[:2000]
         doc.metadata_ = meta
-    return docs
+    return docs, list(parsed.read_errors)
 
 
-def _read_subject_at(storage_path: str, slices, type_filter: set[str] | None) -> str:
-    with pst_reader.open_pst(storage_path) as handle:
-        found = _next_selected(pst_reader.iter_slice(handle, slices), type_filter)
-        return _subject_of(found[2]) if found else ""
+def _read_subject_at(job_id: str, production_id: int, storage_path: str, slices) -> str:
+    """Subject of a one-item chunk's item: a single GET of its JSON. A
+    one-item chunk's slice starts at its (selected) item."""
+    folder_index, position = slices[0][0], slices[0][1]
+    return exploded_reader.read_subject(job_id, production_id, storage_path, folder_index, position)
 
 
 async def _split(db, c, survey_json: dict | None) -> None:
@@ -230,7 +237,7 @@ async def _fail_single(db, c, sel: dict, survey_json: dict | None, attempts: int
         # Try once: reading the item may be exactly what kills the worker.
         try:
             subject = await asyncio.to_thread(
-                _read_subject_at, c.container_path, c.slices, set(c.type_filter) or None)
+                _read_subject_at, c.job_id, production_id, c.container_path, c.slices)
         except Exception:
             logger.exception("Could not read subject of failed item in chunk %s", c.id)
     msg = (f"{control}: could not be read after {MAX_CHUNK_ATTEMPTS} attempts "
@@ -280,7 +287,7 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
             )
         )).all()
         existing = {r[0] for r in rows}
-    # Release the connection before the long PST open/stream.
+    # Release the connection before reading the exploded items.
     await db.commit()
 
     # The previous attempt died while building this item: skip it now.
@@ -289,13 +296,11 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
         poison = None
 
     type_filter = set(c.type_filter) or None
-    cm = pst_reader.open_pst(c.container_path)
-    handle = await asyncio.to_thread(cm.__enter__)
     local = 0
     failures: list[str] = []
     failed = 0
+    gen = exploded_reader.iter_slice(job_id, production_id, c.container_path, c.slices)
     try:
-        gen = pst_reader.iter_slice(handle, c.slices)
         while local < c.item_count:
             found = await asyncio.to_thread(_next_selected, gen, type_filter)
             if found is None:
@@ -316,11 +321,16 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
             await db.execute(text(_SET_CURSOR_SQL), {"id": c.id, "pos": pos})
             await db.commit()
             try:
-                docs = await asyncio.to_thread(
+                docs, read_errors = await asyncio.to_thread(
                     _build_item, item, kind, control, info.path, production_id, source_path, custodian)
                 for d in docs:
                     _stamp_source(d, stamp)
                 await _persist_documents(db, job_id, docs, items_done=1)
+                if read_errors:
+                    # Loaded, but not every field could be read: reported,
+                    # not counted as failed.
+                    failures.append(f"{control}: partly read (PST folder {info.path!r}, position "
+                                    f"{raw_pos}): " + "; ".join(read_errors)[:1000])
             except Exception as e:
                 await db.rollback()
                 if isinstance(e, IntegrityError):
@@ -341,7 +351,7 @@ async def _load_items(db, c, job) -> tuple[list[str], int]:
                 failures.append(msg)
                 failed += 1
     finally:
-        await asyncio.to_thread(cm.__exit__, None, None, None)
+        gen.close()
 
     if local < c.item_count:
         # The slice held fewer selected items than planned: account for every

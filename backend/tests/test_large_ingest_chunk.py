@@ -1,7 +1,7 @@
-"""Task 6: chunk worker. FakeSession + a fake pypff tree (no GCS, no DB)."""
+"""Task 6: chunk worker. FakeSession + a fake pypff tree exploded into an
+in-memory store (no GCS, no DB)."""
 
 import asyncio
-import contextlib
 import inspect
 import json
 from types import SimpleNamespace
@@ -13,7 +13,7 @@ import app.routers.ingest as ri
 import app.services.ingest_native as native_mod
 import app.services.tasks as task_service
 from app.models import Document
-from app.services import large_ingest, pst_reader
+from app.services import exploded_reader, large_ingest, pst_explode, pst_reader, storage
 from app.services.ingest import append_job_errors, incr_job_items
 from app.services import large_ingest_chunk
 from app.services.large_ingest_chunk import MAX_CHUNK_ATTEMPTS, message_control, run_chunk
@@ -48,16 +48,20 @@ def _emails(n, prefix="Msg"):
 
 class Env:
     def __init__(self, monkeypatch, tree, *, attempts=1, chunk=None, existing=(), total=None):
-        self.opened = []
+        self.opened = []  # every exploded object read
         self.enqueued = []
         self.finalized = []
 
-        @contextlib.contextmanager
-        def fake_open(path):
-            self.opened.append(path)
-            yield tree
+        # The explode Job's output for this tree (job "j1", production 1).
+        self.store = {}
+        pst_explode.explode(tree, pst_explode.explode_prefix(1, "j1", PST),
+                            lambda p, d, ct: self.store.__setitem__(p, bytes(d)), retry_sleep=0)
 
-        monkeypatch.setattr(pst_reader, "open_pst", fake_open)
+        def fake_get(path):
+            self.opened.append(path)
+            return self.store[path]
+
+        monkeypatch.setattr(storage, "get_download_bytes", fake_get)
         monkeypatch.setattr(task_service, "enqueue_chunk", lambda cid: self.enqueued.append(cid))
         monkeypatch.setattr(native_mod, "_store_attachment", lambda data, path: None)
 
@@ -234,14 +238,14 @@ def test_single_item_failure_skips_subject_read_after_first_try(monkeypatch):
 
 def test_one_bad_item_does_not_fail_chunk(monkeypatch):
     # to_parsed raises for item 2 of 3 -> items 1 and 3 persisted, one error appended, chunk "done"
-    real = pst_reader.to_parsed
+    real = exploded_reader.to_parsed
 
     def flaky(item, kind):
         if getattr(item, "subject", "") == "Msg 2":
             raise RuntimeError("corrupt body")
         return real(item, kind)
 
-    monkeypatch.setattr(pst_reader, "to_parsed", flaky)
+    monkeypatch.setattr(exploded_reader, "to_parsed", flaky)
     env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 0, 3]], 3))
     env.run()
     assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0001", f"{CONTROL} -0003"]
@@ -308,12 +312,10 @@ def test_claim_passes_stale_window(monkeypatch):
 def test_whole_chunk_error_releases_claim(monkeypatch):
     env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1))
 
-    @contextlib.contextmanager
-    def broken_open(path):
+    def broken_get(path):
         raise OSError("storage unavailable")
-        yield
 
-    monkeypatch.setattr(pst_reader, "open_pst", broken_open)
+    monkeypatch.setattr(storage, "get_download_bytes", broken_get)
     with pytest.raises(OSError):
         env.run()
     assert env.sql_params("SET status = 'pending'")
@@ -397,8 +399,8 @@ def test_integrity_error_without_a_duplicate_is_recorded_failed(monkeypatch):
 def _crash_then_retry(monkeypatch, fail_on_retry):
     """Attempt 1: item 1 fails, then the worker dies at item 3 (as an OOM
     would). Attempt 2 re-runs the chunk; item 2 is already loaded."""
-    real_parse = pst_reader.to_parsed
-    real_iter = pst_reader.iter_slice
+    real_parse = exploded_reader.to_parsed
+    real_iter = exploded_reader.iter_slice
     state = {"attempt": 1}
 
     def flaky(item, kind):
@@ -406,14 +408,14 @@ def _crash_then_retry(monkeypatch, fail_on_retry):
             raise RuntimeError("bad body")
         return real_parse(item, kind)
 
-    def crashing_iter(handle, slices):
-        for n, row in enumerate(real_iter(handle, slices)):
+    def crashing_iter(job_id, production_id, storage_path, slices):
+        for n, row in enumerate(real_iter(job_id, production_id, storage_path, slices)):
             if state["attempt"] == 1 and n == 2:
                 raise MemoryError("worker died")
             yield row
 
-    monkeypatch.setattr(pst_reader, "to_parsed", flaky)
-    monkeypatch.setattr(pst_reader, "iter_slice", crashing_iter)
+    monkeypatch.setattr(exploded_reader, "to_parsed", flaky)
+    monkeypatch.setattr(exploded_reader, "iter_slice", crashing_iter)
     env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 0, 3]], 3))
     with pytest.raises(MemoryError):
         env.run()
@@ -445,7 +447,7 @@ def test_transient_failure_loaded_on_retry_is_not_recorded(monkeypatch):
 
 def test_failures_not_recorded_when_done_transition_loses(monkeypatch):
     """A concurrent dispatch already finished the chunk: its failures are its own."""
-    monkeypatch.setattr(pst_reader, "to_parsed", lambda item, kind: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(exploded_reader, "to_parsed", lambda item, kind: (_ for _ in ()).throw(RuntimeError("x")))
     env = Env(monkeypatch, _tree(_emails(1)), chunk=_chunk([[2, 0, 1]], 1))
     env.db.responders.insert(0, ("status = 'done'", FakeResult(rowcount=0)))
     env.run()
@@ -529,7 +531,7 @@ class WorkerDied(BaseException):
 
 
 def _always_dies_on(monkeypatch, subject):
-    real = pst_reader.to_parsed
+    real = exploded_reader.to_parsed
     built = []
 
     def dying(item, kind):
@@ -538,7 +540,7 @@ def _always_dies_on(monkeypatch, subject):
             raise WorkerDied()
         return real(item, kind)
 
-    monkeypatch.setattr(pst_reader, "to_parsed", dying)
+    monkeypatch.setattr(exploded_reader, "to_parsed", dying)
     return built
 
 
@@ -645,3 +647,72 @@ def test_single_item_over_attempts_already_loaded_is_done_not_failed(monkeypatch
     assert env.sql_params("status = 'done'") and not env.sql_params("status = 'failed'")
     assert env.opened == []  # no subject read
     assert env.finalized == ["j1"]
+
+
+# --- Unit 8: chunks read the exploded objects --------------------------------
+
+
+def test_chunk_over_exploded_objects_matches_building_from_the_pst(monkeypatch):
+    """Same documents and control numbers as building straight from pypff."""
+    from tests.test_pst_reader import Att
+
+    items = [Item(subject="One", plain_text_body="b1", attachments=[Att("a.txt", b"hello")]),
+             Item("IPM.Appointment", subject="Two", sender_name="Bob"),
+             Item(subject="Three", html_body="<p>hi</p>")]
+    env = Env(monkeypatch, _tree(items), chunk=_chunk([[2, 0, 3]], 3))
+    env.run()
+    expected = []
+    for n, it in enumerate(items, start=1):
+        kind = pst_reader.item_kind(it)
+        parsed = pst_reader.to_parsed(it, kind)
+        expected += native_mod.build_email_documents(
+            parsed, message_control=message_control(CONTROL, n, 3), production_id=1,
+            source_path="acme.pst", custodian="Alice Example",
+            msg_bytes=native_mod._serialize_message(parsed), store_fn=lambda d, p: None)
+
+    def key(d):
+        return (d.bates_begin, d.family_id, d.title, d.text_content, d.file_hash_sha256,
+                d.email_subject, d.file_name)
+
+    assert [key(d) for d in env.docs()] == [key(d) for d in expected]
+
+
+def test_chunk_never_opens_or_downloads_the_pst(monkeypatch):
+    env = Env(monkeypatch, _tree(_emails(2)), chunk=_chunk([[2, 0, 2]], 2))
+    monkeypatch.setattr(pst_reader, "open_pst", lambda *a, **k: pytest.fail("PST opened"))
+    monkeypatch.setattr(storage, "download_sliced", lambda *a, **k: pytest.fail("PST downloaded"))
+    env.run()
+    assert len(env.parents()) == 2
+    assert all("/exploded/j1/" in p for p in env.opened)
+
+
+def test_partly_read_item_is_loaded_and_reported_not_failed(monkeypatch):
+    from tests.test_pst_reader import _item_with
+
+    cls = _item_with(subject=OSError("unable to read subject"))
+    env = Env(monkeypatch, _tree([cls(plain_text_body="kept")]), chunk=_chunk([[2, 0, 1]], 1))
+    env.run()
+    (doc,) = env.parents()
+    assert doc.text_content == "kept" and "unable to read subject" in doc.metadata_["Read Errors"]
+    (msg,) = env.errors_appended()
+    assert msg.startswith(f"{CONTROL} -0001: partly read") and "position 0" in msg
+    assert env.sql_params("items_failed = items_failed +") == []
+
+
+def test_item_unreadable_at_unpack_is_recorded_failed_with_its_position(monkeypatch):
+    real = pst_reader.to_parsed
+
+    def broken(item, kind, _depth=0):
+        if getattr(item, "subject", "") == "Msg 2":
+            raise OSError("item table corrupt")
+        return real(item, kind, _depth)
+
+    monkeypatch.setattr(pst_reader, "to_parsed", broken)  # at explode time
+    env = Env(monkeypatch, _tree(_emails(3)), chunk=_chunk([[2, 0, 3]], 3))
+    monkeypatch.setattr(pst_reader, "to_parsed", real)
+    env.run()
+    assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0001", f"{CONTROL} -0003"]
+    (msg,) = env.errors_appended()
+    assert msg.startswith(f"{CONTROL} -0002") and "Top/Inbox" in msg and "position 1" in msg
+    assert "item table corrupt" in msg
+    assert [p["f"] for p in env.sql_params("items_failed = items_failed +")] == [1]

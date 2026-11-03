@@ -1,10 +1,11 @@
 """Large-container (multi-GB PST/OST) ingest: detection, survey, selection.
 
 Containers at or above ``settings.large_container_bytes`` skip the readpst
-batch path. They are surveyed first (cheap, read-only walk of the folder tree)
-so the user can see counts and cost before any paid work starts. The
-uploader's type selection is then planned into fixed chunks, one Cloud Task
-each.
+batch path. Each is unpacked once by the ``vigilist-pst-explode`` Cloud Run
+Job (``pst_explode``): downloaded, surveyed and exploded to Storage, so the
+user can see counts and cost before any paid work starts and chunk workers
+never open the PST. The uploader's type selection is then planned into fixed
+chunks, one Cloud Task each.
 """
 
 import asyncio
@@ -16,7 +17,6 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.models import IngestChunk, IngestJob, Production
-from app.services import pst_reader
 from app.services.large_ingest_estimate import estimate_load
 from app.services.pst_reader import ITEM_TYPES, ContainerSurvey
 
@@ -38,17 +38,17 @@ def large_source_key(storage_path: str) -> str:
     return f"native:{storage_path}"
 
 
-def _survey_container(storage_path: str) -> dict:
-    with pst_reader.open_pst(storage_path) as handle:
-        result = pst_reader.survey(handle)
-    result.storage_path = storage_path
-    return result.to_json()
+def start_unpack(job_id: str, storage_path: str) -> None:
+    """Start the explode Job for one container (raises if it can't)."""
+    from app.services import pst_explode
+
+    pst_explode.trigger_explode_job(job_id, storage_path)
 
 
-# Survey attempts per container before it is given up on. Counted in the
-# job's field_mapping (not the Cloud Tasks retry header, which resets if the
-# task is re-created); every claim counts, so a worker that dies outright
-# (OOM, timeout) also uses one up.
+# Survey (unpack) attempts per container before it is given up on. Counted in
+# the job's field_mapping; every claim counts, so a Job run that dies outright
+# (OOM, timeout) also uses one up. The Job itself runs at most
+# 1 + EXPLODE_JOB_MAX_RETRIES times, and its last run gives up on failure.
 MAX_SURVEY_ATTEMPTS = 3
 
 # Atomic per-container attempt counter; only while the job is surveying.
@@ -79,41 +79,49 @@ def _now_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def run_survey(db, job_id: str, storage_path: str) -> None:
-    """Survey one container and record it on the job.
+async def run_survey(db, job_id: str, storage_path: str, work, *,
+                     give_up_on_failure: bool = False) -> str:
+    """Survey (and, in the explode Job, unpack) one container and record it.
 
-    When every large container in the job has a survey (or was given up on),
-    the job moves to ``awaiting_selection``. A container whose survey fails
-    ``MAX_SURVEY_ATTEMPTS`` times is given up on (``_give_up_survey``) and this
-    returns normally, so Cloud Tasks stops retrying.
+    ``work(storage_path) -> survey JSON`` is the blocking walk; the explode
+    Job passes ``pst_explode.unpack_container``, so the survey is recorded
+    only once every item is exploded. When every large container in the job
+    has a survey (or was given up on), the job moves to ``awaiting_selection``.
+
+    A failure re-raises (the caller retries) until ``MAX_SURVEY_ATTEMPTS``,
+    or at once with ``give_up_on_failure`` (the Job's last run); then the
+    container is given up on (``_give_up_survey``) and this returns.
+
+    Returns ``"surveyed"``, ``"settled"`` (already surveyed or given up),
+    ``"not_surveying"`` or ``"gave_up"``.
     """
     job = await db.get(IngestJob, job_id)
     if not job:
-        return
+        return "not_surveying"
     if storage_path in (job.survey or {}) or storage_path in survey_failed_paths(job):
         await db.commit()
-        return  # a redelivered task for a container already settled
+        return "settled"  # a rerun for a container already settled
     attempts = (await db.execute(text(_BUMP_SURVEY_ATTEMPTS_SQL),
                                  {"jid": job_id, "path": storage_path})).scalar()
     # Commits the counter and releases the connection for the (minutes-long)
     # container walk.
     await db.commit()
     if attempts is None:
-        return  # the job is no longer surveying
+        return "not_surveying"
     if attempts > MAX_SURVEY_ATTEMPTS:
-        # The previous attempts never got to record a failure: the worker died.
+        # The previous attempts never got to record a failure: the run died.
         await _give_up_survey(db, job_id, storage_path, attempts - 1,
                               "the worker stopped before the survey finished")
-        return
+        return "gave_up"
 
     try:
-        survey_json = await asyncio.to_thread(_survey_container, storage_path)
+        survey_json = await asyncio.to_thread(work, storage_path)
     except Exception as e:
-        if attempts < MAX_SURVEY_ATTEMPTS:
+        if attempts < MAX_SURVEY_ATTEMPTS and not give_up_on_failure:
             raise
-        logger.exception("Survey of %s failed %d times; giving up", storage_path, attempts)
+        logger.exception("Survey of %s failed (attempt %d); giving up", storage_path, attempts)
         await _give_up_survey(db, job_id, storage_path, attempts, _short_error(e))
-        return
+        return "gave_up"
 
     # Re-read under a row lock so two surveys finishing together can't lose
     # each other's write or both miss the "all surveyed" transition.
@@ -128,9 +136,11 @@ async def run_survey(db, job_id: str, storage_path: str) -> None:
     if all(p in surveys or p in failed for p in expected) and job.status == "surveying":
         job.status = "awaiting_selection"
     await db.commit()
+    return "surveyed"
 
 
-async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, error: str) -> None:
+async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, error: str,
+                          *, reason: str | None = None) -> None:
     """Record a container that could not be surveyed and let the job go on
     without it.
 
@@ -139,7 +149,8 @@ async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, err
     Once every large container is surveyed or given up on: with at least one
     surveyed, the job awaits selection as usual; with none surveyed but other
     files in the load, it continues to finalize; with nothing else at all, the
-    job is ``failed``.
+    job is ``failed``. Whatever the explode Job wrote for the container (or,
+    when the job failed, for the whole job) is deleted.
     """
     from app.services.ingest import _INCR_SKIPPED_SQL, append_job_errors
 
@@ -171,12 +182,23 @@ async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, err
             job.completed_at = _now_naive()
 
     name = os.path.basename(storage_path)
-    msg = f"{name}: mailbox could not be read (survey failed {attempts} times): {error}"
+    msg = (f"{name}: mailbox could not be read "
+           f"({reason or f'survey failed {attempts} times'}): {error}")
+    job_failed = job.status == "failed"
+    production_id = getattr(job, "production_id", None)
     await append_job_errors(db, job_id, [msg], commit=False)
     await db.execute(text(_INCR_SKIPPED_SQL), {"key": large_source_key(storage_path), "jid": job_id})
     # Failure record, error line, skipped key and status commit together.
     await db.commit()
     logger.warning("Job %s: gave up surveying %s after %d attempts", job_id, storage_path, attempts)
+    if production_id is not None:
+        from app.services import pst_explode
+
+        prefixes = [pst_explode.explode_prefix(production_id, str(job_id), storage_path)]
+        if job_failed:
+            prefixes.append(pst_explode.job_explode_prefix(production_id, str(job_id)))
+        for prefix in prefixes:
+            await asyncio.to_thread(pst_explode.delete_exploded, prefix)
     if finalize:
         # Normal batches that already finished saw a 'surveying' job and did
         # not finalize; nudge it now.
