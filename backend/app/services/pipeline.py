@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.database import async_session
 from app.models import Document, Production
@@ -50,8 +50,17 @@ BATCH_STALE_HOURS = 30
 # poll request stays inside the dispatch deadline.
 BATCH_APPLY_BUDGET_S = 1200
 BATCH_APPLY_GROUP = 100
+# A poll applying results claims the stage ("applying"); a claim this old
+# (past the 30 min dispatch deadline) belongs to a dead worker and may be
+# taken over.
+BATCH_APPLY_STALE_MINUTES = 40
 BATCHED_STAGES = ("summaries", "entities")
 WAITING = "waiting"
+APPLYING = "applying"
+# ai_pipeline_status[NEXT_ATTEMPT_KEY][stage] == "sync": the stage's last
+# batch left documents unprocessed, so its next attempt runs synchronously
+# (once) instead of resubmitting them.
+NEXT_ATTEMPT_KEY = "next_attempt"
 
 
 def stages_to_run(status: dict | None, force: bool) -> list[str]:
@@ -73,17 +82,91 @@ def merge_stage(status: dict | None, stage: str, state: str, error: str | None =
     return out
 
 
-def _is_live_wait(entry) -> bool:
-    """True for a stage waiting on a Message Batch that can still finish."""
-    if not (isinstance(entry, dict) and entry.get("status") == WAITING):
-        return False
+def _age(raw) -> timedelta | None:
     try:
-        submitted = datetime.fromisoformat(entry.get("submitted_at") or "")
-    except ValueError:
+        when = datetime.fromisoformat(raw or "")
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - when
+
+
+def _is_stale_apply(entry) -> bool:
+    age = _age(entry.get("applying_at"))
+    return age is None or age >= timedelta(minutes=BATCH_APPLY_STALE_MINUTES)
+
+
+def _is_live_wait(entry) -> bool:
+    """True for a stage waiting on a Message Batch that can still finish, or
+    whose results a live poll is applying."""
+    if not isinstance(entry, dict):
         return False
-    if submitted.tzinfo is None:
-        submitted = submitted.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - submitted < timedelta(hours=BATCH_STALE_HOURS)
+    if entry.get("status") == APPLYING:
+        return not _is_stale_apply(entry)
+    if entry.get("status") != WAITING:
+        return False
+    age = _age(entry.get("submitted_at"))
+    return age is not None and age < timedelta(hours=BATCH_STALE_HOURS)
+
+
+# Compare-and-set of one stage entry: succeeds only if the stage still holds
+# exactly ``prev``, so of two concurrent polls only one claims the batch.
+_CAS_STAGE_SQL = (
+    "UPDATE productions SET ai_pipeline_status = jsonb_set(jsonb_set("
+    "coalesce(ai_pipeline_status, cast('{}' as jsonb)), "
+    "ARRAY[cast(:stage as text)], cast(:new as jsonb)), "
+    "'{updated_at}', to_jsonb(cast(:now as text))) "
+    "WHERE id = :pid AND ai_pipeline_status -> cast(:stage as text) = cast(:prev as jsonb) "
+    "RETURNING id"
+)
+
+
+async def _cas_stage(production_id: int, stage: str, prev: dict, new: dict) -> bool:
+    """Atomically replace the stage entry ``prev`` with ``new``. False when
+    another writer changed it first."""
+    async with async_session() as db:
+        row = (await db.execute(text(_CAS_STAGE_SQL), {
+            "pid": production_id, "stage": stage,
+            "prev": json.dumps(prev), "new": json.dumps(new),
+            "now": datetime.now(timezone.utc).isoformat(),
+        })).first()
+        await db.commit()
+        return row is not None
+
+
+async def _take_sync_marker(production_id: int, stage: str) -> bool:
+    """True (and clear it) if the stage's next attempt must be synchronous."""
+    async with async_session() as db:
+        prod = await db.get(Production, production_id)
+        if prod is None:
+            return False
+        status = dict(prod.ai_pipeline_status or {})
+        marks = dict(status.get(NEXT_ATTEMPT_KEY) or {})
+        if marks.pop(stage, None) != "sync":
+            return False
+        status[NEXT_ATTEMPT_KEY] = marks
+        prod.ai_pipeline_status = status
+        await db.commit()
+        return True
+
+
+async def _finish_batch(production_id: int, stage: str, state: str,
+                        error: str | None, sync_next: bool) -> None:
+    """Record the stage's state after its batch, plus the sync-next marker."""
+    async with async_session() as db:
+        prod = await db.get(Production, production_id)
+        if prod is None:
+            return
+        out = merge_stage(prod.ai_pipeline_status, stage, state, error)
+        marks = dict(out.get(NEXT_ATTEMPT_KEY) or {})
+        if sync_next:
+            marks[stage] = "sync"
+        else:
+            marks.pop(stage, None)
+        out[NEXT_ATTEMPT_KEY] = marks
+        prod.ai_pipeline_status = out
+        await db.commit()
 
 
 async def _set_stage_waiting(production_id: int, stage: str, batch_id: str, more: bool) -> None:
@@ -158,10 +241,15 @@ def _apply_summary(doc, summary: str | None) -> bool:
 
 
 async def _run_summaries(production_id: int):
-    """Summarize documents that don't have a summary yet, in DB batches.
-    A large run is submitted as a Message Batch instead (returns WAITING)."""
+    """Summaries stage: a large run is submitted as a Message Batch (returns
+    WAITING); otherwise documents are summarized synchronously."""
     if await _maybe_submit_batch(production_id, "summaries"):
         return WAITING
+    await _run_summaries_sync(production_id)
+
+
+async def _run_summaries_sync(production_id: int) -> None:
+    """Summarize documents that don't have a summary yet, in DB batches."""
     written_count = 0
     while True:
         async with async_session() as db:
@@ -242,12 +330,17 @@ async def _extract_one_document(db, doc) -> bool:
 
 
 async def _run_entities(production_id: int):
-    """Extract entities for documents not yet processed, in small batches,
-    one commit per document. A batch where every document fails aborts the
-    stage (rather than spinning); unmarked docs retry on the next run.
-    A large run is submitted as a Message Batch instead (returns WAITING)."""
+    """Entities stage: a large run is submitted as a Message Batch (returns
+    WAITING); otherwise documents are extracted synchronously."""
     if await _maybe_submit_batch(production_id, "entities"):
         return WAITING
+    await _run_entities_sync(production_id)
+
+
+async def _run_entities_sync(production_id: int) -> None:
+    """Extract entities for documents not yet processed, in small batches,
+    one commit per document. A batch where every document fails aborts the
+    stage (rather than spinning); unmarked docs retry on the next run."""
     while True:
         pending = await _pending_extraction_docs(production_id, ENTITY_BATCH_SIZE)
         if not pending:
@@ -318,9 +411,15 @@ async def _maybe_submit_batch(production_id: int, stage: str) -> bool:
     run is large. True = submitted (stage now waiting, poll enqueued).
 
     Needs Cloud Tasks: without it nothing could poll, so the run stays
-    synchronous.
+    synchronous. A stage whose last batch left documents unprocessed runs
+    synchronously once (the marker is consumed), so failing items are not
+    resubmitted in a loop.
     """
     if stage not in BATCHED_STAGES or not task_service.is_configured():
+        return False
+    if await _take_sync_marker(production_id, stage):
+        logger.info("Pipeline %s for production %s: synchronous retry after a batch",
+                    stage, production_id)
         return False
     if await _count_pending(production_id, stage) <= BATCH_THRESHOLD_DOCS:
         return False
@@ -361,12 +460,14 @@ def _as_uuid(value: str):
         return None
 
 
-async def _apply_summary_results(production_id: int, results: dict, deadline: float) -> tuple[int, bool]:
-    """Apply summary results. Returns (usable results, finished)."""
+async def _apply_summary_results(production_id: int, results: dict,
+                                 deadline: float) -> tuple[int, int, bool]:
+    """Apply summary results. Returns (usable, unprocessed, finished)."""
     ids = sorted(cid for cid, text in results.items() if text)
+    unprocessed = len(results) - len(ids)
     for start in range(0, len(ids), BATCH_APPLY_GROUP):
         if time.monotonic() > deadline:
-            return len(ids), False
+            return len(ids), unprocessed, False
         async with async_session() as db:
             for cid in ids[start:start + BATCH_APPLY_GROUP]:
                 key = _as_uuid(cid)
@@ -376,12 +477,13 @@ async def _apply_summary_results(production_id: int, results: dict, deadline: fl
                     continue
                 _apply_summary(doc, results[cid])
             await db.commit()
-    return len(ids), True
+    return len(ids), unprocessed, True
 
 
-async def _apply_entity_results(production_id: int, results: dict, deadline: float) -> tuple[int, bool]:
+async def _apply_entity_results(production_id: int, results: dict,
+                                deadline: float) -> tuple[int, int, bool]:
     """Apply entity results; a document with any failed slice is left
-    unprocessed. Returns (usable documents, finished)."""
+    unprocessed. Returns (usable documents, unprocessed documents, finished)."""
     from app.services.entity_extraction import merge_parsed, parse_extraction_response, slice_text
 
     by_doc: dict[str, dict[int, str | None]] = {}
@@ -391,9 +493,10 @@ async def _apply_entity_results(production_id: int, results: dict, deadline: flo
             continue
         by_doc.setdefault(doc_id, {})[int(idx)] = text
     usable = sorted(d for d, slices in by_doc.items() if all(slices.values()))
+    unprocessed = len(by_doc) - len(usable)
     for doc_id in usable:
         if time.monotonic() > deadline:
-            return len(usable), False
+            return len(usable), unprocessed, False
         key = _as_uuid(doc_id)
         if key is None:
             continue
@@ -410,7 +513,7 @@ async def _apply_entity_results(production_id: int, results: dict, deadline: flo
                 await db.commit()
             except Exception:
                 logger.exception("Applying batched extraction failed for document %s", doc_id)
-    return len(usable), True
+    return len(usable), unprocessed, True
 
 
 async def _continue_pipeline(production_id: int) -> None:
@@ -423,18 +526,27 @@ async def _continue_pipeline(production_id: int) -> None:
 async def poll_batch_stage(production_id: int, stage: str) -> None:
     """Cloud Tasks poll of a waiting stage's Message Batch.
 
-    Still processing: poll again in BATCH_POLL_SECONDS. Ended: apply the
-    results through the same persistence code as the synchronous path, mark
-    the stage done (or pending, when more documents remain for another
-    round), and continue the pipeline. Errored items stay unprocessed; the
-    next run picks them up.
+    Still processing: poll again in BATCH_POLL_SECONDS. Ended: claim the
+    stage ("applying", compare-and-set, so a duplicate poll backs off), apply
+    the results through the same persistence code as the synchronous path,
+    mark the stage done (or pending, when more documents remain for another
+    round), and continue the pipeline.
+
+    Errored items stay unprocessed and the stage's next attempt runs
+    synchronously. A batch where nothing succeeded fails the stage and does
+    not continue the pipeline (resubmitting would fail the same way).
     """
     async with async_session() as db:
         prod = await db.get(Production, production_id)
         entry = (prod.ai_pipeline_status or {}).get(stage) if prod is not None else None
-    if not (isinstance(entry, dict) and entry.get("status") == WAITING and entry.get("batch_id")):
+    if not (isinstance(entry, dict) and entry.get("batch_id")):
         logger.info("Batch poll for production %s %s: stage not waiting, nothing to do",
                     production_id, stage)
+        return
+    state = entry.get("status")
+    if not (state == WAITING or (state == APPLYING and _is_stale_apply(entry))):
+        logger.info("Batch poll for production %s %s: stage is %s, nothing to do",
+                    production_id, stage, state)
         return
 
     results = await claude_batch.fetch_if_done(entry["batch_id"])
@@ -442,21 +554,36 @@ async def poll_batch_stage(production_id: int, stage: str) -> None:
         task_service.enqueue_batch_poll(production_id, stage, BATCH_POLL_SECONDS)
         return
 
+    claimed = {**entry, "status": APPLYING,
+               "applying_at": datetime.now(timezone.utc).isoformat()}
+    if not await _cas_stage(production_id, stage, entry, claimed):
+        logger.info("Batch poll for production %s %s: another poll claimed batch %s",
+                    production_id, stage, entry["batch_id"])
+        return
+
     deadline = time.monotonic() + BATCH_APPLY_BUDGET_S
     apply = _apply_summary_results if stage == "summaries" else _apply_entity_results
-    usable, finished = await apply(production_id, results, deadline)
+    usable, unprocessed, finished = await apply(production_id, results, deadline)
     if not finished:
-        # Out of time: re-poll now; already-applied documents are skipped.
+        # Out of time: release the claim and re-poll now; already-applied
+        # documents are skipped.
+        released = {k: v for k, v in claimed.items() if k != "applying_at"}
+        released["status"] = WAITING
+        await _cas_stage(production_id, stage, claimed, released)
         task_service.enqueue_batch_poll(production_id, stage, 0)
         return
 
     if results and usable == 0:
-        await _set_stage(production_id, stage, "failed",
-                         error=f"batch {entry['batch_id']}: no request succeeded")
-    elif entry.get("more"):
-        await _set_stage(production_id, stage, "pending")
+        await _finish_batch(production_id, stage, "failed",
+                            f"batch {entry['batch_id']}: no request succeeded; "
+                            "the next run retries synchronously", sync_next=True)
+        return
+    if entry.get("more"):
+        # The next round's batch includes this round's failures again, and
+        # always carries new documents, so it cannot loop without progress.
+        await _finish_batch(production_id, stage, "pending", None, sync_next=False)
     else:
-        await _set_stage(production_id, stage, "done")
+        await _finish_batch(production_id, stage, "done", None, sync_next=unprocessed > 0)
         if stage == "summaries":
             async with async_session() as db:
                 await _log_summary_batch_completed(db, production_id, usable)

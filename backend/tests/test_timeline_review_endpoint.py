@@ -151,3 +151,33 @@ def test_status_denies_out_of_scope(monkeypatch):
         asyncio.run(er.get_timeline_review_status(
             production_id=1, db=FakeSession(), user=FakeUser()))
     assert exc.value.status_code == 404
+
+
+def test_trigger_409_when_ai_hold_and_nothing_enqueued(monkeypatch):
+    _patch(monkeypatch, configured=True)
+    calls = []
+    monkeypatch.setattr(task_service, "enqueue_pipeline", lambda pid, *a, **k: calls.append(pid))
+    prod = Production(name="M")
+    prod.id = 1
+    prod.ai_hold = True
+    db = FakeSession(get_objects={("Production", 1): prod})
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(er.trigger_timeline_review(
+            production_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert exc.value.status_code == 409
+    assert "on hold" in exc.value.detail
+    assert calls == []
+    assert (prod.ai_pipeline_status or {}).get("timeline_review") is None
+
+
+def test_trigger_enqueues_when_not_held(monkeypatch):
+    _patch(monkeypatch, configured=True)
+    calls = []
+    monkeypatch.setattr(task_service, "enqueue_pipeline", lambda pid, *a, **k: calls.append(pid))
+    prod = Production(name="M")
+    prod.id = 1
+    prod.ai_hold = False
+    db = FakeSession(get_objects={("Production", 1): prod})
+    out = asyncio.run(er.trigger_timeline_review(
+        production_id=1, background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    assert out == {"status": "enqueued"} and calls == [1]

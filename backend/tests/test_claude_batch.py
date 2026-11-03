@@ -233,8 +233,19 @@ def _install(monkeypatch, world, configured=True):
                          key=lambda d: d.bates_begin)
         return pending[offset:offset + limit]
 
+    async def cas_stage(production_id, stage, prev, new):
+        # Same contract as the conditional UPDATE: atomic within one event
+        # loop step (no await between compare and set).
+        status = dict(world.prod.ai_pipeline_status or {})
+        if status.get(stage) != prev:
+            return False
+        status[stage] = new
+        world.prod.ai_pipeline_status = status
+        return True
+
     monkeypatch.setattr(pipeline, "_count_pending", count_pending)
     monkeypatch.setattr(pipeline, "_load_batch_docs", load_docs)
+    monkeypatch.setattr(pipeline, "_cas_stage", cas_stage)
     polls, pipelines = [], []
     monkeypatch.setattr(tasks, "enqueue_batch_poll",
                         lambda pid, stage, delay_s: polls.append((pid, stage, delay_s)))
@@ -416,3 +427,159 @@ def test_poll_batch_endpoint_requires_stage(monkeypatch):
     monkeypatch.setattr(pipeline, "poll_batch_stage", fake_poll)
     out = asyncio.run(ingest_router.poll_batch_handler({"production_id": 1, "stage": "entities"}, None))
     assert out["ok"] is True and seen == [(1, "entities")]
+
+
+# --- fix round 1: no resubmit loop, single applier, multi-slice safety ---------------
+
+def test_partially_errored_final_batch_marks_next_attempt_sync(monkeypatch):
+    docs = [FakeDoc(i) for i in range(2)]
+    world = World(docs, status=_waiting("summaries"))
+    _install(monkeypatch, world)
+    monkeypatch.setattr(claude_batch, "fetch_if_done", AsyncMock(
+        return_value={str(docs[0].id): "Summary A", str(docs[1].id): None}))
+    asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    status = world.prod.ai_pipeline_status
+    assert status["summaries"] == "done"
+    assert status[pipeline.NEXT_ATTEMPT_KEY] == {"summaries": "sync"}
+
+
+def test_all_errored_batch_fails_without_resubmitting_then_runs_sync(monkeypatch):
+    docs = [FakeDoc(i) for i in range(600)]
+    world = World(docs, status=_waiting("summaries"))
+    polls, pipelines = _install(monkeypatch, world)
+    submit = AsyncMock(return_value="again")
+    monkeypatch.setattr(claude_batch, "submit", submit)
+    monkeypatch.setattr(claude_batch, "fetch_if_done", AsyncMock(
+        return_value={str(d.id): None for d in docs}))
+
+    asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    status = world.prod.ai_pipeline_status
+    assert status["summaries"] == "failed"
+    assert "no request succeeded" in status["errors"]["summaries"]
+    assert status[pipeline.NEXT_ATTEMPT_KEY] == {"summaries": "sync"}
+    assert pipelines == [] and polls == []  # pipeline not auto-continued
+    submit.assert_not_called()
+
+    # The next (explicit) run handles the stage synchronously, once.
+    sync_runs = []
+
+    async def fake_sync(pid):
+        sync_runs.append(pid)
+
+    monkeypatch.setattr(pipeline, "_run_summaries_sync", fake_sync)
+    for stage in ("entities", "timeline_review", "brief"):
+        monkeypatch.setitem(pipeline._STAGE_RUNNERS, stage, AsyncMock())
+    asyncio.run(pipeline.run_ambient_pipeline(1))
+    submit.assert_not_called()
+    assert sync_runs == [1]
+    assert world.prod.ai_pipeline_status["summaries"] == "done"
+    assert world.prod.ai_pipeline_status[pipeline.NEXT_ATTEMPT_KEY] == {}
+    # Marker consumed: a later large run batches again.
+    asyncio.run(pipeline._maybe_submit_batch(1, "summaries"))
+    submit.assert_called_once()
+
+
+def test_concurrent_duplicate_polls_apply_once(monkeypatch):
+    docs = [FakeDoc(i) for i in range(3)]
+    world = World(docs, status=_waiting("summaries"))
+    _, pipelines = _install(monkeypatch, world)
+
+    async def slow_fetch(batch_id):
+        await asyncio.sleep(0)  # both polls fetch before either claims
+        return {str(d.id): f"Summary {i}" for i, d in enumerate(docs)}
+
+    monkeypatch.setattr(claude_batch, "fetch_if_done", slow_fetch)
+    applied = []
+    real_apply = pipeline._apply_summary_results
+
+    async def counting_apply(*a, **k):
+        applied.append(1)
+        return await real_apply(*a, **k)
+
+    monkeypatch.setattr(pipeline, "_apply_summary_results", counting_apply)
+
+    async def both():
+        await asyncio.gather(pipeline.poll_batch_stage(1, "summaries"),
+                             pipeline.poll_batch_stage(1, "summaries"))
+
+    asyncio.run(both())
+    assert applied == [1]
+    assert pipelines == [1]
+    assert world.prod.ai_pipeline_status["summaries"] == "done"
+
+
+def test_poll_ignores_a_live_applying_claim(monkeypatch):
+    entry = {"status": "applying", "batch_id": "b1", "more": False,
+             "submitted_at": datetime.now(timezone.utc).isoformat(),
+             "applying_at": datetime.now(timezone.utc).isoformat()}
+    world = World([FakeDoc(0)], status={"summaries": entry})
+    _install(monkeypatch, world)
+    monkeypatch.setattr(claude_batch, "fetch_if_done",
+                        AsyncMock(side_effect=AssertionError("claimed elsewhere")))
+    asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    assert world.prod.ai_pipeline_status["summaries"] == entry
+
+
+def test_cas_stage_issues_conditional_update(monkeypatch):
+    seen = {}
+
+    class Res:
+        def __init__(self, row):
+            self._row = row
+
+        def first(self):
+            return self._row
+
+    def session_with(row):
+        class S:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+
+            async def execute(self, stmt, params=None):
+                seen["sql"], seen["params"] = str(stmt), params
+                return Res(row)
+
+            async def commit(self): pass
+        return S()
+
+    import json
+    prev = {"status": "waiting", "batch_id": "b1"}
+    new = {"status": "applying", "batch_id": "b1"}
+    monkeypatch.setattr(pipeline, "async_session", lambda: session_with((1,)))
+    assert asyncio.run(pipeline._cas_stage(1, "summaries", prev, new)) is True
+    assert "WHERE id = :pid AND ai_pipeline_status -> cast(:stage as text) = cast(:prev as jsonb)" in seen["sql"]
+    assert json.loads(seen["params"]["prev"]) == prev and json.loads(seen["params"]["new"]) == new
+    monkeypatch.setattr(pipeline, "async_session", lambda: session_with(None))
+    assert asyncio.run(pipeline._cas_stage(1, "summaries", prev, new)) is False
+
+
+def test_multi_slice_doc_with_a_failed_slice_is_not_applied(monkeypatch):
+    from app.services import entity_extraction as ee
+    long_text = "ACME widget ledger line. " * 8_000  # > one 140K-char slice
+    assert len(ee.slice_text(long_text)) == 2
+    partial = FakeDoc(0, text=long_text)
+    complete = FakeDoc(1, text=long_text)
+    world = World([partial, complete])
+    _install(monkeypatch, world)
+    persisted = []
+
+    async def fake_persist(db, production_id, document_id, text, parsed):
+        persisted.append((document_id, sorted(e["name"] for e in parsed["entities"])))
+        return {}
+
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+
+    def ent(name):
+        return ('{"entities": [{"name": "%s", "type": "org", "surface_forms": ["%s"], '
+                '"role": null, "emails": []}], "events": [], "relationships": []}' % (name, name))
+
+    results = {
+        f"{partial.id}_0": ent("ACME Corp"), f"{partial.id}_1": None,
+        f"{complete.id}_1": ent("Widget LLC"), f"{complete.id}_0": ent("ACME Corp"),
+    }
+    usable, unprocessed, finished = asyncio.run(
+        pipeline._apply_entity_results(1, results, deadline=float("inf")))
+    assert (usable, unprocessed, finished) == (1, 1, True)
+    assert persisted == [(complete.id, ["ACME Corp", "Widget LLC"])]
+    assert complete.entities_extracted_at is not None
+    assert partial.entities_extracted_at is None
