@@ -15,6 +15,18 @@ def ids_match(column, ids):
     return column == any_(literal(list(ids), ARRAY(PG_UUID(as_uuid=True))))
 
 
+# Batch size for id lists that must stay a plain IN (...): well under asyncpg's
+# 32,767 bind-parameter cap.
+IN_BATCH = 5_000
+
+
+def batches(values, size: int = IN_BATCH):
+    """Yield `values` as lists of at most `size` items."""
+    values = list(values)
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
+
+
 def strings_match(column, values):
     """`column = ANY(:values)` with a single array bind parameter (text column)."""
     return column == any_(literal(list(values), ARRAY(String())))

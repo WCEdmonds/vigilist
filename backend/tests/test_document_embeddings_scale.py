@@ -101,3 +101,49 @@ def test_detect_duplicates_clears_old_groups_without_binding_each_id(monkeypatch
     deletes = [s for s in db.statements if str(s).startswith("DELETE")]
     assert deletes, "old groups must be cleared"
     assert all(_bind_count(s) < 10 for s in deletes)
+
+
+# --- id lists that can't be replaced by a production query: batch at 5,000 ---
+
+class _BatchSession:
+    def __init__(self):
+        self.statements = []
+
+    async def execute(self, stmt, params=None):
+        self.statements.append(stmt)
+        return FakeResult(rows=[])
+
+
+def _assert_batched(statements, n_ids):
+    expected = -(-n_ids // 5000)
+    assert len(statements) == expected
+    assert all(_bind_count(s) <= 5000 + 5 for s in statements)
+
+
+def test_merge_undo_loads_moved_rows_in_batches():
+    from app.models import EntityMention
+    from app.services import entity_merge
+
+    db = _BatchSession()
+    ids = list(range(12_001))
+    asyncio.run(entity_merge._rows_by_ids(db, EntityMention, ids))
+    _assert_batched(db.statements, len(ids))
+
+
+def test_sample_tag_counts_query_in_batches():
+    from types import SimpleNamespace
+    from app.routers import sampling as rs
+
+    db = _BatchSession()
+    smp = SimpleNamespace(document_ids=[str(uuid.uuid4()) for _ in range(12_001)])
+    asyncio.run(rs._tagged_in_sample(db, smp, tag_id=3))
+    _assert_batched(db.statements, 12_001)
+
+
+def test_tar_validation_tag_members_query_in_batches():
+    from app.services import tar_validation as tv
+
+    db = _BatchSession()
+    ids = [str(uuid.uuid4()) for _ in range(12_001)]
+    asyncio.run(tv._tag_members(db, 3, ids))
+    _assert_batched(db.statements, 12_001)

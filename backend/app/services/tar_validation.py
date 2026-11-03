@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import DocumentTag, Sample
 from app.models_review import AIReviewResult
 from app.services.sampling_stats import wilson_ci
+from app.services.sql_arrays import batches
 
 MACHINE_POSITIVE = {"relevant", "key_document"}
 MACHINE_NEGATIVE = {"not_relevant"}
@@ -30,12 +31,15 @@ def _ci_dict(positives: int, n: int, confidence: int) -> dict:
 async def _tag_members(db: AsyncSession, tag_id: int | None, ids: list) -> set:
     if not tag_id or not ids:
         return set()
-    rows = (await db.execute(
-        select(DocumentTag.document_id).where(
-            DocumentTag.tag_id == tag_id,
-            DocumentTag.document_id.in_(ids),
-        )
-    )).all()
+    # Batched: a stored sample's size has no upper bound.
+    rows = []
+    for chunk in batches(ids):
+        rows.extend((await db.execute(
+            select(DocumentTag.document_id).where(
+                DocumentTag.tag_id == tag_id,
+                DocumentTag.document_id.in_(chunk),
+            )
+        )).all())
     idset = set(ids)
     return {str(r[0]) for r in rows if str(r[0]) in idset}
 
@@ -53,12 +57,14 @@ async def build_validation(
     control_ids = [str(d) for d in (control_sample.document_ids or [])]
     notes: list[str] = []
 
-    dec_rows = (await db.execute(
-        select(AIReviewResult.document_id, AIReviewResult.ai_decision).where(
-            AIReviewResult.project_id == project_id,
-            AIReviewResult.document_id.in_(control_ids),
-        )
-    )).all()
+    dec_rows = []
+    for chunk in batches(control_ids):
+        dec_rows.extend((await db.execute(
+            select(AIReviewResult.document_id, AIReviewResult.ai_decision).where(
+                AIReviewResult.project_id == project_id,
+                AIReviewResult.document_id.in_(chunk),
+            )
+        )).all())
     machine = {str(d): dec for d, dec in dec_rows}
 
     human_pos = await _tag_members(db, responsive_tag_id, control_ids)

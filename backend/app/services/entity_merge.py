@@ -9,6 +9,7 @@ from app.models import (
     Entity, EntityMention, EntityMerge, EntityMergeSuggestion,
     EntityRelationship, EventParticipant,
 )
+from app.services.sql_arrays import batches
 
 
 def _snapshot(entity: Entity) -> dict:
@@ -140,6 +141,15 @@ async def merge_entities(db, winner: Entity, loser: Entity, user_id: str) -> Ent
     return merge
 
 
+async def _rows_by_ids(db, model, ids) -> list:
+    """Load rows by primary key in batches: a merge of a very common entity
+    can move more mentions than one statement's 32,767 bind parameters."""
+    rows: list = []
+    for chunk in batches(ids):
+        rows.extend((await db.execute(select(model).where(model.id.in_(chunk)))).scalars().all())
+    return rows
+
+
 async def undo_merge(db, merge: EntityMerge) -> Entity:
     if merge.undone:
         raise ValueError("Merge already undone")
@@ -161,14 +171,10 @@ async def undo_merge(db, merge: EntityMerge) -> Entity:
     db.add(restored)
 
     if merge.moved_mention_ids:
-        for m in (await db.execute(
-            select(EntityMention).where(EntityMention.id.in_(merge.moved_mention_ids))
-        )).scalars().all():
+        for m in await _rows_by_ids(db, EntityMention, merge.moved_mention_ids):
             m.entity_id = restored.id
     if merge.moved_relationship_ids:
-        for e in (await db.execute(
-            select(EntityRelationship).where(EntityRelationship.id.in_(merge.moved_relationship_ids))
-        )).scalars().all():
+        for e in await _rows_by_ids(db, EntityRelationship, merge.moved_relationship_ids):
             # restore whichever side(s) pointed at the loser originally is not
             # recorded per-edge; winner-side occurrences of winner.id that came
             # from this merge are exactly the moved ids, so flip those back.
@@ -177,9 +183,7 @@ async def undo_merge(db, merge: EntityMerge) -> Entity:
             elif e.target_entity_id == winner.id:
                 e.target_entity_id = restored.id
     if merge.moved_participant_ids:
-        for p in (await db.execute(
-            select(EventParticipant).where(EventParticipant.id.in_(merge.moved_participant_ids))
-        )).scalars().all():
+        for p in await _rows_by_ids(db, EventParticipant, merge.moved_participant_ids):
             p.entity_id = restored.id
 
     # Make the re-points above visible before re-deriving counts from live
