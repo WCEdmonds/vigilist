@@ -322,7 +322,7 @@ def test_prompt_overhead_constants_track_the_prompts():
 
 # --- no hold while a requested analysis is running ------------------------------
 
-INFO = "AI analysis already running; new documents will be included in the next run"
+INFO = "AI analysis already running; run analysis again after it finishes to include these new documents"
 
 
 def _now(**delta):

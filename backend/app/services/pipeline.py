@@ -8,6 +8,7 @@ a failure marks that stage "failed" and the pipeline moves on — ingest and
 document availability are never affected.
 """
 
+import contextvars
 import copy
 import json
 import logging
@@ -48,11 +49,20 @@ BATCH_LOAD_PAGE = 500
 # At most this many of one stage's batches are in flight; further rounds go
 # out as earlier ones finish. Anthropic also caps the requests queued per
 # organization (by tier); a submit refused for that is retried by the poll.
-MAX_INFLIGHT_BATCHES = 10
-# One call stops submitting new rounds after this long (the rest go out from
-# the stage's poll), so a run submitting both stages stays inside the
-# dispatch deadline.
-BATCH_SUBMIT_BUDGET_S = 600
+# Four per stage keeps both stages together near 80k queued requests (the
+# account's batch queue tier is unconfirmed).
+MAX_INFLIGHT_BATCHES = 4
+# One deadline per Cloud Tasks request, shared by everything it does: a
+# pipeline run (both stages' submits) gets RUN_BUDGET_S from its start, a
+# poll POLL_BUDGET_S (apply first, then top-up submits with what is left).
+# No new round is built with less than BATCH_SUBMIT_MIN_REMAINING_S left; the
+# rest go out from the stage's poll. Well inside the 30 min dispatch deadline.
+RUN_BUDGET_S = 1200
+POLL_BUDGET_S = 1500
+BATCH_SUBMIT_MIN_REMAINING_S = 120
+# The current request's deadline (time.monotonic()), set by the run / poll.
+_REQUEST_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "pipeline_request_deadline", default=None)
 # A submitter claim older than this belongs to a dead worker.
 BATCH_SUBMIT_STALE_MINUTES = 20
 # A scheduled poll counts as pending until this long past its due time.
@@ -85,7 +95,8 @@ B_FAILED = "failed"
 # is presumed dead (same ceiling as the run endpoint's 409 guard).
 ANALYSIS_STALE_MINUTES = 45
 ANALYSIS_KEYS = STAGES + ("merge_review",)
-AI_RUNNING_INFO = "AI analysis already running; new documents will be included in the next run"
+AI_RUNNING_INFO = ("AI analysis already running; run analysis again after it finishes "
+                   "to include these new documents")
 # ai_pipeline_status[NEXT_ATTEMPT_KEY][stage] == "sync": the stage's last
 # batch left documents unprocessed, so its next attempt runs synchronously
 # (once) instead of resubmitting them.
@@ -541,19 +552,43 @@ async def _build_round(production_id: int, stage: str, cursor):
             return requests, after, docs, True
 
 
+_RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
+
+
+def _is_retryable_submit_error(exc: Exception) -> bool:
+    """A refusal worth retrying later: rate / queue limit, overload, server or
+    connection trouble. Anything else (bad request, auth, ...) is not."""
+    try:
+        import anthropic
+    except ImportError:  # pragma: no cover - the SDK is a hard dependency
+        return False
+    if isinstance(exc, anthropic.APIConnectionError):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        return getattr(exc, "status_code", None) in _RETRYABLE_STATUS
+    return False
+
+
+def _request_deadline() -> float:
+    deadline = _REQUEST_DEADLINE.get()
+    return deadline if deadline is not None else time.monotonic() + RUN_BUDGET_S
+
+
 async def _submit_rounds(production_id: int, stage: str, token: str, *,
                          raise_first: bool, start_poll: bool) -> int:
     """Submit rounds from the stage's cursor while this caller holds the
-    submitter claim ``token``, up to MAX_INFLIGHT_BATCHES in flight and within
-    BATCH_SUBMIT_BUDGET_S. Each submitted batch is recorded before the next
-    one is built, so a crash loses at most the round being submitted. A
-    failed submit stops the loop (the poll retries later); with
-    ``raise_first`` a failure before any batch went out propagates. Always
-    releases the claim. Returns the number of batches submitted."""
-    deadline = time.monotonic() + BATCH_SUBMIT_BUDGET_S
+    submitter claim ``token``, up to MAX_INFLIGHT_BATCHES in flight, until
+    the request's shared deadline has less than BATCH_SUBMIT_MIN_REMAINING_S
+    left. Each batch is recorded right after create(), before the next round
+    is built, so a crash loses at most the round being submitted. A refused
+    submit (rate / queue limit, overload) stops the loop on any round, the
+    first included: the stage's poll retries it. With ``raise_first`` a
+    non-retryable failure before any batch went out propagates (the stage
+    fails). Always releases the claim. Returns the number submitted."""
+    deadline = _request_deadline()
     submitted = 0
     try:
-        while time.monotonic() < deadline:
+        while deadline - time.monotonic() >= BATCH_SUBMIT_MIN_REMAINING_S:
             entry = await _read_stage(production_id, stage)
             if not (_is_parallel(entry) and (entry.get("submitter") or {}).get("token") == token):
                 break  # claim lost (stage finalized or taken over)
@@ -573,11 +608,12 @@ async def _submit_rounds(production_id: int, stage: str, token: str, *,
                 break
             try:
                 batch_id = await claude_batch.submit(requests)
-            except Exception:
-                if raise_first and submitted == 0:
+            except Exception as exc:
+                if raise_first and submitted == 0 and not _is_retryable_submit_error(exc):
                     raise
-                logger.exception("Pipeline %s for production %s: submitting a batch round failed; "
-                                 "the stage's poll retries it", stage, production_id)
+                logger.warning("Pipeline %s for production %s: batch submit refused (%s: %s); "
+                               "the stage's poll retries it", stage, production_id,
+                               type(exc).__name__, str(exc)[:200])
                 break
             now = _now_iso()
             record = {"id": batch_id, "submitted_at": now, "doc_count": docs, "state": B_PROCESSING}
@@ -695,12 +731,18 @@ async def _maybe_submit_batch(production_id: int, stage: str) -> bool:
         logger.info("Pipeline %s for production %s: already waiting on batches", stage, production_id)
         return True
     submitted = await _submit_rounds(production_id, stage, token, raise_first=True, start_poll=True)
-    if submitted == 0:
-        # Nothing to send after all (e.g. every pending text is blank): run
-        # the stage synchronously instead.
-        await _set_stage(production_id, stage, "running")
-        return False
-    return True
+    if submitted:
+        return True
+    entry = await _read_stage(production_id, stage)
+    if _is_parallel(entry) and not entry.get("exhausted"):
+        # Refused (rate / queue limit) or out of time before the first round:
+        # stay waiting with no batches; the poll submits the rounds.
+        await _schedule_poll(production_id, stage, BATCH_POLL_SECONDS)
+        return True
+    # Nothing to send after all (e.g. every pending text is blank): run the
+    # stage synchronously instead.
+    await _set_stage(production_id, stage, "running")
+    return False
 
 
 def _as_uuid(value: str):
@@ -884,12 +926,32 @@ async def _poll_parallel(production_id: int, stage: str, entry: dict) -> None:
     sync marker if any item failed) and the pipeline continues, or failed if a
     batch had no success at all (no auto-continue).
     """
-    deadline = time.monotonic() + BATCH_APPLY_BUDGET_S
+    started = time.monotonic()
+    request_deadline = started + POLL_BUDGET_S
+    deadline = started + min(BATCH_APPLY_BUDGET_S, POLL_BUDGET_S)
+    token_deadline = _REQUEST_DEADLINE.set(request_deadline)
+    try:
+        await _poll_parallel_inner(production_id, stage, entry, deadline)
+    finally:
+        _REQUEST_DEADLINE.reset(token_deadline)
+
+
+async def _poll_parallel_inner(production_id: int, stage: str, entry: dict, deadline: float) -> None:
     apply = _apply_summary_results if stage == "summaries" else _apply_entity_results
+    # persist_extraction has no unique constraint: two entity batches applied
+    # at once could duplicate entities or lose mention counts. Entities apply
+    # one batch at a time per stage; summaries may run in parallel.
+    serial = stage == "entities"
     for rec in list(entry["batches"]):
         state = rec.get("state")
         if not (state == B_PROCESSING or (state == B_APPLYING and _is_stale_apply(rec))):
             continue
+        if serial:
+            live = await _read_stage(production_id, stage)
+            if _is_parallel(live) and any(
+                    o.get("id") != rec["id"] and o.get("state") == B_APPLYING
+                    and not _is_stale_apply(o) for o in live["batches"]):
+                continue
         results = await claude_batch.fetch_if_done(rec["id"])
         if results is None:
             continue
@@ -900,6 +962,9 @@ async def _poll_parallel(production_id: int, stage: str, entry: dict) -> None:
             if b is None or not (b.get("state") == B_PROCESSING
                                  or (b.get("state") == B_APPLYING and _is_stale_apply(b))):
                 return None
+            if serial and any(o is not b and o.get("state") == B_APPLYING and not _is_stale_apply(o)
+                              for o in cur["batches"]):
+                return None  # another entity batch is being applied
             b["state"], b["applying_at"] = B_APPLYING, _stamp
             return _normalized(cur)
 
@@ -929,6 +994,7 @@ async def _poll_parallel(production_id: int, stage: str, entry: dict) -> None:
 
     entry = await _read_stage(production_id, stage)
     if (_is_parallel(entry) and not entry.get("exhausted")
+            and _request_deadline() - time.monotonic() >= BATCH_SUBMIT_MIN_REMAINING_S
             and not any(b.get("state") == B_FAILED for b in entry["batches"])
             and len(_unfinished(entry)) < MAX_INFLIGHT_BATCHES):
         token = await _claim_submitter(production_id, stage)
@@ -1162,6 +1228,14 @@ async def run_ambient_pipeline(production_id: int, force: bool = False,
     under a row lock; explicit runs are still serialized by the run endpoint's
     409 guard.
     """
+    token = _REQUEST_DEADLINE.set(time.monotonic() + RUN_BUDGET_S)
+    try:
+        await _run_ambient_pipeline(production_id, force, resume)
+    finally:
+        _REQUEST_DEADLINE.reset(token)
+
+
+async def _run_ambient_pipeline(production_id: int, force: bool, resume: bool) -> None:
     run_started = datetime.now(timezone.utc)
     async with async_session() as db:
         prod = await db.get(Production, production_id)
@@ -1171,7 +1245,14 @@ async def run_ambient_pipeline(production_id: int, force: bool = False,
         pending = stages_to_run(status, force)
 
     if "clustering" in pending:
-        await _run_stage(production_id, "clustering")
+        if resume and status.get("clustering") in ("failed", "running"):
+            # A batch poll's continuation never reruns clustering (a full
+            # re-cluster could eat the request and strand the batched
+            # stages); only an explicit or forced run retries it.
+            logger.info("Pipeline resume for production %s: leaving clustering %s",
+                        production_id, status.get("clustering"))
+        else:
+            await _run_stage(production_id, "clustering")
     for stage in BATCHED_STAGES:
         if stage in pending:
             await _start_per_doc_stage(production_id, stage, resume)

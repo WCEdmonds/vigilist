@@ -34,7 +34,7 @@ class FakeBatchAPI:
     async def submit(self, requests):
         n = len(self.submitted) + 1
         if self.fail_submit_at is not None and n >= self.fail_submit_at:
-            raise RuntimeError("429 batch queue full")
+            raise RuntimeError("batch submit failed")
         bid = f"msgbatch_{n}"
         self.submitted[bid] = list(requests)
         return bid
@@ -172,7 +172,7 @@ def test_first_submit_failure_fails_the_stage(env):
     world, api, _, _, _ = env(fail_submit_at=1)
     asyncio.run(pipeline.run_ambient_pipeline(1))
     status = world.prod.ai_pipeline_status
-    assert status["summaries"] == "failed" and "429" in status["errors"]["summaries"]
+    assert status["summaries"] == "failed" and "submit failed" in status["errors"]["summaries"]
 
 
 # --- poll ----------------------------------------------------------------------------
@@ -547,3 +547,172 @@ def test_analysis_in_progress_detection():
         {"summaries": {"status": "waiting", "batches": [], "submitted_at": now}}) is True
     stale = _now(hours=-3)
     assert pipeline.analysis_in_progress({"entities": "running", "updated_at": stale}) is False
+
+
+# --- review fixes ---------------------------------------------------------------------
+
+def _sdk_error(kind):
+    import anthropic
+    import httpx
+    status = {"RateLimitError": 429, "OverloadedError": 529, "BadRequestError": 400}[kind]
+    resp = httpx.Response(status, request=httpx.Request("POST", "https://api.example/v1/messages/batches"))
+    return getattr(anthropic, kind)(f"{kind} from batches.create", response=resp, body=None)
+
+
+def test_inflight_cap_is_four():
+    assert pipeline.MAX_INFLIGHT_BATCHES == 4
+
+
+def test_resume_does_not_rerun_a_failed_clustering(env, monkeypatch):
+    status = {"clustering": "failed", "summaries": "pending", "entities": "pending"}
+    world, api, _, _, _ = env(status=status)
+    clustering = AsyncMock()
+    monkeypatch.setitem(pipeline._STAGE_RUNNERS, "clustering", clustering)
+    asyncio.run(pipeline.run_ambient_pipeline(1, resume=True))
+    clustering.assert_not_called()
+    assert world.prod.ai_pipeline_status["clustering"] == "failed"
+    # The per-doc stages still go out.
+    assert _entry(world, "summaries")["status"] == "waiting"
+    assert _entry(world, "entities")["status"] == "waiting"
+    # An explicit run retries clustering.
+    world.prod.ai_pipeline_status["summaries"] = "done"
+    world.prod.ai_pipeline_status["entities"] = "done"
+    asyncio.run(pipeline.run_ambient_pipeline(1))
+    clustering.assert_called_once()
+
+
+@pytest.mark.parametrize("kind", ["RateLimitError", "OverloadedError"])
+def test_first_round_refusal_waits_for_the_poll_instead_of_failing(env, monkeypatch, kind):
+    world, api, polls, _, _ = env()
+    err = _sdk_error(kind)
+    real_submit = api.submit
+
+    async def refuse(requests):
+        raise err
+
+    monkeypatch.setattr(claude_batch, "submit", refuse)
+    asyncio.run(pipeline.run_ambient_pipeline(1))
+    for stage in ("summaries", "entities"):
+        entry = _entry(world, stage)
+        assert entry["status"] == "waiting" and entry["batches"] == []
+        assert entry["exhausted"] is False and "submitter" not in entry
+    assert sorted(polls) == [(1, "entities", 300), (1, "summaries", 300)]
+    assert "summaries" not in world.prod.ai_pipeline_status.get("errors", {})
+
+    # Queue has room again: the poll submits the rounds.
+    monkeypatch.setattr(claude_batch, "submit", real_submit)
+    _clear_poll_schedule(world)
+    asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    assert sum(b["doc_count"] for b in _entry(world, "summaries")["batches"]) == 2_500
+
+
+def test_first_round_non_retryable_error_fails_the_stage(env, monkeypatch):
+    world, api, _, _, _ = env()
+    err = _sdk_error("BadRequestError")
+
+    async def bad(requests):
+        raise err
+
+    monkeypatch.setattr(claude_batch, "submit", bad)
+    asyncio.run(pipeline.run_ambient_pipeline(1))
+    assert world.prod.ai_pipeline_status["summaries"] == "failed"
+
+
+def test_run_stops_submitting_when_its_budget_is_nearly_spent(env, monkeypatch):
+    world, api, polls, _, _ = env()
+    monkeypatch.setattr(pipeline, "RUN_BUDGET_S", pipeline.BATCH_SUBMIT_MIN_REMAINING_S - 1)
+    asyncio.run(pipeline.run_ambient_pipeline(1))
+    assert api.submitted == {}
+    assert _entry(world, "summaries")["batches"] == []
+    assert sorted(polls) == [(1, "entities", 300), (1, "summaries", 300)]
+    _clear_poll_schedule(world)
+    asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    assert len(_entry(world, "summaries")["batches"]) == 3
+
+
+def test_run_shares_one_deadline_across_both_stages(env, monkeypatch):
+    world, api, _, _, _ = env()
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: clock["t"])
+    real = api.submit
+
+    async def slow_submit(requests):
+        clock["t"] += 400  # each round eats 400 s of the 1200 s run budget
+        return await real(requests)
+
+    monkeypatch.setattr(claude_batch, "submit", slow_submit)
+    asyncio.run(pipeline.run_ambient_pipeline(1))
+    # Rounds start at 0, 400 and 800 s; after that less than 120 s is left.
+    total = len(_entry(world, "summaries")["batches"]) + len(_entry(world, "entities")["batches"])
+    assert total == 3
+
+
+def test_poll_skips_top_up_when_its_budget_is_nearly_spent(env, monkeypatch):
+    world, api, polls, _, _ = env(max_inflight=1)
+    asyncio.run(pipeline._maybe_submit_batch(1, "summaries"))
+    api.finish("msgbatch_1")
+    clock = {"t": 0.0}
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: clock["t"])
+    # Apply finished inside its budget, but the request has < 120 s left.
+    monkeypatch.setattr(pipeline, "BATCH_APPLY_BUDGET_S", pipeline.POLL_BUDGET_S)
+    real = pipeline._apply_summary_results
+
+    async def slow_apply(production_id, results, deadline):
+        out = await real(production_id, results, deadline)
+        clock["t"] = pipeline.POLL_BUDGET_S - pipeline.BATCH_SUBMIT_MIN_REMAINING_S + 1
+        return out
+
+    monkeypatch.setattr(pipeline, "_apply_summary_results", slow_apply)
+    polls.clear()
+    _clear_poll_schedule(world)
+    asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
+    assert list(api.submitted) == ["msgbatch_1"]  # no top-up this time
+    assert polls == [(1, "summaries", 300)]
+
+
+def test_entities_apply_one_batch_at_a_time(env):
+    world, api, _, _, _ = env()
+    asyncio.run(pipeline._maybe_submit_batch(1, "entities"))
+    entry = world.prod.ai_pipeline_status["entities"]
+    entry["batches"][0]["state"] = "applying"
+    entry["batches"][0]["applying_at"] = _now()
+    entry["status"] = "applying"
+    api.finish("msgbatch_1", "msgbatch_2")
+    _clear_poll_schedule(world)
+    asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    states = [b["state"] for b in _entry(world, "entities")["batches"]]
+    assert states == ["applying", "processing", "processing"]
+
+
+def test_concurrent_entity_polls_never_apply_two_batches_at_once(env, monkeypatch):
+    world, api, _, pipelines, _ = env()
+    asyncio.run(pipeline._maybe_submit_batch(1, "entities"))
+    for b in _entry(world, "entities")["batches"]:
+        api.finish(b["id"])
+    _clear_poll_schedule(world)
+    live, peak = {"n": 0}, {"n": 0}
+    real = pipeline._apply_entity_results
+
+    async def tracking(production_id, results, deadline):
+        live["n"] += 1
+        peak["n"] = max(peak["n"], live["n"])
+        await asyncio.sleep(0)
+        try:
+            return await real(production_id, results, deadline)
+        finally:
+            live["n"] -= 1
+
+    monkeypatch.setattr(pipeline, "_apply_entity_results", tracking)
+
+    async def three_polls():
+        await asyncio.gather(*(pipeline.poll_batch_stage(1, "entities") for _ in range(3)))
+
+    asyncio.run(three_polls())
+    assert peak["n"] == 1
+    # Whatever the concurrent polls skipped, the chain finishes.
+    for _ in range(5):
+        if _entry(world, "entities") == "done":
+            break
+        _clear_poll_schedule(world)
+        asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert _entry(world, "entities") == "done" and pipelines == [1]

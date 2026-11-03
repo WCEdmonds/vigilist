@@ -793,7 +793,7 @@ def test_post_chunk_past_its_attempts_still_deletes_the_prefix(env):
 
 # --- no AI hold while a requested analysis is running ------------------------------
 
-AI_RUNNING_INFO = "AI analysis already running; new documents will be included in the next run"
+AI_RUNNING_INFO = "AI analysis already running; run analysis again after it finishes to include these new documents"
 
 
 def test_large_load_into_a_running_analysis_does_not_hold(env):
