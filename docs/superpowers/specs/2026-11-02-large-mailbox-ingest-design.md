@@ -303,13 +303,12 @@ moves. The current one-file PST sits at 0% until it jumps to 100%. Show
 The estimate is shown on the selection screen (§2a) before any paid work. If
 it exceeds $100, the screen says so before the uploader confirms.
 
-**Open: Neon capacity.** The table above leaves out Neon. About 115k documents
-(text, search indexes, HTML bodies, embedding chunks and vectors) is several
-GB written across clouds, and running out of Neon quota took prod down on
-2026-07-28. Before the rollout re-run, the user must check the Neon plan's
-storage, compute and data-transfer room in the Neon console, which is the
-only place it's visible, and decide on any upgrade. The plan should include a
-rough per-load estimate of Neon storage and transfer, shown alongside cost.
+**Neon capacity (resolved 2026-11-03).** Prod moved to the Neon project
+"Vigilist AWS" (aws-us-east-2, Ohio) on the Launch plan: usage-based storage
+at $0.35/GB-month, 500 GB of transfer included, compute 0.25–8 CU. Several
+extra GB for a 115k-document load costs a few dollars a month, and there's no
+quota cliff. The selection screen still shows a rough per-load storage
+estimate alongside cost. Status: approved by the user 2026-11-03.
 
 ## Left to the builder
 
