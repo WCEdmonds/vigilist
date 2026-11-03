@@ -705,6 +705,25 @@ async def generate_missing_titles(
     await db.commit()
 
 
+# A normal load adding more documents than this holds the ambient pipeline
+# (per-document AI) until someone explicitly runs analysis.
+AI_HOLD_DOC_THRESHOLD = 5_000
+
+
+def should_hold(production, docs_added: int, had_large_container: bool) -> bool:
+    """True when the ambient pipeline must not start on its own.
+
+    The hold is sticky: once set on the production it stays until an explicit
+    analysis run clears it, so later small loads into a held matter don't
+    quietly start paid work either.
+    """
+    return bool(
+        getattr(production, "ai_hold", False)
+        or had_large_container
+        or docs_added > AI_HOLD_DOC_THRESHOLD
+    )
+
+
 async def _finalize_job_if_done(
     db: AsyncSession,
     job: "IngestJob",
@@ -729,7 +748,19 @@ async def _finalize_job_if_done(
         return
 
     if job_is_done(job) and job.status == "processing":
-        await generate_missing_titles(db, production_id, errors)
+        production = await db.get(Production, production_id)
+        held = should_hold(production, job.processed_files or 0, False)
+        if held:
+            # A held load gets the same bounded AI titling as a large-container
+            # load; the rest keep the filename fallback until analysis runs.
+            from app.services.large_ingest_finalize import POST_AI_TITLE_LIMIT
+
+            await generate_missing_titles(db, production_id, errors,
+                                          ai_limit=POST_AI_TITLE_LIMIT)
+            if production is not None:
+                production.ai_hold = True
+        else:
+            await generate_missing_titles(db, production_id, errors)
 
         job.status = "complete"
         job.errors = errors
@@ -759,6 +790,10 @@ async def _finalize_job_if_done(
         # Ambient AI pipeline (clustering -> summaries -> brief). Best-effort:
         # never blocks ingest completion. Prod fans out via Cloud Tasks so the
         # long-running work doesn't ride on this request; locally we detach.
+        # A held production waits for an explicit run (with its estimate).
+        if held:
+            logger.info("AI hold: ambient pipeline not started for production %s", production_id)
+            return
         try:
             from app.services import tasks as task_service
             from app.services.pipeline import run_ambient_pipeline

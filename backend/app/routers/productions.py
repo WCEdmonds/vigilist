@@ -263,6 +263,9 @@ async def run_pipeline(
     if _is_actively_running(status):
         raise HTTPException(status_code=409, detail="Pipeline already running")
     force = bool((body or {}).get("force"))
+    # An explicit run is the decision the AI hold waits for: clear it and
+    # commit before enqueueing so later loads don't re-hold this matter.
+    prod.ai_hold = False
     await log_action(
         db, user, "pipeline_run_requested", "production", str(production_id),
         production_id=production_id, details={"force": force},

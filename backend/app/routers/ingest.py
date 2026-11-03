@@ -497,6 +497,12 @@ async def trigger_entity_extraction(
     if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
         raise HTTPException(status_code=403, detail="Manager or admin role required")
 
+    prod = await db.get(Production, production_id)
+    if prod is not None:
+        # An explicit run clears the sticky AI hold (committed below, before
+        # the enqueue).
+        prod.ai_hold = False
+
     if rebuild:
         from sqlalchemy import delete, update
         from app.models import (Entity, EntityMention, EntityMergeSuggestion,
@@ -529,7 +535,6 @@ async def trigger_entity_extraction(
         # are derived from entities, so both must regenerate too) rather than
         # enqueueing with force=True, which would needlessly re-run
         # clustering and summaries whose outputs the rebuild leaves intact.
-        prod = await db.get(Production, production_id)
         if prod is not None:
             status = dict(prod.ai_pipeline_status or {})
             errors = dict(status.get("errors") or {})
@@ -553,6 +558,50 @@ async def trigger_entity_extraction(
     from app.services.pipeline import run_ambient_pipeline
     background_tasks.add_task(run_ambient_pipeline, production_id)
     return {"status": "started"}
+
+
+@router.get("/productions/{production_id}/ai-estimate")
+async def ai_estimate(
+    production_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Whether the production's AI is on hold, how many documents still need
+    per-document AI (a summary or entity extraction), and what running it
+    would cost at Haiku 5.5 batch pricing. Shown before any paid work."""
+    from sqlalchemy import case, func
+
+    from app.dependencies import get_accessible_production_ids
+    from app.services.ai import SUMMARY_INPUT_CHARS, estimate_per_doc_usd
+
+    accessible = await get_accessible_production_ids(db, user)
+    if production_id not in accessible:
+        raise HTTPException(status_code=404, detail="Production not found")
+    prod = await db.get(Production, production_id)
+    if prod is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+
+    needs_summary = Document.summary.is_(None)
+    needs_entities = Document.entities_extracted_at.is_(None)
+    length = func.char_length(Document.text_content)
+    row = (await db.execute(
+        select(
+            func.count(),
+            func.count(case((needs_summary, 1))),
+            func.coalesce(func.sum(case((needs_summary, func.least(length, SUMMARY_INPUT_CHARS)),
+                                        else_=0)), 0),
+            func.count(case((needs_entities, 1))),
+            func.coalesce(func.sum(case((needs_entities, length), else_=0)), 0),
+        ).where(
+            Document.production_id == production_id,
+            Document.text_content.isnot(None),
+            needs_summary | needs_entities,
+        )
+    )).one()
+    pending, summary_docs, summary_chars, entity_docs, entity_chars = (int(v or 0) for v in row)
+    usd = estimate_per_doc_usd(summary_docs, summary_chars, entity_docs, entity_chars)
+    return {"held": bool(prod.ai_hold), "documents_pending": pending,
+            "usd_estimate": round(usd, 4)}
 
 
 @router.get("/ingest/{job_id}/status", response_model=IngestJobOut)

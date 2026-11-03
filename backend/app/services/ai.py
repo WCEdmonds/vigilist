@@ -148,6 +148,31 @@ def build_chat_system_prompt(documents: list) -> str:
     )
 
 
+# ── Per-document AI cost estimate ──
+
+# Haiku 5.5 Message Batches pricing (half of the $0.10 / $0.50 per MTok
+# standard rate). Large runs go through batches, so estimates use this rate.
+PER_DOC_BATCH_INPUT_USD_PER_MTOK = 0.05
+PER_DOC_BATCH_OUTPUT_USD_PER_MTOK = 0.25
+# Characters per input token (rough), the summary input cap, and the output
+# allowance per document for each stage.
+CHARS_PER_TOKEN = 4
+SUMMARY_INPUT_CHARS = 12_000
+SUMMARY_OUTPUT_TOKENS = 300
+ENTITY_OUTPUT_TOKENS = 1_000
+
+
+def estimate_per_doc_usd(summary_docs: int, summary_chars: int,
+                         entity_docs: int, entity_chars: int) -> float:
+    """USD for summarizing ``summary_docs`` documents (``summary_chars`` of
+    already-capped input) and extracting entities from ``entity_docs``
+    documents (``entity_chars`` of input), at batch pricing."""
+    input_tokens = (summary_chars + entity_chars) / CHARS_PER_TOKEN
+    output_tokens = summary_docs * SUMMARY_OUTPUT_TOKENS + entity_docs * ENTITY_OUTPUT_TOKENS
+    return (input_tokens * PER_DOC_BATCH_INPUT_USD_PER_MTOK
+            + output_tokens * PER_DOC_BATCH_OUTPUT_USD_PER_MTOK) / 1_000_000
+
+
 # ── Document Summarization ──
 
 SUMMARY_PROMPT = """You are a legal document analyst. Summarize this litigation document in 2-4 sentences.
@@ -164,7 +189,7 @@ async def generate_summary(text: str) -> str | None:
         return None
 
     # Use more text for summaries than titles — first ~3000 tokens
-    truncated = text[:12000].strip()
+    truncated = text[:SUMMARY_INPUT_CHARS].strip()
     if not truncated:
         return None
 

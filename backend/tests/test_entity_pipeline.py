@@ -117,6 +117,9 @@ class FakeSession:
     async def commit(self):
         pass
 
+    async def get(self, model, key, **_kw):
+        return None  # no Production row: the hold clear is skipped
+
 
 def _patch_role(monkeypatch, role, accessible=(1, 7)):
     async def fake_role(db, user, production_id):
