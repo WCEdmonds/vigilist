@@ -54,6 +54,12 @@ jobs:
         run: |
           gcloud tasks queues describe $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID 2>/dev/null \
             || gcloud tasks queues create $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID
+          # Throttle dispatch to what the worker can take, so Cloud Tasks queues
+          # work instead of collecting 429s and backing off. 30 concurrent
+          # dispatches = vigilist-worker --max-instances 30 x --concurrency 1
+          # (below); change them together. max-attempts stays at the default 100.
+          gcloud tasks queues update $TASKS_QUEUE --location=$REGION --project=$PROJECT_ID \
+            --max-concurrent-dispatches=30 --max-dispatches-per-second=10 --min-backoff=5s
 
       - name: Grant Cloud Run compute SA cloudtasks.enqueuer
         run: |
@@ -132,7 +138,8 @@ jobs:
           # Same configuration as the web service (values are never echoed).
           echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].env[]? | select(.value != null) | "\(.name): \(.value | @json)"' > "$RUNNER_TEMP/worker-env.yaml"
           # --timeout must match large_ingest_chunk.WORKER_REQUEST_TIMEOUT_S (chunk stale window = it + 300 s).
-          # --max-instances 30 is provisional pending a speed test.
+          # --max-instances 30 is provisional pending a speed test; the queue's
+          # --max-concurrent-dispatches (queue step above) must match it.
           gcloud run deploy $WORKER_NAME \
             --image "$IMAGE" \
             --region $REGION \
