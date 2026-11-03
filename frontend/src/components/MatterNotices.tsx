@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getAiEstimate, getIngestAwaiting, runPipeline } from '../api/client';
 import { showToast } from './Toast';
+import { useAiRunConfirm } from '../hooks/useAiRunConfirm';
 import type { AiEstimate, AwaitingIngest } from '../types';
 
 const POLL_MS = 15000;
@@ -21,6 +22,7 @@ export default function MatterNotices({ productionId, onResumeIngest, onAnalysis
   const [awaiting, setAwaiting] = useState<AwaitingIngest[]>([]);
   const [estimate, setEstimate] = useState<AiEstimate | null>(null);
   const [running, setRunning] = useState(false);
+  const { confirmAiRun, aiRunDialog } = useAiRunConfirm(productionId);
 
   // Only the awaiting-selection check is polled. The AI estimate scans the
   // pending text server-side, so it is fetched once per mount and after Run.
@@ -94,7 +96,7 @@ export default function MatterNotices({ productionId, onResumeIngest, onAnalysis
             {' '}— estimated ${estimate.usd_estimate.toFixed(2)}
           </span>
           {estimate.can_run ? (
-            <button className="btn btn-primary btn-sm" disabled={running} onClick={handleRun}>
+            <button className="btn btn-primary btn-sm" disabled={running} onClick={() => confirmAiRun({ run: handleRun })}>
               {running ? 'Starting…' : 'Run'}
             </button>
           ) : (
@@ -102,6 +104,7 @@ export default function MatterNotices({ productionId, onResumeIngest, onAnalysis
           )}
         </div>
       )}
+      {aiRunDialog}
     </>
   );
 }

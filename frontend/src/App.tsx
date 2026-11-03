@@ -7,6 +7,7 @@ import AttachmentBadge from './components/AttachmentBadge';
 import AuthPage from './components/AuthPage';
 import EditableTitle from './components/EditableTitle';
 import EntitiesView from './components/EntitiesView';
+import AiActivityIndicator from './components/AiActivityIndicator';
 import EntityGraphView from './components/EntityGraphView';
 import EntityTimelineView from './components/EntityTimelineView';
 import IngestWizard from './components/IngestWizard';
@@ -1509,15 +1510,19 @@ function AppRouter() {
     );
   } else {
     content = (
-      <Home
-        key={activeProduction.id}
-        production={activeProduction}
-        productions={productions}
-        onSelectProduction={setActiveProduction}
-        onSwitchProduction={() => setActiveProduction(null)}
-        onIngestComplete={handleIngestComplete}
-        onOpenGuide={openGuide}
-      />
+      <>
+        <Home
+          key={activeProduction.id}
+          production={activeProduction}
+          productions={productions}
+          onSelectProduction={setActiveProduction}
+          onSwitchProduction={() => setActiveProduction(null)}
+          onIngestComplete={handleIngestComplete}
+          onOpenGuide={openGuide}
+        />
+        {/* Outside Home's early-return branches so it shows on every screen of the matter. */}
+        <AiActivityIndicator key={`ai-${activeProduction.id}`} productionId={activeProduction.id} />
+      </>
     );
   }
 

@@ -318,3 +318,68 @@ def test_prompt_overhead_constants_track_the_prompts():
     entity = (len(EXTRACTION_SYSTEM_PROMPT) + len(build_extraction_prompt(""))) / 4
     assert summary * 0.8 <= SUMMARY_PROMPT_OVERHEAD_TOKENS <= summary * 1.25
     assert entity * 0.8 <= ENTITY_PROMPT_OVERHEAD_TOKENS <= entity * 1.25
+
+
+# --- confirmation estimates: force + rebuild --------------------------------
+
+
+class SqlCapturingEstimateSession(CountingEstimateSession):
+    def __init__(self, prod, row):
+        super().__init__(prod, row)
+        self.sql = []
+
+    async def execute(self, stmt, params=None):
+        from sqlalchemy.dialects import postgresql
+        self.sql.append(str(stmt.compile(dialect=postgresql.dialect(),
+                                         compile_kwargs={"literal_binds": True})))
+        return await super().execute(stmt, params)
+
+
+def test_ai_estimate_force_prices_pending_work_even_when_not_held(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "manager")
+    db = SqlCapturingEstimateSession(SimpleNamespace(id=1, ai_hold=False), (10, 10, 120_000, 10, 400_000))
+    out = asyncio.run(ingest_router.ai_estimate(production_id=1, force=True, db=db, user=FakeUser()))
+    assert out["held"] is False
+    assert out["documents_pending"] == 10
+    assert out["usd_estimate"] > 0
+    assert db.queries == 1
+    # Pending mode only counts documents still missing a summary or extraction.
+    assert "entities_extracted_at IS NULL" in db.sql[0]
+
+
+def test_ai_estimate_rebuild_counts_every_document_with_text(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "admin")
+    db = SqlCapturingEstimateSession(SimpleNamespace(id=1, ai_hold=False), (40, 3, 36_000, 40, 1_600_000))
+    out = asyncio.run(ingest_router.ai_estimate(production_id=1, mode="rebuild", db=db, user=FakeUser()))
+    assert out["documents_pending"] == 40
+    sql = db.sql[0]
+    # Re-extraction re-reads every document: no "not yet extracted" filter.
+    assert "entities_extracted_at" not in sql
+    assert "text_content IS NOT NULL" in sql
+    from app.services.ai import estimate_per_doc_usd
+    assert out["usd_estimate"] == pytest.approx(estimate_per_doc_usd(3, 36_000, 40, 1_600_000), abs=1e-4)
+
+
+def test_ai_estimate_cache_is_keyed_by_force_and_mode(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "admin")
+    monkeypatch.setattr(ingest_router, "_monotonic", lambda: 1000.0)
+    db = CountingEstimateSession(SimpleNamespace(id=1, ai_hold=True), (10, 10, 120_000, 10, 400_000))
+    asyncio.run(ingest_router.ai_estimate(production_id=1, db=db, user=FakeUser()))
+    asyncio.run(ingest_router.ai_estimate(production_id=1, force=True, db=db, user=FakeUser()))
+    asyncio.run(ingest_router.ai_estimate(production_id=1, mode="rebuild", db=db, user=FakeUser()))
+    assert db.queries == 3
+    asyncio.run(ingest_router.ai_estimate(production_id=1, force=True, db=db, user=FakeUser()))
+    asyncio.run(ingest_router.ai_estimate(production_id=1, mode="rebuild", db=db, user=FakeUser()))
+    assert db.queries == 3
+
+
+def test_ai_estimate_rejects_unknown_mode(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "admin")
+    db = CountingEstimateSession(SimpleNamespace(id=1, ai_hold=True), (0, 0, 0, 0, 0))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ingest_router.ai_estimate(production_id=1, mode="everything", db=db, user=FakeUser()))
+    assert exc.value.status_code == 422

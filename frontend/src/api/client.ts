@@ -660,8 +660,16 @@ export const getPipeline = async (productionId: number): Promise<PipelineInfo> =
   return { ...info, status: flattenStageStates(info.status) };
 };
 
-export const getAiEstimate = (productionId: number) =>
-  request<AiEstimate>(`/api/productions/${productionId}/ai-estimate`);
+/** force: price the pending work even when the matter isn't on hold (the
+ * confirmation before a manual run). mode 'rebuild': price re-extracting every
+ * document with text (extract-entities?rebuild=true). */
+export const getAiEstimate = (productionId: number, opts: { force?: boolean; mode?: 'pending' | 'rebuild' } = {}) => {
+  const params = new URLSearchParams();
+  if (opts.force) params.set('force', 'true');
+  if (opts.mode && opts.mode !== 'pending') params.set('mode', opts.mode);
+  const qs = params.toString();
+  return request<AiEstimate>(`/api/productions/${productionId}/ai-estimate${qs ? `?${qs}` : ''}`);
+};
 
 export const getIngestAwaiting = (productionId: number) =>
   request<AwaitingIngest[]>(`/api/productions/${productionId}/ingest-awaiting`);

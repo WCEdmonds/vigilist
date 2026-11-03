@@ -3,6 +3,8 @@ import { getByBates, getPipeline, listEntities, runPipeline } from '../api/clien
 import { entityDisplayName, isEntityNoise } from '../utils/entityDisplay';
 import { showToast } from './Toast';
 import MatterNotices from './MatterNotices';
+import { useAiRunConfirm } from '../hooks/useAiRunConfirm';
+import type { AiRunRequest } from './AiRunConfirm';
 import type { EntityListItem, PipelineInfo, PipelineStageState, PipelineStatus, ProductionInfo } from '../types';
 
 const POLL_MS = 5000;
@@ -136,6 +138,9 @@ interface ProductionBriefProps {
 
 export default function ProductionBrief(props: ProductionBriefProps) {
   const [refreshKey, setRefreshKey] = useState(0);
+  // Owned here (not by the body) so the dialog renders whichever state the
+  // body is in.
+  const { confirmAiRun, aiRunDialog } = useAiRunConfirm(props.production.id);
   return (
     <>
       <MatterNotices
@@ -143,12 +148,13 @@ export default function ProductionBrief(props: ProductionBriefProps) {
         onResumeIngest={props.onResumeIngest}
         onAnalysisStarted={() => setRefreshKey(k => k + 1)}
       />
-      <ProductionBriefBody key={refreshKey} {...props} />
+      <ProductionBriefBody key={refreshKey} {...props} confirmAiRun={confirmAiRun} />
+      {aiRunDialog}
     </>
   );
 }
 
-function ProductionBriefBody({ production, onViewDocument, onPipelineSettled, onOpenEntity, onOpenEntities, onOpenGraph, onOpenTimeline }: ProductionBriefProps) {
+function ProductionBriefBody({ production, onViewDocument, onPipelineSettled, onOpenEntity, onOpenEntities, onOpenGraph, onOpenTimeline, confirmAiRun }: ProductionBriefProps & { confirmAiRun: (r: AiRunRequest) => void }) {
   const [info, setInfo] = useState<PipelineInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -324,7 +330,7 @@ function ProductionBriefBody({ production, onViewDocument, onPipelineSettled, on
             <button
               type="button"
               className="btn-icon"
-              onClick={() => handleRunPipeline(true)}
+              onClick={() => confirmAiRun({ title: 'Regenerate the brief?', run: () => handleRunPipeline(true) })}
               disabled={starting}
               aria-label="Regenerate brief"
               title="Regenerate brief"
@@ -386,7 +392,7 @@ function ProductionBriefBody({ production, onViewDocument, onPipelineSettled, on
           </h3>
         </div>
         <p className="brief-overview">Brief generation failed.</p>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRunPipeline()} disabled={starting}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => confirmAiRun({ run: () => handleRunPipeline() })} disabled={starting}>
           {starting ? 'Retrying…' : 'Retry'}
         </button>
       </div>
@@ -404,7 +410,7 @@ function ProductionBriefBody({ production, onViewDocument, onPipelineSettled, on
           </h3>
         </div>
         <p className="brief-overview">AI will read, summarize, and brief this production.</p>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => handleRunPipeline()} disabled={starting}>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => confirmAiRun({ run: () => handleRunPipeline() })} disabled={starting}>
           {starting ? 'Starting…' : 'Generate'}
         </button>
       </div>
