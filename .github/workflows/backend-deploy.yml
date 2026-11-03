@@ -131,6 +131,8 @@ jobs:
           IMAGE=$(echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].image')
           # Same configuration as the web service (values are never echoed).
           echo "$API_JSON" | jq -r '.spec.template.spec.containers[0].env[]? | select(.value != null) | "\(.name): \(.value | @json)"' > "$RUNNER_TEMP/worker-env.yaml"
+          # --timeout must match large_ingest_chunk.WORKER_REQUEST_TIMEOUT_S (chunk stale window = it + 300 s).
+          # --max-instances 30 is provisional pending a speed test.
           gcloud run deploy $WORKER_NAME \
             --image "$IMAGE" \
             --region $REGION \
@@ -138,12 +140,12 @@ jobs:
             --platform managed \
             --no-allow-unauthenticated \
             --service-account ${{ steps.meta.outputs.compute_sa }} \
-            --timeout 3600 \
+            --timeout 1800 \
             --memory 4Gi \
             --cpu 2 \
-            --concurrency 4 \
+            --concurrency 1 \
             --min-instances 0 \
-            --max-instances 5 \
+            --max-instances 30 \
             --env-vars-file "$RUNNER_TEMP/worker-env.yaml" \
             --quiet
           rm -f "$RUNNER_TEMP/worker-env.yaml"

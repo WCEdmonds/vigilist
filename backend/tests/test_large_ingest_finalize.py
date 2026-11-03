@@ -595,6 +595,8 @@ def test_claim_sql_only_takes_pending_or_stale_running():
     # Stale only after any live request must be gone: worker timeout, not the
     # (shorter) dispatch deadline.
     assert CHUNK_STALE_S > large_ingest_chunk.WORKER_REQUEST_TIMEOUT_S >= task_service.MAX_DISPATCH_DEADLINE_S
+    # Tied to the worker's Cloud Run --timeout 1800 (backend-deploy.yml) + 300 s margin.
+    assert large_ingest_chunk.WORKER_REQUEST_TIMEOUT_S == 1800 and CHUNK_STALE_S == 2100
 
 
 def test_fresh_running_chunk_is_not_claimed_and_reports_busy(env, monkeypatch):

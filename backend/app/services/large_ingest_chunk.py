@@ -26,8 +26,8 @@ MAX_CHUNK_ATTEMPTS = 3
 # Claim token: only one live worker may process a chunk. A 'pending' chunk is
 # claimable at once. A 'running' chunk is claimable only once its last claim
 # (updated_at) is older than any request could still be alive: the worker's
-# Cloud Run request timeout (3600 s, backend-deploy.yml), which outlasts the
-# 1800 s Cloud Tasks dispatch deadline, plus a margin. So a swept duplicate,
+# Cloud Run request timeout (1800 s, backend-deploy.yml; it equals the Cloud
+# Tasks dispatch deadline), plus a margin. So a swept duplicate,
 # or a Cloud Tasks retry after the dispatch deadline, can never run alongside
 # a live-but-slow original.
 #
@@ -36,8 +36,9 @@ MAX_CHUNK_ATTEMPTS = 3
 # dies outright (OOM, instance kill, timeout) can't release: Cloud Tasks'
 # retries get 503 (``ChunkBusy``) and back off until CHUNK_STALE_S has passed
 # since the claim, then the next retry re-claims it.
-WORKER_REQUEST_TIMEOUT_S = 3600
-CHUNK_STALE_S = WORKER_REQUEST_TIMEOUT_S + 300
+# Must match the vigilist-worker `--timeout` in backend-deploy.yml.
+WORKER_REQUEST_TIMEOUT_S = 1800
+CHUNK_STALE_S = WORKER_REQUEST_TIMEOUT_S + 300  # 2100 s
 
 _CLAIM_CHUNK_SQL = (
     "UPDATE ingest_chunks SET attempts = attempts + 1, status = 'running', updated_at = now() "
