@@ -36,11 +36,19 @@ def two_page_pdf_one_scanned():
     return data
 
 
-def test_tiny_and_inline_images_skip_ocr(png_bytes_factory):
+def test_tiny_images_skip_ocr(png_bytes_factory):
     assert not should_ocr_image("logo.png", png_bytes_factory(10_000, (400, 400)), inline=False)
     assert not should_ocr_image("sig.png", png_bytes_factory(50_000, (600, 120)), inline=False)
-    assert not should_ocr_image("scan.png", png_bytes_factory(500_000, (2000, 2000)), inline=True)
     assert should_ocr_image("scan.png", png_bytes_factory(500_000, (2000, 2000)), inline=False)
+
+
+def test_large_inline_photo_is_ocrd(png_bytes_factory):
+    assert should_ocr_image("photo.png", png_bytes_factory(263_000, (3000, 2000)), inline=True)
+
+
+def test_tiny_inline_logo_skips_ocr(png_bytes_factory):
+    assert not should_ocr_image("logo.png", png_bytes_factory(10_000, (400, 400)), inline=True)
+    assert not should_ocr_image("sig.png", png_bytes_factory(50_000, (600, 120)), inline=True)
 
 
 def test_unreadable_large_image_is_ocrd():

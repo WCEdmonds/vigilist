@@ -161,10 +161,14 @@ TINY_IMAGE_SIDE_PX = 150
 
 
 def should_ocr_image(name: str, data: bytes, inline: bool) -> bool:
-    """False for inline (cid:) images and for tiny ones (logos, signature
-    icons, tracking pixels) where OCR spend buys nothing. An image PIL cannot
-    read is OCR'd, since we cannot prove it is junk."""
-    if inline or len(data) < TINY_IMAGE_BYTES:
+    """False only for tiny images (logos, signature icons, tracking pixels):
+    under TINY_IMAGE_BYTES, or a short side under TINY_IMAGE_SIDE_PX. An image
+    PIL cannot read is OCR'd, since we cannot prove it is junk.
+
+    ``inline`` (cid:-referenced) no longer affects the decision: real photos
+    pasted into an email body are inline too and must be OCR'd. The parameter
+    stays so callers need not change."""
+    if len(data) < TINY_IMAGE_BYTES:
         return False
     try:
         from PIL import Image
@@ -252,7 +256,7 @@ def _extract_eml(data: bytes) -> ExtractResult:
 
 
 def extract_attachment(name: str, data: bytes, *, inline: bool, ocr_fn) -> ExtractResult:
-    """Extraction for an email attachment: PDFs get text, tiny/inline images
+    """Extraction for an email attachment: PDFs get text, tiny images
     skip OCR (empty text, status ok), everything else uses ``extract``."""
     ext = _ext(name)
     if ext == ".pdf":

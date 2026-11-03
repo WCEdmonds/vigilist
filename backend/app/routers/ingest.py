@@ -565,6 +565,66 @@ async def poll_batch_handler(
     return {"ok": True}
 
 
+@router.post("/productions/{production_id}/ocr-backfill")
+async def ocr_backfill(
+    production_id: int,
+    dry_run: bool = True,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """OCR image documents that have no text (e.g. inline email photos the old
+    rule skipped). Manager or admin only; 404 outside the caller's scope.
+
+    ``dry_run=true`` (default) only counts candidates; the estimate is an upper
+    bound because tiny images are filtered per document in the worker.
+    ``dry_run=false`` enqueues a self-chaining Cloud Tasks sequence of batches.
+    """
+    from app.dependencies import (ROLE_RANK, get_accessible_production_ids,
+                                  get_user_role_for_production)
+    from app.services import ocr_backfill as ob
+    from app.services import tasks as task_service
+
+    if production_id not in await get_accessible_production_ids(db, user):
+        raise HTTPException(status_code=404, detail="Production not found")
+    role = await get_user_role_for_production(db, user, production_id)
+    if ROLE_RANK.get(role, 0) < ROLE_RANK["manager"]:
+        raise HTTPException(status_code=403, detail="Manager or admin role required")
+
+    n = await ob.count_candidates(db, production_id)
+    out = {"candidates": n, "estimated_usd": n * ob.USD_PER_IMAGE, "upper_bound": True,
+           "dry_run": dry_run}
+    if dry_run or n == 0:
+        return out
+    if not task_service.is_configured():
+        raise HTTPException(status_code=503, detail="Cloud Tasks not configured")
+    task_service.enqueue_ocr_backfill_batch(production_id, None)
+    await log_action(db, user, "ocr_backfill_started", "production",
+                     resource_id=str(production_id), production_id=production_id,
+                     details={"candidates": n})
+    await db.commit()
+    return out
+
+
+@router.post("/ingest/ocr-backfill-batch")
+async def ocr_backfill_batch_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker: OCR one page of a production's textless images,
+    then enqueue the next page."""
+    from app.services import ocr_backfill as ob
+    from app.services import tasks as task_service
+
+    production_id = body.get("production_id")
+    if not production_id:
+        raise HTTPException(status_code=400, detail="production_id required")
+    res = await ob.run_batch(db, int(production_id), body.get("after_id"))
+    if not res["done"]:
+        task_service.enqueue_ocr_backfill_batch(int(production_id), res["next_after"])
+    return {"ok": True, **res}
+
+
 @router.post("/productions/{production_id}/extract-entities")
 async def trigger_entity_extraction(
     production_id: int,
