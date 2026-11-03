@@ -71,7 +71,7 @@ class FakeSession:
         self.commits = 0
         self.executed_params = []
 
-    async def get(self, model, key):
+    async def get(self, model, key, **_kw):
         return self._get_objects.get((model.__name__, key))
 
     async def execute(self, stmt, params=None):

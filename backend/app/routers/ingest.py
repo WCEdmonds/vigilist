@@ -178,6 +178,7 @@ async def start_processing(
             field_mapping["control_offset"] = offset
     batch_size = 10 if source_format in ("generic_pdf", "native") else INGEST_BATCH_SIZE
 
+    large_containers: list[str] = []
     if task_service.is_configured():
         # Count source items to set an accurate total_files, then enqueue tasks
         try:
@@ -186,7 +187,12 @@ async def start_processing(
                 total_files = len(list_pdf_sources(production.id, load_prefix))
             elif source_format == "native":
                 from app.services.ingest_native import list_native_sources
-                total_files = len(list_native_sources(production.id, load_prefix))
+                from app.services.large_ingest import is_large_container
+                native_items = list_native_sources(production.id, load_prefix)
+                total_files = len(native_items)
+                large_containers = [
+                    it["storage_path"] for it in native_items if is_large_container(it)
+                ]
             else:
                 records, _ = bootstrap_ingest_source(production.id, load_prefix)
                 total_files = len(records)
@@ -197,10 +203,14 @@ async def start_processing(
         if total_files == 0:
             raise HTTPException(status_code=400, detail="No ingestable files found in upload")
 
+        if large_containers:
+            field_mapping = {**field_mapping, "large_containers": large_containers}
         job = IngestJob(
             production_id=production.id,
             user_id=user.id,
-            status="processing",
+            # Large containers are surveyed before any paid work; the normal
+            # batches for the other files still run in parallel.
+            status="surveying" if large_containers else "processing",
             source_format=source_format,
             total_files=total_files,
             field_mapping=field_mapping,
@@ -224,6 +234,13 @@ async def start_processing(
             except Exception as e:
                 logger.exception("Failed to enqueue batch %d-%d", start, end)
                 enqueue_errors.append(f"Enqueue failed for batch {start}-{end}: {e}")
+
+        for path in large_containers:
+            try:
+                task_service.enqueue_survey(str(job.id), path)
+            except Exception as e:
+                logger.exception("Failed to enqueue survey for %s", path)
+                enqueue_errors.append(f"Enqueue failed for survey of {path}: {e}")
 
         if enqueue_errors:
             job.errors = enqueue_errors
@@ -304,6 +321,27 @@ async def process_batch_handler(
         logger.exception("Ingest batch failed")
         raise HTTPException(status_code=500, detail=f"Ingest batch failed: {e}")
 
+    return {"ok": True}
+
+
+@router.post("/ingest/survey-container")
+async def survey_container_handler(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    _verified: None = Depends(verify_cloud_tasks_request),
+):
+    """Cloud Tasks worker: survey one large mailbox container (read-only)."""
+    from app.services.large_ingest import run_survey
+
+    job_id = body.get("job_id")
+    storage_path = body.get("storage_path")
+    if not job_id or not storage_path:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    try:
+        await run_survey(db, job_id, storage_path)
+    except Exception as e:
+        logger.exception("Container survey failed")
+        raise HTTPException(status_code=500, detail=f"Container survey failed: {e}")
     return {"ok": True}
 
 

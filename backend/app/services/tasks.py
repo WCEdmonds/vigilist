@@ -90,6 +90,19 @@ def enqueue_ingest_batch(
     )
 
 
+def enqueue_survey(job_id: str, storage_path: str) -> None:
+    """Enqueue the survey of one large mailbox container."""
+    _enqueue(
+        "/api/ingest/survey-container",
+        {"job_id": job_id, "storage_path": storage_path},
+        not_configured=(
+            "Cloud Tasks not configured — set VIGILIST_CLOUD_RUN_SERVICE_URL, "
+            "VIGILIST_GCP_PROJECT_ID, VIGILIST_CLOUD_TASKS_SERVICE_ACCOUNT"
+        ),
+    )
+    logger.info("Enqueued container survey for job %s: %s", job_id, storage_path)
+
+
 def enqueue_pipeline(production_id: int, force: bool = False,
                      job: str | None = None) -> None:
     """Enqueue one ambient-pipeline run (clustering -> summaries -> brief).

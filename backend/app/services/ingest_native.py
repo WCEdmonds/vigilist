@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Document, IngestJob, Production
 from app.services.email_parse import ParsedMessage, expand_email
 from app.services.extractors import extract
+from app.services.large_ingest import is_large_container
 from app.services.metadata_normalize import normalize_date
-from app.services.storage import get_download_bytes, list_files
+from app.services.storage import get_download_bytes, get_size, list_files
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +54,16 @@ def list_native_sources(production_id: int, load_prefix: str | None = None) -> l
     items: list[dict] = []
     for path in all_files:
         relative_path = path[len(prefix):] if path.startswith(prefix) else path
+        filename = os.path.basename(relative_path)
+        # Only mailbox containers need a size (large-container routing); a
+        # metadata lookup per loose file would be wasted round trips.
+        size = get_size(path) if os.path.splitext(filename)[1].lower() in _PST_EXTS else 0
         items.append(
             {
                 "storage_path": path,
                 "relative_path": relative_path,
-                "filename": os.path.basename(relative_path),
+                "filename": filename,
+                "size": size,
             }
         )
     return items
@@ -853,6 +859,9 @@ async def ingest_native_batch(
         existing = {row[0] for row in result.all()}
 
     for global_index, item in slice_pairs:
+        if is_large_container(item):
+            # Surveyed and loaded by the chunked large-container path.
+            continue
         control_number = f"{prefix} {offset + global_index + 1:06d}"
         skip_key = f"native:{item['storage_path']}"
         if item["storage_path"] in existing:
