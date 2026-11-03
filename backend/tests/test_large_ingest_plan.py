@@ -339,3 +339,43 @@ def test_apply_selection_counts_a_failed_survey_as_settled(sample_survey, env):
     job.field_mapping["survey_failed"] = {"productions/1/raw/loads/L1/bad.pst": "OSError: x"}
     asyncio.run(apply_selection(_db(job), "j1", BIG, ["email"], True))
     assert job.status == "processing"
+
+
+# --- I5: re-ingesting the same container resumes instead of duplicating -----
+
+
+def _prior_db(job, prior_selections, loaded=0):
+    from tests.fakes import FakeResult
+
+    db = _db(job)
+    db.responders = [
+        ("ingest_jobs.selection", FakeResult(rows=[(p,) for p in prior_selections])),
+        ("family_id = bates_begin", FakeResult(scalar=loaded)),
+    ]
+    return db
+
+
+def test_second_job_over_the_same_container_reuses_its_control(sample_survey, env):
+    prior = {"types": ["email"], "include_recoverable": True, "control": "ACME 000002",
+             "relative_path": "acme.pst", "items": 11}
+    job = _job(sample_survey)
+    job.items_done = 0
+    db = _prior_db(job, [prior], loaded=7)
+    asyncio.run(apply_selection(db, "j1", BIG, ["email"], True))
+    assert job.selection[BIG]["control"] == "ACME 000002"
+    assert job.items_total == 11
+    # Messages the earlier job loaded count as done: the chunks skip them.
+    assert job.items_done == 7
+    (params,) = [p for s, p in zip(db.executed, db.executed_params) if "ingest_jobs.selection" in s]
+    assert params["path"] == BIG and params["pid"] == 1 and params["jid"] == "j1"
+
+
+def test_a_different_selection_does_not_reuse_the_control(sample_survey, env):
+    """Positions depend on the selected types; reusing the control with a
+    different selection would skip the wrong messages."""
+    prior = {"types": ["email"], "include_recoverable": True, "control": "ACME 000002", "items": 11}
+    job = _job(sample_survey)
+    job.items_done = 0
+    asyncio.run(apply_selection(_prior_db(job, [prior], loaded=7), "j1", BIG, ["email", "calendar"], True))
+    assert job.selection[BIG]["control"] == "ACME 000006"
+    assert job.items_done == 0

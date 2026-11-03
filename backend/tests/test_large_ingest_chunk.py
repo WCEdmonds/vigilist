@@ -622,3 +622,13 @@ def test_oversized_attachment_is_not_read(monkeypatch):
 
 def test_max_attachment_bytes_is_512_mib():
     assert pst_reader.MAX_ATTACHMENT_BYTES == 512 * 1024 * 1024
+
+
+def test_resumed_container_loads_only_messages_the_earlier_job_missed(monkeypatch):
+    """I5: with the earlier job's container control reused, its loaded
+    messages are skipped and only the rest are built."""
+    env = Env(monkeypatch, _tree(_emails(4)), chunk=_chunk([[2, 0, 4]], 4),
+              existing=[f"{CONTROL} -0001", f"{CONTROL} -0002"])
+    env.run()
+    assert [d.bates_begin for d in env.parents()] == [f"{CONTROL} -0003", f"{CONTROL} -0004"]
+    assert [d.title for d in env.parents()] == ["Msg 3", "Msg 4"]

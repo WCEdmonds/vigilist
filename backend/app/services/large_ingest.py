@@ -324,6 +324,30 @@ def _container_identity(production_id: int, fm: dict, prefix: str, storage_path:
     return None
 
 
+# Earlier jobs' selections for the same container in this production, newest
+# first (the selection stores each container's control number).
+_PRIOR_SELECTIONS_SQL = (
+    "SELECT ingest_jobs.selection -> cast(:path as text) FROM ingest_jobs "
+    "WHERE production_id = :pid AND id <> cast(:jid as uuid) "
+    "AND ingest_jobs.selection -> cast(:path as text) ->> 'control' IS NOT NULL "
+    "ORDER BY created_at DESC"
+)
+
+
+def _matching_prior(priors, types: set[str], include_recoverable: bool, items: int) -> dict | None:
+    """The newest earlier selection of this container that planned the same
+    items. Message positions (and so controls) depend on the selected types,
+    the recoverable choice and the item count; reusing a control under any
+    other selection would skip the wrong messages."""
+    for prior in priors:
+        if (isinstance(prior, dict) and prior.get("control")
+                and sorted(prior.get("types") or []) == sorted(types)
+                and bool(prior.get("include_recoverable", True)) == bool(include_recoverable)
+                and int(prior.get("items") or -1) == items):
+            return prior
+    return None
+
+
 async def apply_selection(db, job_id: str, storage_path: str, types: list[str],
                           include_recoverable: bool) -> dict:
     """Record the uploader's selection for one container, write its chunks and
@@ -345,6 +369,9 @@ async def apply_selection(db, job_id: str, storage_path: str, types: list[str],
         raise SelectionError(404, "Container not surveyed")
     production = await db.get(Production, production_id)
     prefix = derive_bates_prefix(production.name if production else "")
+    priors = [r[0] for r in (await db.execute(text(_PRIOR_SELECTIONS_SQL), {
+        "path": storage_path, "pid": production_id, "jid": str(job_id),
+    })).all()]
     # Release the connection for the storage listing.
     await db.commit()
     identity = await asyncio.to_thread(_container_identity, production_id, fm, prefix, storage_path)
@@ -372,6 +399,21 @@ async def apply_selection(db, job_id: str, storage_path: str, types: list[str],
     estimate = estimate_load(survey, type_set, include_recoverable)
     selected = sum(p["item_count"] for p in plans)
 
+    # Re-ingesting a container an earlier job already loaded (same selection):
+    # reuse that job's control so the per-message skip turns this run into a
+    # resume instead of duplicating every message.
+    prior = _matching_prior(priors, type_set, include_recoverable, selected)
+    already = 0
+    if prior is not None:
+        from app.services.large_ingest_finalize import _LOADED_MESSAGES_SQL, _like_escape
+
+        control = prior["control"]
+        already = int((await db.execute(text(_LOADED_MESSAGES_SQL), {
+            "pid": production_id, "pat": f"{_like_escape(control)} -%",
+        })).scalar() or 0)
+        logger.info("Job %s: %s was loaded before as %s (%d messages); resuming",
+                    job_id, storage_path, control, already)
+
     selection = dict(job.selection or {})
     selection[storage_path] = {
         "types": sorted(type_set),
@@ -383,6 +425,9 @@ async def apply_selection(db, job_id: str, storage_path: str, types: list[str],
     }
     job.selection = selection
     job.items_total = int(job.items_total or 0) + selected
+    if already:
+        # Read under the row lock, so concurrent atomic increments are kept.
+        job.items_done = int(job.items_done or 0) + min(already, selected)
     failed = survey_failed_paths(job)
     if all(p in selection or p in failed for p in fm.get("large_containers") or []):
         job.status = "processing"
