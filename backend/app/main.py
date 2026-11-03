@@ -6,20 +6,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import ai, annotations, audit, auth, batches, conversations, dashboard, defensibility, documents, entities, export, folders, imaging, ingest, intelligence, notes, privilege, production_sets, productions, qc, queues, redactions, review, sampling, saved_searches, search, search_terms, tags, tar
 
-# Force root logger to DEBUG regardless of uvicorn's setup
+# Root logger at INFO. DEBUG is never enabled in prod: client SDKs (voyage,
+# anthropic, httpx/httpcore) log full request bodies at DEBUG, which put
+# privileged document text into Cloud Logging.
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     force=True,
 )
-# Keep noisy libraries at INFO/WARNING
+# Libraries that log request/response payloads, or are just noisy.
+for _name in ("voyage", "voyageai", "anthropic", "httpx", "httpcore", "openai",
+              "urllib3", "google", "sqlalchemy", "PIL", "tifffile"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 logging.getLogger("uvicorn").setLevel(logging.INFO)
-logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
-logging.getLogger("google").setLevel(logging.INFO)
-logging.getLogger("urllib3").setLevel(logging.INFO)
-logging.getLogger("httpx").setLevel(logging.INFO)
-logging.getLogger("PIL").setLevel(logging.WARNING)
-logging.getLogger("tifffile").setLevel(logging.WARNING)
 
 app = FastAPI(title="Vigilist", version="0.1.0")
 
