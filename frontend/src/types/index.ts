@@ -306,6 +306,8 @@ export interface AiEstimate {
   held: boolean;
   documents_pending: number;
   usd_estimate: number;
+  /** Caller may start analysis (manager or admin on this matter). */
+  can_run: boolean;
 }
 
 export interface AuditLogEntry {

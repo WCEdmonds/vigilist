@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ref, uploadBytesResumable } from 'firebase/storage';
 import { firebaseStorage, auth } from '../firebase';
 import { analyzeLoadFile, createProductionForIngest, getClassifyEstimate, getIngestStatus, getIntakeSummary, startAutoClassification, startProcessing } from '../api/client';
@@ -219,11 +219,6 @@ export default function IngestWizard({ onClose, onComplete, existingProduction, 
     }
   };
 
-  // Reopened on a running load: pick up its status.
-  useEffect(() => {
-    if (resumeJobId) pollStatus(resumeJobId);
-  }, [resumeJobId]);
-
   const handleConfirmMapping = async () => {
     if (mappingProdId === null) return;
     const fieldMapping = Object.fromEntries(
@@ -240,10 +235,14 @@ export default function IngestWizard({ onClose, onComplete, existingProduction, 
     }
   };
 
-  const pollStatus = async (jobId: string) => {
+  // Polls until the job settles. `isCancelled` lets an effect cleanup stop the
+  // loop (unmount, or the wizard reopened on another job).
+  const pollStatus = useCallback(async (jobId: string, isCancelled: () => boolean = () => false) => {
     const poll = async () => {
+      if (isCancelled()) return;
       try {
         const status = await getIngestStatus(jobId);
+        if (isCancelled()) return;
         setJob(status);
         if (status.status === 'complete') {
           setStage('complete');
@@ -254,11 +253,19 @@ export default function IngestWizard({ onClose, onComplete, existingProduction, 
           setTimeout(poll, 2000);
         }
       } catch {
-        setTimeout(poll, 3000);
+        if (!isCancelled()) setTimeout(poll, 3000);
       }
     };
     poll();
-  };
+  }, []);
+
+  // Reopened on a running load: pick up its status.
+  useEffect(() => {
+    if (!resumeJobId) return;
+    let cancelled = false;
+    pollStatus(resumeJobId, () => cancelled);
+    return () => { cancelled = true; };
+  }, [resumeJobId, pollStatus]);
 
   // Fetch the classification cost estimate once the ingest reaches 'complete'.
   useEffect(() => {

@@ -588,7 +588,7 @@ async def ai_estimate(
     would cost at Haiku 5.5 batch pricing. Shown before any paid work."""
     from sqlalchemy import case, func
 
-    from app.dependencies import get_accessible_production_ids
+    from app.dependencies import ROLE_RANK, get_accessible_production_ids, get_user_role_for_production
     from app.services.ai import SUMMARY_INPUT_CHARS, estimate_per_doc_usd
 
     accessible = await get_accessible_production_ids(db, user)
@@ -617,8 +617,11 @@ async def ai_estimate(
     )).one()
     pending, summary_docs, summary_chars, entity_docs, entity_chars = (int(v or 0) for v in row)
     usd = estimate_per_doc_usd(summary_docs, summary_chars, entity_docs, entity_chars)
+    # Same gate as POST /pipeline/run: only managers/admins can start analysis.
+    role = await get_user_role_for_production(db, user, production_id)
     return {"held": bool(prod.ai_hold), "documents_pending": pending,
-            "usd_estimate": round(usd, 4)}
+            "usd_estimate": round(usd, 4),
+            "can_run": ROLE_RANK.get(role, 0) >= ROLE_RANK["manager"]}
 
 
 # Self-heal: a processing/finalizing job whose chunks have been quiet this long
@@ -627,6 +630,10 @@ async def ai_estimate(
 SELF_HEAL_QUIET_MINUTES = 5
 SELF_HEAL_INTERVAL_S = SELF_HEAL_QUIET_MINUTES * 60
 _SELF_HEAL_AT: dict[str, float] = {}
+# The quiet check itself runs at most this often per job per instance (the
+# status endpoint is polled every ~2 s).
+QUIET_CHECK_INTERVAL_S = 30
+_QUIET_CHECKED_AT: dict[str, float] = {}
 
 _QUIET_SQL = text(
     "SELECT coalesce(max(updated_at) < now() - make_interval(mins => :mins), true) "
@@ -658,6 +665,10 @@ async def _maybe_schedule_self_heal(db, job, background_tasks: BackgroundTasks) 
     last = _SELF_HEAL_AT.get(key)
     if last is not None and now - last < SELF_HEAL_INTERVAL_S:
         return
+    checked = _QUIET_CHECKED_AT.get(key)
+    if checked is not None and now - checked < QUIET_CHECK_INTERVAL_S:
+        return
+    _QUIET_CHECKED_AT[key] = now
     try:
         quiet = (await db.execute(
             _QUIET_SQL, {"mins": SELF_HEAL_QUIET_MINUTES, "job_id": job.id})).scalar()

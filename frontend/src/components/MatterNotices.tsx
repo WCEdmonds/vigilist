@@ -76,9 +76,13 @@ export default function MatterNotices({ productionId, onResumeIngest, onAnalysis
             {estimate.documents_pending > 0 && <> for {estimate.documents_pending.toLocaleString()} documents</>}
             {' '}— estimated ${estimate.usd_estimate.toFixed(2)}
           </span>
-          <button className="btn btn-primary btn-sm" disabled={running} onClick={handleRun}>
-            {running ? 'Starting…' : 'Run'}
-          </button>
+          {estimate.can_run ? (
+            <button className="btn btn-primary btn-sm" disabled={running} onClick={handleRun}>
+              {running ? 'Starting…' : 'Run'}
+            </button>
+          ) : (
+            <span style={{ color: 'var(--color-neutral-500)' }}>AI analysis is on hold: ask a matter manager to run it.</span>
+          )}
         </div>
       )}
     </>

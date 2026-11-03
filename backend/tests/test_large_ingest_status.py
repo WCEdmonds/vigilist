@@ -56,6 +56,7 @@ def _status(job, db=None, bg=None):
 @pytest.fixture(autouse=True)
 def _clear_throttle():
     ri._SELF_HEAL_AT.clear()
+    ri._QUIET_CHECKED_AT.clear()
 
 
 def test_status_exposes_items_and_container_survey():
@@ -183,3 +184,17 @@ def test_heal_errors_are_logged_not_surfaced(monkeypatch):
     bg = BackgroundTasks()
     _status(job, _db(job, STALE), bg)
     _run_bg(bg)  # must not raise
+
+
+def test_quiet_check_runs_at_most_once_per_interval_per_job(monkeypatch):
+    _heal_env(monkeypatch)
+    job = _job(status="processing")
+    db = _db(job, FRESH)
+    for _ in range(5):
+        _status(job, db, BackgroundTasks())
+    quiet_queries = [q for q in db.executed if "ingest_chunks" in q]
+    assert len(quiet_queries) == 1
+    # After the interval it checks again.
+    ri._QUIET_CHECKED_AT[str(JID)] -= ri.QUIET_CHECK_INTERVAL_S + 1
+    _status(job, db, BackgroundTasks())
+    assert len([q for q in db.executed if "ingest_chunks" in q]) == 2

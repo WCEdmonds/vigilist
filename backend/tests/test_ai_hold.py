@@ -205,15 +205,34 @@ class EstimateSession(EndpointSession):
         return EstimateResult(self.row)
 
 
+def _patch_role(monkeypatch, role):
+    async def fake_role(db, user, production_id):
+        return role
+
+    monkeypatch.setattr("app.dependencies.get_user_role_for_production", fake_role)
+
+
+@pytest.mark.parametrize("role,can_run", [
+    ("admin", True), ("manager", True), ("reviewer", False), ("readonly", False)])
+def test_ai_estimate_can_run_follows_role(monkeypatch, role, can_run):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, role)
+    out = asyncio.run(ingest_router.ai_estimate(
+        production_id=1, db=EstimateSession(SimpleNamespace(id=1, ai_hold=True), (0, 0, 0, 0, 0)),
+        user=FakeUser()))
+    assert out["can_run"] is can_run
+
+
 def test_ai_estimate_shape_and_pricing(monkeypatch):
     _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "admin")
     prod = SimpleNamespace(id=1, ai_hold=True)
     # 10 pending docs; 10 need summaries (120,000 summary chars), 10 need
     # entities (400,000 chars).
     row = (10, 10, 120_000, 10, 400_000)
     out = asyncio.run(ingest_router.ai_estimate(
         production_id=1, db=EstimateSession(prod, row), user=FakeUser()))
-    assert set(out) == {"held", "documents_pending", "usd_estimate"}
+    assert set(out) == {"held", "documents_pending", "usd_estimate", "can_run"}
     assert out["held"] is True
     assert out["documents_pending"] == 10
     input_tokens = (120_000 + 400_000) / 4
