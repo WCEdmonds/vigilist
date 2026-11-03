@@ -226,12 +226,15 @@ def _install(monkeypatch, world, configured=True):
         attr = "summary" if stage == "summaries" else "entities_extracted_at"
         return sum(1 for d in world.docs.values() if getattr(d, attr) is None and d.text_content)
 
-    async def load_docs(production_id, stage, offset, limit):
+    async def load_docs(production_id, stage, after, limit):
+        # Keyset page after (bates_begin, id), like the real query.
         attr = "summary" if stage == "summaries" else "entities_extracted_at"
         pending = sorted((d for d in world.docs.values()
                           if getattr(d, attr) is None and d.text_content),
-                         key=lambda d: d.bates_begin)
-        return pending[offset:offset + limit]
+                         key=lambda d: (d.bates_begin, str(d.id)))
+        if after is not None:
+            pending = [d for d in pending if (d.bates_begin, str(d.id)) > tuple(after)]
+        return pending[:limit]
 
     async def cas_stage(production_id, stage, prev, new):
         # Same contract as the conditional UPDATE: atomic within one event
@@ -268,7 +271,7 @@ def test_large_summary_run_submits_batch_and_waits(monkeypatch):
     async def must_not_run(pid):
         raise AssertionError("later stages wait for the batched stage")
 
-    monkeypatch.setitem(pipeline._STAGE_RUNNERS, "entities", must_not_run)
+    monkeypatch.setitem(pipeline._STAGE_RUNNERS, "entities", AsyncMock())
     monkeypatch.setitem(pipeline._STAGE_RUNNERS, "timeline_review", must_not_run)
     monkeypatch.setitem(pipeline._STAGE_RUNNERS, "brief", must_not_run)
 
@@ -281,8 +284,9 @@ def test_large_summary_run_submits_batch_and_waits(monkeypatch):
         assert params["model"] == "claude-haiku-5-5"
         assert params["thinking"] == {"type": "disabled"}
     entry = world.prod.ai_pipeline_status["summaries"]
-    assert entry["status"] == "waiting" and entry["batch_id"] == "msgbatch_1"
-    assert entry["submitted_at"]
+    assert entry["status"] == "waiting" and [b["id"] for b in entry["batches"]] == ["msgbatch_1"]
+    assert entry["submitted_at"] and entry["batches"][0]["state"] == "processing"
+    assert entry["batches"][0]["doc_count"] == 600
     assert polls == [(1, "summaries", pipeline.BATCH_POLL_SECONDS)]
     # No model call happened synchronously.
     assert all(d.summary is None for d in world.docs.values())
@@ -295,6 +299,8 @@ def test_waiting_stage_blocks_a_rerun(monkeypatch):
     world = World([FakeDoc(i) for i in range(600)], status=status)
     _install(monkeypatch, world)
     monkeypatch.setattr(claude_batch, "submit", AsyncMock(side_effect=AssertionError("no resubmit")))
+    for stage in ("clustering", "entities", "timeline_review", "brief"):
+        monkeypatch.setitem(pipeline._STAGE_RUNNERS, stage, AsyncMock())
     asyncio.run(pipeline.run_ambient_pipeline(1, force=True))
     assert world.prod.ai_pipeline_status["summaries"]["batch_id"] == "b1"
 
@@ -411,7 +417,7 @@ def test_stale_waiting_stage_is_resubmitted(monkeypatch):
     for stage in ("entities", "timeline_review", "brief"):
         monkeypatch.setitem(pipeline._STAGE_RUNNERS, stage, AsyncMock())
     asyncio.run(pipeline.run_ambient_pipeline(1))
-    assert world.prod.ai_pipeline_status["summaries"]["batch_id"] == "new"
+    assert [b["id"] for b in world.prod.ai_pipeline_status["summaries"]["batches"]] == ["new"]
 
 
 def test_poll_batch_endpoint_requires_stage(monkeypatch):
@@ -547,7 +553,8 @@ def test_cas_stage_issues_conditional_update(monkeypatch):
     new = {"status": "applying", "batch_id": "b1"}
     monkeypatch.setattr(pipeline, "async_session", lambda: session_with((1,)))
     assert asyncio.run(pipeline._cas_stage(1, "summaries", prev, new)) is True
-    assert "WHERE id = :pid AND ai_pipeline_status -> cast(:stage as text) = cast(:prev as jsonb)" in seen["sql"]
+    assert ("WHERE id = :pid AND coalesce(ai_pipeline_status -> cast(:stage as text), "
+            "cast('null' as jsonb)) = cast(:prev as jsonb)") in seen["sql"]
     assert json.loads(seen["params"]["prev"]) == prev and json.loads(seen["params"]["new"]) == new
     monkeypatch.setattr(pipeline, "async_session", lambda: session_with(None))
     assert asyncio.run(pipeline._cas_stage(1, "summaries", prev, new)) is False

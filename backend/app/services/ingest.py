@@ -782,15 +782,28 @@ async def _finalize_job_if_done(
 
     if job_is_done(job) and job.status == "processing":
         production = await db.get(Production, production_id)
-        held = should_hold(production, job.processed_files or 0, False)
-        if held:
-            # A held load gets the same bounded AI titling as a large-container
-            # load; the rest keep the filename fallback until analysis runs.
+        large = should_hold(production, job.processed_files or 0, False)
+        # A requested analysis already under way owns the matter: don't hold
+        # it and don't start a second pipeline run. The new documents are
+        # picked up by its later rounds or left pending for the next explicit
+        # run; the job says so in an info line.
+        from app.services.pipeline import AI_RUNNING_INFO, analysis_in_progress
+
+        ai_running = production is not None and analysis_in_progress(
+            getattr(production, "ai_pipeline_status", None))
+        held = large and not ai_running
+        if ai_running:
+            errors.append(AI_RUNNING_INFO)
+            logger.info("Production %s: %s", production_id, AI_RUNNING_INFO)
+        if large:
+            # A held (or large) load gets the same bounded AI titling as a
+            # large-container load; the rest keep the filename fallback until
+            # analysis runs.
             from app.services.large_ingest_finalize import POST_AI_TITLE_LIMIT
 
             await generate_missing_titles(db, production_id, errors,
                                           ai_limit=POST_AI_TITLE_LIMIT)
-            if production is not None:
+            if held and production is not None:
                 production.ai_hold = True
         else:
             await generate_missing_titles(db, production_id, errors)
@@ -826,6 +839,8 @@ async def _finalize_job_if_done(
         # A held production waits for an explicit run (with its estimate).
         if held:
             logger.info("AI hold: ambient pipeline not started for production %s", production_id)
+            return
+        if ai_running:
             return
         try:
             from app.services import tasks as task_service

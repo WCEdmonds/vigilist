@@ -383,3 +383,44 @@ def test_ai_estimate_rejects_unknown_mode(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(ingest_router.ai_estimate(production_id=1, mode="everything", db=db, user=FakeUser()))
     assert exc.value.status_code == 422
+
+
+# --- no hold while a requested analysis is running ------------------------------
+
+INFO = "AI analysis already running; run analysis again after it finishes to include these new documents"
+
+
+def _now(**delta):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+
+
+def _waiting_status():
+    return {"clustering": "done", "updated_at": _now(),
+            "summaries": {"status": "waiting", "submitted_at": _now(), "exhausted": True,
+                          "batches": [{"id": "b1", "state": "processing",
+                                       "submitted_at": _now(), "doc_count": 600}]}}
+
+
+def test_normal_large_load_into_a_running_analysis_does_not_hold(monkeypatch):
+    calls = _patch_finalize(monkeypatch)
+    prod = SimpleNamespace(id=1, ai_hold=False, ai_pipeline_status=_waiting_status())
+    job = _job(6_000)
+    asyncio.run(ingest_service._finalize_job_if_done(FinalizeSession(prod), job, 1, []))
+    assert job.status == "complete"
+    assert prod.ai_hold is False
+    assert INFO in job.errors
+    # The running analysis owns the matter: no second pipeline run is started.
+    assert calls["enqueue"] == []
+    # Still a large load: bounded inline AI titling.
+    assert calls["title_limits"][0] is not None
+
+
+def test_normal_large_load_into_an_idle_production_still_holds(monkeypatch):
+    calls = _patch_finalize(monkeypatch)
+    prod = SimpleNamespace(id=1, ai_hold=False, ai_pipeline_status={"brief": "done"})
+    job = _job(6_000)
+    asyncio.run(ingest_service._finalize_job_if_done(FinalizeSession(prod), job, 1, []))
+    assert prod.ai_hold is True
+    assert INFO not in job.errors
+    assert calls["enqueue"] == []

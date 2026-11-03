@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from app.config import settings
-from app.models import IngestChunk, IngestJob
+from app.models import IngestChunk, IngestJob, Production
 from app.services.large_ingest import large_source_key, survey_failed_paths
 from app.services.pst_reader import ITEM_TYPES
 
@@ -256,8 +256,19 @@ async def _phase_a(db, job, large: list[str]) -> None:
                 continue
             await db.execute(text(_MARK_SOURCE_DONE_SQL), {"key": large_source_key(path), "jid": job_id})
             lines.append(await _reconciliation_line(db, job, path))
+        # A requested analysis already under way keeps the matter: no hold
+        # (its later rounds pick the new documents up, or they wait for the
+        # next explicit run), and the job carries an info line saying so.
+        from app.services.pipeline import AI_RUNNING_INFO, analysis_in_progress
+
+        prod = await db.get(Production, job.production_id)
+        ai_running = prod is not None and analysis_in_progress(
+            getattr(prod, "ai_pipeline_status", None))
+        if ai_running:
+            lines.append(AI_RUNNING_INFO)
         await append_job_errors(db, job_id, lines, commit=False)
-        await db.execute(text(_AI_HOLD_SQL), {"pid": job.production_id})
+        if not ai_running:
+            await db.execute(text(_AI_HOLD_SQL), {"pid": job.production_id})
         doc_ids = await _embed_doc_ids(db, job.production_id)
         chunks = []
         for i in range(0, len(doc_ids), EMBED_BATCH_DOCS):

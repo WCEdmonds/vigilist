@@ -789,3 +789,34 @@ def test_post_chunk_past_its_attempts_still_deletes_the_prefix(env):
     _run(s, cid)
     assert s.job.status == "complete"
     assert s.deleted_prefixes == ["productions/1/exploded/j1/"]
+
+
+# --- no AI hold while a requested analysis is running ------------------------------
+
+AI_RUNNING_INFO = "AI analysis already running; run analysis again after it finishes to include these new documents"
+
+
+def test_large_load_into_a_running_analysis_does_not_hold(env):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    s = env()
+    s.production.ai_pipeline_status = {
+        "clustering": "done", "updated_at": now,
+        "summaries": {"status": "waiting", "submitted_at": now, "exhausted": True,
+                      "batches": [{"id": "b1", "state": "processing",
+                                   "submitted_at": now, "doc_count": 600}]}}
+    s.add_chunk("items", "done")
+    _finalize(s)
+    assert s.job.status == "finalizing"
+    assert s.production.ai_hold is False
+    assert AI_RUNNING_INFO in s.job.errors
+    assert s.pipeline == []
+
+
+def test_large_load_into_an_idle_production_still_holds(env):
+    s = env()
+    s.production.ai_pipeline_status = {"summaries": "done", "entities": "done"}
+    s.add_chunk("items", "done")
+    _finalize(s)
+    assert s.production.ai_hold is True
+    assert AI_RUNNING_INFO not in s.job.errors
