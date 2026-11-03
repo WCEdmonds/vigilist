@@ -638,6 +638,29 @@ async def trigger_entity_extraction(
     return {"status": "started"}
 
 
+# The held estimate sums text lengths over every pending document, so it is
+# cached per production per instance (in-process, like the other throttles).
+AI_ESTIMATE_CACHE_S = 600
+# Throttle/cache entries older than this are pruned whenever one is written.
+THROTTLE_PRUNE_S = 3600
+_AI_ESTIMATE_CACHE: dict[int, tuple[float, dict]] = {}
+
+
+def _monotonic() -> float:
+    import time
+
+    return time.monotonic()
+
+
+def _prune(cache: dict, now: float) -> None:
+    """Drop entries written more than THROTTLE_PRUNE_S ago. Values are a
+    timestamp or a (timestamp, payload) tuple."""
+    for key, value in list(cache.items()):
+        at = value[0] if isinstance(value, tuple) else value
+        if now - at > THROTTLE_PRUNE_S:
+            cache.pop(key, None)
+
+
 @router.get("/productions/{production_id}/ai-estimate")
 async def ai_estimate(
     production_id: int,
@@ -658,6 +681,17 @@ async def ai_estimate(
     prod = await db.get(Production, production_id)
     if prod is None:
         raise HTTPException(status_code=404, detail="Production not found")
+    # Same gate as POST /pipeline/run: only managers/admins can start analysis.
+    role = await get_user_role_for_production(db, user, production_id)
+    can_run = ROLE_RANK.get(role, 0) >= ROLE_RANK["manager"]
+    if not prod.ai_hold:
+        # Nothing is waiting on a decision: skip the text scan.
+        return {"held": False, "documents_pending": 0, "usd_estimate": 0, "can_run": can_run}
+
+    now = _monotonic()
+    cached = _AI_ESTIMATE_CACHE.get(production_id)
+    if cached is not None and now - cached[0] < AI_ESTIMATE_CACHE_S:
+        return {"held": True, **cached[1], "can_run": can_run}
 
     needs_summary = Document.summary.is_(None)
     needs_entities = Document.entities_extracted_at.is_(None)
@@ -678,11 +712,10 @@ async def ai_estimate(
     )).one()
     pending, summary_docs, summary_chars, entity_docs, entity_chars = (int(v or 0) for v in row)
     usd = estimate_per_doc_usd(summary_docs, summary_chars, entity_docs, entity_chars)
-    # Same gate as POST /pipeline/run: only managers/admins can start analysis.
-    role = await get_user_role_for_production(db, user, production_id)
-    return {"held": bool(prod.ai_hold), "documents_pending": pending,
-            "usd_estimate": round(usd, 4),
-            "can_run": ROLE_RANK.get(role, 0) >= ROLE_RANK["manager"]}
+    result = {"documents_pending": pending, "usd_estimate": round(usd, 4)}
+    _prune(_AI_ESTIMATE_CACHE, now)
+    _AI_ESTIMATE_CACHE[production_id] = (now, result)
+    return {"held": True, **result, "can_run": can_run}
 
 
 # Self-heal: a processing/finalizing job whose chunks have been quiet this long
@@ -729,6 +762,7 @@ async def _maybe_schedule_self_heal(db, job, background_tasks: BackgroundTasks) 
     checked = _QUIET_CHECKED_AT.get(key)
     if checked is not None and now - checked < QUIET_CHECK_INTERVAL_S:
         return
+    _prune(_QUIET_CHECKED_AT, now)
     _QUIET_CHECKED_AT[key] = now
     try:
         quiet = (await db.execute(
@@ -738,6 +772,7 @@ async def _maybe_schedule_self_heal(db, job, background_tasks: BackgroundTasks) 
         return
     if not quiet:
         return
+    _prune(_SELF_HEAL_AT, now)
     _SELF_HEAL_AT[key] = now
     background_tasks.add_task(_self_heal, key)
 

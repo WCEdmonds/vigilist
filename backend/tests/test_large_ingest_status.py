@@ -198,3 +198,19 @@ def test_quiet_check_runs_at_most_once_per_interval_per_job(monkeypatch):
     ri._QUIET_CHECKED_AT[str(JID)] -= ri.QUIET_CHECK_INTERVAL_S + 1
     _status(job, db, BackgroundTasks())
     assert len([q for q in db.executed if "ingest_chunks" in q]) == 2
+
+
+def test_throttle_entries_older_than_an_hour_are_pruned_on_write(monkeypatch):
+    """m3: the per-job throttle dicts don't grow without bound."""
+    import time
+
+    _heal_env(monkeypatch)
+    old = time.monotonic() - ri.THROTTLE_PRUNE_S - 10
+    ri._SELF_HEAL_AT["old-job"] = old
+    ri._QUIET_CHECKED_AT["old-job"] = old
+    job = _job(status="processing")
+    bg = BackgroundTasks()
+    _status(job, _db(job, STALE), bg)
+    assert "old-job" not in ri._QUIET_CHECKED_AT
+    assert "old-job" not in ri._SELF_HEAL_AT
+    assert str(JID) in ri._SELF_HEAL_AT

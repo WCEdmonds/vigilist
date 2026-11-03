@@ -22,25 +22,42 @@ export default function MatterNotices({ productionId, onResumeIngest, onAnalysis
   const [estimate, setEstimate] = useState<AiEstimate | null>(null);
   const [running, setRunning] = useState(false);
 
-  const load = useCallback(async () => {
-    const [a, e] = await Promise.allSettled([getIngestAwaiting(productionId), getAiEstimate(productionId)]);
-    if (a.status === 'fulfilled') setAwaiting(a.value);
-    if (e.status === 'fulfilled') setEstimate(e.value);
+  // Only the awaiting-selection check is polled. The AI estimate scans the
+  // pending text server-side, so it is fetched once per mount and after Run.
+  const loadAwaiting = useCallback(async () => {
+    try {
+      setAwaiting(await getIngestAwaiting(productionId));
+    } catch {
+      // Transient: the next poll retries.
+    }
+  }, [productionId]);
+
+  const loadEstimate = useCallback(async () => {
+    try {
+      setEstimate(await getAiEstimate(productionId));
+    } catch {
+      // Leave the banner as it was.
+    }
   }, [productionId]);
 
   useEffect(() => {
     let cancelled = false;
-    const tick = () => { if (!cancelled) void load(); };
+    const tick = () => { if (!cancelled) void loadAwaiting(); };
     tick();
     const id = window.setInterval(tick, POLL_MS);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, [load]);
+  }, [loadAwaiting]);
+
+  useEffect(() => {
+    void loadEstimate();
+  }, [loadEstimate]);
 
   const handleRun = async () => {
     setRunning(true);
     try {
       await runPipeline(productionId, false);
       setEstimate(prev => (prev ? { ...prev, held: false } : prev));
+      void loadEstimate();
       onAnalysisStarted?.();
       showToast('AI analysis started', 'success');
     } catch (e) {

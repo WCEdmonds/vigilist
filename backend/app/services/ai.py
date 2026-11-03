@@ -178,6 +178,13 @@ CHARS_PER_TOKEN = 4
 SUMMARY_INPUT_CHARS = 12_000
 SUMMARY_OUTPUT_TOKENS = 300
 ENTITY_OUTPUT_TOKENS = 1_000
+# Fixed prompt tokens every request carries on top of the document text:
+# len(prompt strings) / CHARS_PER_TOKEN, measured from SUMMARY_PROMPT (~340
+# chars) and EXTRACTION_SYSTEM_PROMPT plus the extraction prompt wrapper
+# (~3,380 chars). Entity extraction sends one request per text slice; the
+# estimate counts one per document. A test keeps these near the prompts.
+SUMMARY_PROMPT_OVERHEAD_TOKENS = 90
+ENTITY_PROMPT_OVERHEAD_TOKENS = 850
 
 
 def estimate_per_doc_usd(summary_docs: int, summary_chars: int,
@@ -185,7 +192,9 @@ def estimate_per_doc_usd(summary_docs: int, summary_chars: int,
     """USD for summarizing ``summary_docs`` documents (``summary_chars`` of
     already-capped input) and extracting entities from ``entity_docs``
     documents (``entity_chars`` of input), at batch pricing."""
-    input_tokens = (summary_chars + entity_chars) / CHARS_PER_TOKEN
+    input_tokens = ((summary_chars + entity_chars) / CHARS_PER_TOKEN
+                    + summary_docs * SUMMARY_PROMPT_OVERHEAD_TOKENS
+                    + entity_docs * ENTITY_PROMPT_OVERHEAD_TOKENS)
     output_tokens = summary_docs * SUMMARY_OUTPUT_TOKENS + entity_docs * ENTITY_OUTPUT_TOKENS
     return (input_tokens * PER_DOC_BATCH_INPUT_USD_PER_MTOK
             + output_tokens * PER_DOC_BATCH_OUTPUT_USD_PER_MTOK) / 1_000_000

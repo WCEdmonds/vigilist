@@ -235,7 +235,10 @@ def test_ai_estimate_shape_and_pricing(monkeypatch):
     assert set(out) == {"held", "documents_pending", "usd_estimate", "can_run"}
     assert out["held"] is True
     assert out["documents_pending"] == 10
-    input_tokens = (120_000 + 400_000) / 4
+    from app.services.ai import ENTITY_PROMPT_OVERHEAD_TOKENS, SUMMARY_PROMPT_OVERHEAD_TOKENS
+
+    input_tokens = ((120_000 + 400_000) / 4
+                    + 10 * SUMMARY_PROMPT_OVERHEAD_TOKENS + 10 * ENTITY_PROMPT_OVERHEAD_TOKENS)
     output_tokens = 10 * 300 + 10 * 1_000
     expected = input_tokens * 0.05 / 1e6 + output_tokens * 0.25 / 1e6
     assert out["usd_estimate"] == pytest.approx(expected, abs=1e-4)
@@ -248,3 +251,70 @@ def test_ai_estimate_404_outside_scope(monkeypatch):
         asyncio.run(ingest_router.ai_estimate(
             production_id=2, db=EstimateSession(prod, (0, 0, 0, 0, 0)), user=FakeUser()))
     assert exc.value.status_code == 404
+
+
+# --- I2: cheap estimate polling --------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_estimate_cache():
+    ingest_router._AI_ESTIMATE_CACHE.clear()
+    yield
+    ingest_router._AI_ESTIMATE_CACHE.clear()
+
+
+class CountingEstimateSession(EstimateSession):
+    def __init__(self, prod, row):
+        super().__init__(prod, row)
+        self.queries = 0
+
+    async def execute(self, stmt, params=None):
+        self.queries += 1
+        return await super().execute(stmt, params)
+
+
+def test_ai_estimate_skips_the_scan_when_not_held(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "manager")
+    db = CountingEstimateSession(SimpleNamespace(id=1, ai_hold=False), (5, 5, 50, 5, 50))
+    out = asyncio.run(ingest_router.ai_estimate(production_id=1, db=db, user=FakeUser()))
+    assert out == {"held": False, "documents_pending": 0, "usd_estimate": 0, "can_run": True}
+    assert db.queries == 0
+
+
+def test_ai_estimate_is_cached_per_production_while_held(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "admin")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(ingest_router, "_monotonic", lambda: clock["t"])
+    prod = SimpleNamespace(id=1, ai_hold=True)
+    db = CountingEstimateSession(prod, (10, 10, 120_000, 10, 400_000))
+    first = asyncio.run(ingest_router.ai_estimate(production_id=1, db=db, user=FakeUser()))
+    clock["t"] += ingest_router.AI_ESTIMATE_CACHE_S - 1
+    again = asyncio.run(ingest_router.ai_estimate(production_id=1, db=db, user=FakeUser()))
+    assert db.queries == 1 and again == first
+    clock["t"] += 2
+    asyncio.run(ingest_router.ai_estimate(production_id=1, db=db, user=FakeUser()))
+    assert db.queries == 2
+
+
+def test_ai_estimate_cache_prunes_old_entries(monkeypatch):
+    _patch_access(monkeypatch, "app.dependencies")
+    _patch_role(monkeypatch, "admin")
+    clock = {"t": 0.0}
+    monkeypatch.setattr(ingest_router, "_monotonic", lambda: clock["t"])
+    ingest_router._AI_ESTIMATE_CACHE[99] = (-4000.0, {"documents_pending": 1, "usd_estimate": 1})
+    db = CountingEstimateSession(SimpleNamespace(id=1, ai_hold=True), (0, 0, 0, 0, 0))
+    asyncio.run(ingest_router.ai_estimate(production_id=1, db=db, user=FakeUser()))
+    assert 99 not in ingest_router._AI_ESTIMATE_CACHE
+
+
+def test_prompt_overhead_constants_track_the_prompts():
+    from app.services.ai import (ENTITY_PROMPT_OVERHEAD_TOKENS, SUMMARY_PROMPT,
+                                 SUMMARY_PROMPT_OVERHEAD_TOKENS)
+    from app.services.entity_extraction import EXTRACTION_SYSTEM_PROMPT, build_extraction_prompt
+
+    summary = len(SUMMARY_PROMPT) / 4
+    entity = (len(EXTRACTION_SYSTEM_PROMPT) + len(build_extraction_prompt(""))) / 4
+    assert summary * 0.8 <= SUMMARY_PROMPT_OVERHEAD_TOKENS <= summary * 1.25
+    assert entity * 0.8 <= ENTITY_PROMPT_OVERHEAD_TOKENS <= entity * 1.25
