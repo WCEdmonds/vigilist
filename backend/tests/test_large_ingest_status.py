@@ -57,6 +57,7 @@ def _status(job, db=None, bg=None):
 def _clear_throttle():
     ri._SELF_HEAL_AT.clear()
     ri._QUIET_CHECKED_AT.clear()
+    ri._SURVEY_CHECKED_AT.clear()
 
 
 def test_status_exposes_items_and_container_survey():
@@ -214,3 +215,90 @@ def test_throttle_entries_older_than_an_hour_are_pruned_on_write(monkeypatch):
     assert "old-job" not in ri._QUIET_CHECKED_AT
     assert "old-job" not in ri._SELF_HEAL_AT
     assert str(JID) in ri._SELF_HEAL_AT
+
+
+
+# --- Fix round 1: a surveying job whose unpack Job stopped making progress ---
+
+from datetime import timedelta  # noqa: E402
+
+from app.services import pst_explode  # noqa: E402
+
+NOW = datetime(2026, 11, 3, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _surveying(progress=None, created=None, **kw):
+    fm = {"large_containers": [BIG]}
+    if progress is not None:
+        fm["survey_progress"] = {BIG: progress.isoformat()}
+    return _job(status="surveying", survey={}, created_at=created or NOW - timedelta(hours=10),
+                field_mapping=fm, **kw)
+
+
+def test_stalled_survey_paths_use_progress_then_created_at():
+    stall = large_ingest.SURVEY_STALL_S
+    assert stall == 4.5 * 3600
+    assert large_ingest.stalled_survey_paths(_surveying(), NOW) == [BIG]
+    fresh = _surveying(progress=NOW - timedelta(hours=1))
+    assert large_ingest.stalled_survey_paths(fresh, NOW) == []
+    old = _surveying(progress=NOW - timedelta(hours=5))
+    assert large_ingest.stalled_survey_paths(old, NOW) == [BIG]
+    young = _surveying(created=NOW - timedelta(hours=1))
+    assert large_ingest.stalled_survey_paths(young, NOW) == []
+    naive = _surveying(created=(NOW - timedelta(hours=10)).replace(tzinfo=None))
+    assert large_ingest.stalled_survey_paths(naive, NOW) == [BIG]
+    surveyed = _surveying()
+    surveyed.survey = {BIG: {}}
+    assert large_ingest.stalled_survey_paths(surveyed, NOW) == []
+
+
+def _survey_heal_env(monkeypatch, job):
+    import app.database as dbmod
+
+    gave_up = []
+
+    async def fake_give_up(db, job_id, path, attempts, error, *, reason=None, line=None):
+        gave_up.append((job_id, path, error, line))
+
+    monkeypatch.setattr(large_ingest, "_give_up_survey", fake_give_up)
+    monkeypatch.setattr(large_ingest, "_utcnow", lambda: NOW)
+
+    class Ctx:
+        async def __aenter__(self):
+            return FakeSession(get_objects={("IngestJob", JID): job})
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(dbmod, "async_session_factory", lambda: Ctx())
+    return gave_up
+
+
+def test_stalled_surveying_job_gives_up_the_container_after_the_response(monkeypatch):
+    job = _surveying()
+    gave_up = _survey_heal_env(monkeypatch, job)
+    bg = BackgroundTasks()
+    _status(job, bg=bg)
+    assert gave_up == []
+    _run_bg(bg)
+    assert gave_up == [(JID, BIG, "no progress for 4.5 h",
+                        "acme.pst: mailbox unpack did not finish (no progress for 4.5 h)")]
+
+
+def test_surveying_job_with_recent_progress_is_left_alone(monkeypatch):
+    job = _surveying(progress=NOW - timedelta(minutes=10))
+    gave_up = _survey_heal_env(monkeypatch, job)
+    bg = BackgroundTasks()
+    _status(job, bg=bg)
+    _run_bg(bg)
+    assert gave_up == [] and bg.tasks == []
+
+
+def test_survey_heal_is_throttled_per_job(monkeypatch):
+    job = _surveying()
+    gave_up = _survey_heal_env(monkeypatch, job)
+    for _ in range(3):
+        bg = BackgroundTasks()
+        _status(job, bg=bg)
+        _run_bg(bg)
+    assert len(gave_up) == 1

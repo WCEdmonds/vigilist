@@ -241,7 +241,8 @@ async def start_processing(
             await db.commit()
 
         if large_containers:
-            await _start_unpack_jobs(db, job, large_containers)
+            await _start_unpack_jobs(db, job, [it for it in native_items
+                                               if it["storage_path"] in large_containers])
 
         logger.info("Enqueued %d batches for job %s", enqueued, job.id)
 
@@ -294,14 +295,20 @@ async def start_processing(
     )
 
 
-async def _start_unpack_jobs(db, job, paths: list[str]) -> None:
-    """Start one explode Job per large container. One that can't be started
-    is given up on at once, so the job never waits on a Job that isn't
-    running."""
-    from app.services import large_ingest
+async def _start_unpack_jobs(db, job, items: list[dict]) -> None:
+    """Start one explode Job per large container. One too large to unpack, or
+    one whose Job can't be started, is given up on at once, so the job never
+    waits on a Job that isn't running."""
+    from app.services import large_ingest, pst_explode
     from app.services.pst_reader import short_error
 
-    for path in paths:
+    for item in items:
+        path = item["storage_path"]
+        size = int(item.get("size") or 0)
+        if size > pst_explode.MAX_UNPACK_BYTES:
+            line = pst_explode.too_large_line(item.get("filename") or path.rsplit("/", 1)[-1], size)
+            await large_ingest._give_up_survey(db, str(job.id), path, 0, line, line=line)
+            continue
         try:
             await asyncio.to_thread(large_ingest.start_unpack, str(job.id), path)
         except Exception as e:
@@ -741,6 +748,10 @@ _SELF_HEAL_AT: dict[str, float] = {}
 QUIET_CHECK_INTERVAL_S = 30
 _QUIET_CHECKED_AT: dict[str, float] = {}
 
+# Surveying jobs: the stall check (pure, from the job row) runs at most once
+# per QUIET_CHECK_INTERVAL_S per job per instance.
+_SURVEY_CHECKED_AT: dict[str, float] = {}
+
 _QUIET_SQL = text(
     "SELECT coalesce(max(updated_at) < now() - make_interval(mins => :mins), true) "
     "FROM ingest_chunks WHERE job_id = :job_id"
@@ -759,9 +770,40 @@ async def _self_heal(job_id: str) -> None:
         logger.exception("Self-heal finalize failed for ingest job %s", job_id)
 
 
+async def _survey_self_heal(job_id: str) -> None:
+    """Background: give up containers whose unpack stalled. Never raises."""
+    try:
+        from app.database import async_session_factory
+        from app.services import large_ingest
+
+        async with async_session_factory() as db:
+            await large_ingest.give_up_stalled_surveys(db, job_id)
+    except Exception:
+        logger.exception("Survey self-heal failed for ingest job %s", job_id)
+
+
+def _maybe_schedule_survey_heal(job, background_tasks: BackgroundTasks) -> None:
+    import time
+
+    from app.services import large_ingest
+
+    key = str(job.id)
+    now = time.monotonic()
+    checked = _SURVEY_CHECKED_AT.get(key)
+    if checked is not None and now - checked < QUIET_CHECK_INTERVAL_S:
+        return
+    _prune(_SURVEY_CHECKED_AT, now)
+    _SURVEY_CHECKED_AT[key] = now
+    if large_ingest.stalled_survey_paths(job, large_ingest._utcnow()):
+        background_tasks.add_task(_survey_self_heal, key)
+
+
 async def _maybe_schedule_self_heal(db, job, background_tasks: BackgroundTasks) -> None:
     import time
 
+    if job.status == "surveying" and (job.field_mapping or {}).get("large_containers"):
+        _maybe_schedule_survey_heal(job, background_tasks)
+        return
     if job.status not in ("processing", "finalizing"):
         return
     if not (job.field_mapping or {}).get("large_containers"):

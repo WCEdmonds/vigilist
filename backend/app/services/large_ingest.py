@@ -62,6 +62,78 @@ _BUMP_SURVEY_ATTEMPTS_SQL = (
 )
 
 
+# The explode Job records progress per container in
+# field_mapping["survey_progress"] (at start, then while items advance).
+_SURVEY_PROGRESS_SQL = (
+    "UPDATE ingest_jobs SET field_mapping = jsonb_set(field_mapping, '{survey_progress}', "
+    "coalesce(field_mapping -> 'survey_progress', cast('{}' as jsonb)) || jsonb_build_object("
+    "cast(:path as text), cast(:at as text))) "
+    "WHERE id = :jid AND status = 'surveying'"
+)
+# A container whose unpack has shown no progress this long is given up on by
+# the status endpoint's self-heal (the Job's task timeout is 4 h).
+SURVEY_STALL_S = 4.5 * 3600
+SURVEY_STALL_LABEL = "no progress for 4.5 h"
+
+
+def _utcnow():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value):
+    from datetime import datetime, timezone
+
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+async def record_survey_progress(db, job_id: str, storage_path: str) -> None:
+    await db.execute(text(_SURVEY_PROGRESS_SQL), {
+        "jid": job_id, "path": storage_path, "at": _utcnow().isoformat()})
+    await db.commit()
+
+
+def stalled_survey_paths(job, now) -> list[str]:
+    """Large containers neither surveyed nor given up on whose last unpack
+    progress (else the job's creation) is older than SURVEY_STALL_S."""
+    fm = job.field_mapping or {}
+    progress = fm.get("survey_progress") or {}
+    failed = fm.get("survey_failed") or {}
+    surveys = job.survey or {}
+    created = _as_utc(getattr(job, "created_at", None))
+    out = []
+    for path in fm.get("large_containers") or []:
+        if path in surveys or path in failed:
+            continue
+        last = _as_utc(progress.get(path)) or created
+        if last is not None and (now - last).total_seconds() > SURVEY_STALL_S:
+            out.append(path)
+    return out
+
+
+async def give_up_stalled_surveys(db, job_id: str) -> None:
+    """Self-heal: give up containers whose unpack Job stopped making progress
+    (it died on its last run, or its execution never started)."""
+    job = await db.get(IngestJob, job_id, populate_existing=True)
+    if job is None or job.status != "surveying":
+        return
+    paths = stalled_survey_paths(job, _utcnow())
+    await db.commit()
+    for path in paths:
+        logger.warning("Job %s: unpack of %s made no progress for 4.5 h; giving up", job_id, path)
+        await _give_up_survey(
+            db, job_id, path, 0, SURVEY_STALL_LABEL,
+            line=f"{os.path.basename(path)}: mailbox unpack did not finish ({SURVEY_STALL_LABEL})")
+
+
 def survey_failed_paths(job) -> dict:
     """``{storage_path: short error}`` for large containers whose survey was
     given up on."""
@@ -92,9 +164,15 @@ async def run_survey(db, job_id: str, storage_path: str, work, *,
     or at once with ``give_up_on_failure`` (the Job's last run); then the
     container is given up on (``_give_up_survey``) and this returns.
 
+    A ``PermanentSurveyFailure`` (e.g. too large to unpack) gives up at once.
+
     Returns ``"surveyed"``, ``"settled"`` (already surveyed or given up),
-    ``"not_surveying"`` or ``"gave_up"``.
+    ``"not_surveying"``, ``"gave_up"``, ``"refused"`` (permanent failure) or
+    ``"discarded"`` (given up on, e.g. by the stall self-heal, while this
+    run was still working; its result is not recorded).
     """
+    from app.services.pst_explode import PermanentSurveyFailure
+
     job = await db.get(IngestJob, job_id)
     if not job:
         return "not_surveying"
@@ -116,6 +194,10 @@ async def run_survey(db, job_id: str, storage_path: str, work, *,
 
     try:
         survey_json = await asyncio.to_thread(work, storage_path)
+    except PermanentSurveyFailure as e:
+        logger.warning("Container %s refused: %s", storage_path, e.line)
+        await _give_up_survey(db, job_id, storage_path, attempts, e.line, line=e.line)
+        return "refused"
     except Exception as e:
         if attempts < MAX_SURVEY_ATTEMPTS and not give_up_on_failure:
             raise
@@ -128,6 +210,9 @@ async def run_survey(db, job_id: str, storage_path: str, work, *,
     # Sessions use expire_on_commit=False, so without populate_existing the
     # identity map would hand back the stale pre-survey object.
     job = await db.get(IngestJob, job_id, with_for_update=True, populate_existing=True)
+    if storage_path in survey_failed_paths(job):
+        await db.rollback()
+        return "discarded"
     surveys = dict(job.survey or {})
     surveys[storage_path] = survey_json
     job.survey = surveys
@@ -140,7 +225,7 @@ async def run_survey(db, job_id: str, storage_path: str, work, *,
 
 
 async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, error: str,
-                          *, reason: str | None = None) -> None:
+                          *, reason: str | None = None, line: str | None = None) -> None:
     """Record a container that could not be surveyed and let the job go on
     without it.
 
@@ -182,8 +267,8 @@ async def _give_up_survey(db, job_id: str, storage_path: str, attempts: int, err
             job.completed_at = _now_naive()
 
     name = os.path.basename(storage_path)
-    msg = (f"{name}: mailbox could not be read "
-           f"({reason or f'survey failed {attempts} times'}): {error}")
+    msg = line or (f"{name}: mailbox could not be read "
+                   f"({reason or f'survey failed {attempts} times'}): {error}")
     job_failed = job.status == "failed"
     production_id = getattr(job, "production_id", None)
     await append_job_errors(db, job_id, [msg], commit=False)

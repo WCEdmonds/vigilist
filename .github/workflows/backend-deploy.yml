@@ -198,6 +198,10 @@ jobs:
           fi
           # The worker's env (values are never echoed), VIGILIST_DATABASE_URL
           # included, resolved from the service JSON with jq as above.
+          # Secret-ref env vars (valueFrom) are intentionally not copied, as
+          # for the worker: only plain values are carried over.
+          # The file holds the DB URL: remove it however this step exits.
+          trap 'rm -f "$RUNNER_TEMP/explode-env.yaml"' EXIT
           gcloud run services describe $WORKER_NAME --region=$REGION --project=$PROJECT_ID --format=json \
             | jq -r '.spec.template.spec.containers[0].env[]? | select(.value != null) | "\(.name): \(.value | @json)"' \
             > "$RUNNER_TEMP/explode-env.yaml"
@@ -206,8 +210,9 @@ jobs:
             rm -f "$RUNNER_TEMP/explode-env.yaml"
             exit 1
           fi
-          # --max-retries must match pst_explode.EXPLODE_JOB_MAX_RETRIES (the
-          # last run gives the container up). Runs are started per container
+          # --max-retries must match pst_explode.EXPLODE_JOB_MAX_RETRIES (2:
+          # three runs = large_ingest.MAX_SURVEY_ATTEMPTS; the last run gives
+          # the container up). Runs are started per container
           # with arg overrides (pst_explode.trigger_explode_job).
           gcloud run jobs deploy $EXPLODE_JOB_NAME \
             --image "$IMAGE" \
@@ -217,7 +222,7 @@ jobs:
             --cpu 8 \
             --memory 32Gi \
             --task-timeout 4h \
-            --max-retries 1 \
+            --max-retries 2 \
             --tasks 1 \
             --command python \
             --args=-m,app.jobs.explode_pst \

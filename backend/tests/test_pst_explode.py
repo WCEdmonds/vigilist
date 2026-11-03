@@ -207,6 +207,7 @@ def test_unpack_container_downloads_explodes_and_removes_the_copy(monkeypatch, t
         yield tree
 
     store = Store()
+    monkeypatch.setattr(storage, "get_size", lambda p: 11_200_000_000)
     monkeypatch.setattr(storage, "download_sliced", fake_download)
     monkeypatch.setattr(pst_reader, "open_pst", fake_open)
     monkeypatch.setattr(storage, "upload_bytes", lambda data, path, content_type=None: store.put(path, data))
@@ -343,3 +344,51 @@ def test_get_bucket_initializes_firebase_when_no_app_exists(monkeypatch):
     monkeypatch.setattr(fb_storage, "bucket", lambda name: ("bucket", name))
     assert storage.get_bucket()[0] == "bucket"
     assert len(inits) == 1
+
+
+
+# --- Fix round 1 --------------------------------------------------------------
+
+
+def test_unpack_refuses_a_container_over_28_gib_before_downloading(monkeypatch, tmp_path):
+    monkeypatch.setattr(storage, "get_size", lambda p: 30 * 1024 ** 3)
+    monkeypatch.setattr(storage, "download_sliced", lambda *a: pytest.fail("downloaded"))
+    with pytest.raises(pst_explode.PermanentSurveyFailure) as e:
+        pst_explode.unpack_container(1, JOB, PST, tmp_dir=str(tmp_path))
+    assert e.value.line == "acme.pst: too large for in-memory unpack (32.2 GB); contact support"
+    assert pst_explode.MAX_UNPACK_BYTES == 28 * 1024 ** 3
+
+
+def test_unpack_counts_progress(monkeypatch, tmp_path):
+    import contextlib
+
+    @contextlib.contextmanager
+    def fake_open(local, storage_path=""):
+        yield Folder("", subs=[Folder("Inbox", [Item(subject="a"), Item(subject="b")])])
+
+    monkeypatch.setattr(storage, "get_size", lambda p: 10)
+    monkeypatch.setattr(storage, "download_sliced", lambda r, l: open(l, "wb").close())
+    monkeypatch.setattr(pst_reader, "open_pst", fake_open)
+    monkeypatch.setattr(storage, "upload_bytes", lambda *a, **k: None)
+    progress = pst_explode.Progress()
+    pst_explode.unpack_container(1, JOB, PST, tmp_dir=str(tmp_path), progress=progress)
+    assert progress.value == 3  # download + two items
+
+
+def test_storage_client_pool_fits_the_upload_threads(monkeypatch):
+    import types
+
+    import firebase_admin
+    import requests
+    from firebase_admin import storage as fb_storage
+
+    session = requests.Session()
+    bucket = types.SimpleNamespace(client=types.SimpleNamespace(_http=session))
+    monkeypatch.setattr(firebase_admin, "_apps", {"[DEFAULT]": object()})
+    monkeypatch.setattr(fb_storage, "bucket", lambda name: bucket)
+    storage.get_bucket()
+    storage.get_bucket()  # mounted once
+    adapter = session.get_adapter("https://storage.googleapis.com/")
+    assert adapter._pool_maxsize >= 32 and adapter._pool_connections >= 32
+    assert adapter._pool_maxsize >= pst_explode.EXPLODE_UPLOAD_WORKERS
+    assert adapter._pool_maxsize >= storage.SLICED_WORKERS

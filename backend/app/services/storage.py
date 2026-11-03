@@ -76,10 +76,33 @@ def _ensure_app() -> None:
         pass  # initialized concurrently
 
 
+# HTTP connections per Storage client. requests' default pool is 10, which
+# the explode Job's 32 upload threads (and the 16-way sliced download) would
+# overflow: connections get discarded and re-opened.
+STORAGE_POOL_SIZE = 64
+
+
+def _widen_pool(bucket) -> None:
+    """Mount a larger connection pool on the bucket client's session (once)."""
+    try:
+        session = bucket.client._http
+    except Exception:
+        return
+    if getattr(session, "_vigilist_pool", False) or not hasattr(session, "mount"):
+        return
+    from requests.adapters import HTTPAdapter
+
+    adapter = HTTPAdapter(pool_connections=STORAGE_POOL_SIZE, pool_maxsize=STORAGE_POOL_SIZE)
+    session.mount("https://", adapter)
+    session._vigilist_pool = True
+
+
 def get_bucket():
     """Get the Firebase Storage bucket."""
     _ensure_app()
-    return storage.bucket(settings.firebase_storage_bucket)
+    bucket = storage.bucket(settings.firebase_storage_bucket)
+    _widen_pool(bucket)
+    return bucket
 
 
 def download_file(remote_path: str, local_path: str) -> str:

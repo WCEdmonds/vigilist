@@ -226,7 +226,10 @@ def _item_size(item) -> int:
 
 def item_kind(item) -> str:
     """Item type of one pypff item. The survey and every chunk reader use this
-    same helper, so planned positions and read-time filtering agree."""
+    same helper, so planned positions and read-time filtering agree. A bare
+    ``pypff.item`` (not a message) is "other" whatever its class string."""
+    if not is_message(item):
+        return "other"
     return item_type(_prop_str(item, PR_MESSAGE_CLASS) or None)
 
 

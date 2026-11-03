@@ -612,3 +612,13 @@ def test_bucket5_one_bad_recipient_is_recorded_and_the_rest_kept():
     assert p.to == "Carol <carol@acme.test>"
     (err,) = p.read_errors
     assert err.startswith("recipient 1: OSError")
+
+
+def test_item_kind_of_a_bare_item_is_other_whatever_its_class():
+    """Fix round 1: the "bare items are other" ruling holds structurally, so
+    the survey and the chunk filter can never treat one as an email."""
+    from app.services.pst_reader import item_kind
+
+    assert item_kind(PypffItem({0x001A: "IPM.Note"})) == "other"
+    assert item_kind(PypffItem({})) == "other"
+    assert item_kind(Item("IPM.Note")) == "email"

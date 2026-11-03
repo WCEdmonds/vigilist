@@ -50,8 +50,37 @@ EXPLODE_MAX_PENDING_BYTES = 1024 * 1024 * 1024
 EXPLODE_MAX_PENDING_OBJECTS = 4 * EXPLODE_UPLOAD_WORKERS
 UPLOAD_ATTEMPTS = 4
 
-# Must match the Job's --max-retries in backend-deploy.yml.
-EXPLODE_JOB_MAX_RETRIES = 1
+# Must match the Job's --max-retries in backend-deploy.yml. 1 + retries runs =
+# MAX_SURVEY_ATTEMPTS, so the counter and the last run agree.
+EXPLODE_JOB_MAX_RETRIES = 2
+
+# The PST is held in the Job's in-memory /tmp (32 GiB): larger ones are refused
+# up front instead of failing after a long download.
+MAX_UNPACK_BYTES = 28 * 1024 ** 3
+
+
+class PermanentSurveyFailure(Exception):
+    """A container that can never be unpacked (retrying will not help);
+    ``line`` is the job error line."""
+
+    def __init__(self, line: str):
+        super().__init__(line)
+        self.line = line
+
+
+def too_large_line(name: str, size: int) -> str:
+    return f"{name}: too large for in-memory unpack ({size / 1e9:.1f} GB); contact support"
+
+
+class Progress:
+    """Items handled so far (written by the explode thread, read by the
+    Job's heartbeat)."""
+
+    def __init__(self):
+        self.value = 0
+
+    def bump(self, n: int = 1) -> None:
+        self.value += n
 
 
 def container_key(storage_path: str) -> str:
@@ -172,7 +201,7 @@ class _Uploader:
 
 
 def explode(handle, prefix: str, put, *, workers: int = EXPLODE_UPLOAD_WORKERS,
-            retry_sleep: float = 1.0) -> ContainerSurvey:
+            retry_sleep: float = 1.0, progress: Progress | None = None) -> ContainerSurvey:
     """Write every item of the opened PST under ``prefix`` and return its
     survey. ``put(path, data, content_type)`` uploads one object."""
     builder = SurveyBuilder(getattr(handle, "storage_path", ""))
@@ -184,6 +213,8 @@ def explode(handle, prefix: str, put, *, workers: int = EXPLODE_UPLOAD_WORKERS,
             positions: dict[str, dict] = {}
             for pos in range(folder.get_number_of_sub_messages()):
                 items += 1
+                if progress is not None:
+                    progress.bump()
                 try:
                     item = folder.get_sub_message(pos)
                 except Exception as e:
@@ -220,18 +251,25 @@ def explode(handle, prefix: str, put, *, workers: int = EXPLODE_UPLOAD_WORKERS,
 
 
 def unpack_container(production_id: int, job_id: str, storage_path: str,
-                     tmp_dir: str | None = None) -> dict:
+                     tmp_dir: str | None = None, progress: Progress | None = None) -> dict:
     """Download, survey and explode one container (blocking; the Job's work).
-    Returns the survey JSON, exactly as ``run_survey`` records it."""
+    Returns the survey JSON, exactly as ``run_survey`` records it. Raises
+    ``PermanentSurveyFailure`` for a container too large to unpack."""
+    size = storage.get_size(storage_path)
+    if size > MAX_UNPACK_BYTES:
+        raise PermanentSurveyFailure(too_large_line(os.path.basename(storage_path), size))
     local = os.path.join(tmp_dir or tempfile.gettempdir(), f"explode-{container_key(storage_path)}.pst")
     started = time.monotonic()
     try:
         storage.download_sliced(storage_path, local)
+        if progress is not None:
+            progress.bump()
         logger.info("Downloaded %s in %.0f s", storage_path, time.monotonic() - started)
         prefix = explode_prefix(production_id, job_id, storage_path)
         with pst_reader.open_pst(local, storage_path) as handle:
             result = explode(handle, prefix,
-                             lambda path, data, ct: storage.upload_bytes(data, path, content_type=ct))
+                             lambda path, data, ct: storage.upload_bytes(data, path, content_type=ct),
+                             progress=progress)
     finally:
         try:
             os.remove(local)

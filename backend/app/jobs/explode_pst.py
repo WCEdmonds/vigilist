@@ -14,11 +14,35 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import sys
 
 logger = logging.getLogger("app.jobs.explode_pst")
+
+# Progress is written at start and then at most this often while items
+# advance; the status self-heal gives a container up after 4.5 h without it.
+HEARTBEAT_S = 300
+
+
+async def _heartbeat(factory, job_id: str, storage_path: str, progress, stop: asyncio.Event) -> None:
+    from app.services import large_ingest
+
+    last = None
+    while True:
+        if progress.value != last:
+            last = progress.value
+            try:
+                async with factory() as db:
+                    await large_ingest.record_survey_progress(db, job_id, storage_path)
+            except Exception:
+                logger.exception("Could not record unpack progress for %s", storage_path)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=HEARTBEAT_S)
+            return
+        except asyncio.TimeoutError:
+            continue
 
 
 async def _record_final_failure(factory, job_id: str, storage_path: str, error: str) -> None:
@@ -40,6 +64,8 @@ async def run(job_id: str, storage_path: str, *, final_attempt: bool,
     from app.services import large_ingest, pst_explode
     from app.services.pst_reader import short_error
 
+    progress = pst_explode.Progress()
+
     if session_factory is None:
         from app.database import async_session_factory as session_factory
     try:
@@ -51,10 +77,25 @@ async def run(job_id: str, storage_path: str, *, final_attempt: bool,
             production_id = job.production_id
             await db.commit()
             if work is None:
-                def work(path):
-                    return pst_explode.unpack_container(production_id, job_id, path)
-            outcome = await large_ingest.run_survey(
-                db, job_id, storage_path, work, give_up_on_failure=final_attempt)
+                def work(path, progress):
+                    return pst_explode.unpack_container(production_id, job_id, path,
+                                                        progress=progress)
+            if len(inspect.signature(work).parameters) >= 2:
+                run_work = lambda path, _w=work: _w(path, progress)  # noqa: E731
+            else:
+                run_work = work
+            stop = asyncio.Event()
+            beat = asyncio.create_task(_heartbeat(session_factory, job_id, storage_path, progress, stop))
+            try:
+                outcome = await large_ingest.run_survey(
+                    db, job_id, storage_path, run_work, give_up_on_failure=final_attempt)
+            finally:
+                stop.set()
+                await beat
+            if outcome == "discarded":
+                # Given up on while this run worked: drop what it wrote.
+                await asyncio.to_thread(pst_explode.delete_exploded,
+                                        pst_explode.explode_prefix(production_id, job_id, storage_path))
     except Exception as e:
         logger.exception("Unpacking %s for job %s failed", storage_path, job_id)
         if final_attempt:
@@ -63,6 +104,7 @@ async def run(job_id: str, storage_path: str, *, final_attempt: bool,
             await _record_final_failure(session_factory, job_id, storage_path, short_error(e))
         return 1
     logger.info("Unpack of %s for job %s: %s", storage_path, job_id, outcome)
+    # "refused" is permanent (e.g. too large): exit 0 so Cloud Run does not retry.
     return 1 if outcome == "gave_up" else 0
 
 

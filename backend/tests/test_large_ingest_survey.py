@@ -232,6 +232,14 @@ class SurveySession(UuidFakeSession):
             fm["survey_attempts"] = counts
             job.field_mapping = fm
             return FakeResult(scalar=counts[params["path"]])
+        if "survey_progress" in sql:
+            if job.status != "surveying":
+                return FakeResult(rowcount=0)
+            fm = dict(job.field_mapping)
+            fm["survey_progress"] = {**(fm.get("survey_progress") or {}), params["path"]: params["at"]}
+            job.field_mapping = fm
+            self.progress_writes = getattr(self, "progress_writes", 0) + 1
+            return FakeResult(rowcount=1)
         if "errors = errors ||" in sql:
             job.errors = list(job.errors) + json.loads(params["new"])
             return FakeResult(rowcount=1)
@@ -434,12 +442,130 @@ def test_job_main_parses_args_and_the_attempt(monkeypatch):
         return 1
 
     monkeypatch.setattr(explode_pst, "run", fake_run)
-    monkeypatch.setenv("CLOUD_RUN_TASK_ATTEMPT", "1")
+    monkeypatch.setenv("CLOUD_RUN_TASK_ATTEMPT", "2")
     with pytest.raises(SystemExit) as e:
         explode_pst.main(["--job-id", "j9", "--storage-path", "productions/1/raw/a.pst"])
     assert e.value.code == 1
     assert seen == {"job_id": "j9", "storage_path": "productions/1/raw/a.pst", "final": True}
-    monkeypatch.setenv("CLOUD_RUN_TASK_ATTEMPT", "0")
+    monkeypatch.setenv("CLOUD_RUN_TASK_ATTEMPT", "1")
     with pytest.raises(SystemExit):
         explode_pst.main(["--job-id", "j9", "--storage-path", "x"])
     assert seen["final"] is False
+
+
+
+# --- Fix round 1 --------------------------------------------------------------
+
+
+def test_job_retries_line_up_with_the_attempt_cap():
+    assert pst_explode.EXPLODE_JOB_MAX_RETRIES == 2
+    assert pst_explode.EXPLODE_JOB_MAX_RETRIES + 1 == MAX_SURVEY_ATTEMPTS
+
+
+def test_permanent_failure_gives_up_at_once_without_retrying(deleted):
+    job = _survey_job(["a.pst"])
+    job.production_id = 1
+    db = SurveySession(job)
+
+    def too_big(p):
+        raise pst_explode.PermanentSurveyFailure(
+            "a.pst: too large for in-memory unpack (32.2 GB); contact support")
+
+    assert asyncio.run(run_survey(db, "j1", "a.pst", too_big)) == "refused"
+    assert job.errors == ["a.pst: too large for in-memory unpack (32.2 GB); contact support"]
+    assert job.status == "failed" and "a.pst" in job.field_mapping["survey_failed"]
+    assert job.skipped_keys == [large_source_key("a.pst")]
+
+
+def test_job_exits_zero_after_a_permanent_refusal():
+    job = _survey_job(["a.pst"])
+    job.production_id = 1
+
+    def too_big(p):
+        raise pst_explode.PermanentSurveyFailure("a.pst: too large for in-memory unpack (32.2 GB); contact support")
+
+    code, _ = _job_run(job, too_big)
+    assert code == 0 and job.status == "failed"
+
+
+def test_start_refuses_an_oversized_container_without_starting_a_job(monkeypatch):
+    from tests.test_source_designation import UuidFakeSession as Base
+
+    class Session(Base):
+        async def get(self, model, key, **kw):
+            if model.__name__ == "IngestJob":
+                return next(o for o in self.added if type(o).__name__ == "IngestJob")
+            return await super().get(model, key, **kw)
+
+        async def rollback(self):
+            pass
+
+    huge = dict(BIG, size=30 * 1024 ** 3)
+    started = []
+    monkeypatch.setattr(task_service, "is_configured", lambda: True)
+    monkeypatch.setattr(native_mod, "list_native_sources", lambda pid, lp=None: [SMALL, huge])
+    monkeypatch.setattr(task_service, "enqueue_ingest_batch", lambda **kw: None)
+    monkeypatch.setattr(pst_explode, "trigger_explode_job", lambda j, p: started.append(p))
+    db = Session(get_objects={("Production", 1): FakeProduction()})
+    asyncio.run(ri.start_processing(
+        body={"production_id": 1, "source_format": "native"},
+        background_tasks=FakeBackgroundTasks(), db=db, user=FakeUser()))
+    job = db.added[0]
+    assert started == []
+    errors = [m for p in db.executed_params if p and "new" in p for m in json.loads(p["new"])]
+    assert errors == ["big.pst: too large for in-memory unpack (32.2 GB); contact support"]
+    assert job.status == "processing"  # the small file still loads, then finalize
+
+
+def test_job_writes_progress_at_start_and_while_items_advance(monkeypatch):
+    import time as _time
+
+    from app.jobs import explode_pst
+
+    monkeypatch.setattr(explode_pst, "HEARTBEAT_S", 0.01)
+    job = _survey_job(["a.pst"])
+    job.production_id = 1
+    sessions = []
+
+    class Factory(_Factory):
+        def __call__(self):
+            ctx = super().__call__()
+            outer = self
+
+            class Wrap:
+                async def __aenter__(self):
+                    s = await ctx.__aenter__()
+                    sessions.append(s)
+                    return s
+
+                async def __aexit__(self, *a):
+                    return False
+
+            return Wrap()
+
+    def work(p, progress):
+        for _ in range(5):
+            progress.bump()
+            _time.sleep(0.03)
+        return {"storage_path": p, "folders": []}
+
+    code = asyncio.run(explode_pst.run("j1", "a.pst", final_attempt=False,
+                                       session_factory=Factory(job), work=work))
+    assert code == 0 and job.status == "awaiting_selection"
+    writes = sum(getattr(s, "progress_writes", 0) for s in sessions)
+    assert writes >= 2
+    assert "a.pst" in job.field_mapping["survey_progress"]
+
+
+def test_a_run_given_up_on_while_working_does_not_record_its_survey():
+    """The stall self-heal gave the container up while a slow run was still
+    working: its late result is discarded, not recorded."""
+    job = _survey_job(["a.pst", "b.pst"])
+    db = SurveySession(job)
+
+    def slow(p):
+        job.field_mapping = {**job.field_mapping, "survey_failed": {p: "no progress for 4.5 h"}}
+        return {"storage_path": p, "folders": []}
+
+    assert asyncio.run(run_survey(db, "j1", "a.pst", slow)) == "discarded"
+    assert job.survey == {}
