@@ -361,12 +361,13 @@ async def _fail_embed_single(db, c) -> None:
 
 
 async def run_embed_chunk(db, c, attempts: int) -> None:
-    """Embed the chunk's documents one at a time, committing each.
+    """Embed the chunk's documents together (packed Voyage calls, not one per
+    document), storing each document's chunks with its own commit.
 
-    A document that raises fails the request so Cloud Tasks retries; documents
-    already embedded are skipped on the retry. Past ``MAX_CHUNK_ATTEMPTS`` the
-    chunk is halved, and a single document that still fails is recorded and
-    dropped so completion is never blocked.
+    A failure fails the request so Cloud Tasks retries; documents already
+    embedded are skipped on the retry. Past ``MAX_CHUNK_ATTEMPTS`` the chunk is
+    halved, and a single document that still fails is recorded and dropped so
+    completion is never blocked.
     """
     from app.services import embeddings
     from app.services.large_ingest_chunk import _CHUNK_DONE_SQL, MAX_CHUNK_ATTEMPTS
@@ -379,22 +380,20 @@ async def run_embed_chunk(db, c, attempts: int) -> None:
         await maybe_finalize(db, c.job_id)
         return
 
-    failed = 0
+    todo = []
     for doc_id in c.doc_ids:
         doc_uuid = _as_uuid(doc_id)
         has = (await db.execute(text(_HAS_CHUNKS_SQL), {"id": doc_uuid})).first()
-        await db.commit()
-        if has is not None:
-            continue
+        if has is None:
+            todo.append(doc_uuid)
+    await db.commit()
+    if todo:
         try:
-            await embeddings.chunk_and_embed_document(db, doc_uuid)
-            await db.commit()
-        except Exception:
+            await embeddings.embed_documents(db, todo)
+        except Exception as e:
             await db.rollback()
-            logger.exception("Embedding failed for doc %s in chunk %s", doc_id, c.id)
-            failed += 1
-    if failed:
-        raise RuntimeError(f"embedding failed for {failed} of {len(c.doc_ids)} documents")
+            logger.exception("Embedding failed in chunk %s", c.id)
+            raise RuntimeError(f"embedding failed in chunk {c.id} ({len(todo)} documents): {e}") from e
 
     await db.execute(text(_CHUNK_DONE_SQL), {"id": c.id})
     await db.commit()

@@ -96,3 +96,81 @@ def test_chunk_and_embed_keeps_successful_chunks(monkeypatch):
     n = asyncio.run(emb.chunk_and_embed_document(db, "d1"))
     assert n == 2
     assert [c.chunk_index for c in added] == [0, 2]
+
+
+# ── I6: an embed chunk embeds all its documents' text with packed calls ──
+
+
+class _DocsSession:
+    """Serves (id, text) rows for the documents select; records writes."""
+
+    def __init__(self, rows, fail_store=()):
+        self.rows = rows
+        self.fail_store = set(fail_store)
+        self.added = []
+        self.commits = 0
+        self.rollbacks = 0
+        self.deleted_for = []
+        self._pending = []
+
+    async def execute(self, stmt, params=None):
+        from tests.fakes import FakeResult
+
+        sql = str(stmt)
+        if sql.startswith("SELECT"):
+            return FakeResult(rows=self.rows)
+        if sql.startswith("DELETE"):
+            doc_id = stmt.whereclause.right.value
+            if doc_id in self.fail_store:
+                raise RuntimeError("store failed")
+            self.deleted_for.append(doc_id)
+        return FakeResult()
+
+    def add(self, obj):
+        self._pending.append(obj)
+
+    async def commit(self):
+        self.commits += 1
+        self.added.extend(self._pending)
+        self._pending = []
+
+    async def rollback(self):
+        self.rollbacks += 1
+        self._pending = []
+
+
+def test_embed_documents_uses_packed_calls_not_one_per_document(monkeypatch):
+    import asyncio
+    import uuid
+
+    ids = [uuid.uuid4() for _ in range(40)]
+    rows = [(d, f"doc {i}") for i, d in enumerate(ids)]
+    monkeypatch.setattr(emb, "chunk_text", lambda t: [f"{t} a", f"{t} b", f"{t} c"])
+    client = _echo_client()
+    db = _DocsSession(rows)
+    with patch("app.services.embeddings._get_client", return_value=client):
+        n = asyncio.run(emb.embed_documents(db, ids))
+    assert n == 40
+    # 120 chunks -> one call of 120 (BATCH_SIZE 128), not 40 calls.
+    assert client.embed.call_count == len(emb._pack_batches(["x"] * 120)) == 1
+    assert db.deleted_for == ids
+    by_doc = {}
+    for c in db.added:
+        by_doc.setdefault(c.document_id, []).append((c.chunk_index, c.content))
+    assert by_doc[ids[3]] == [(0, "doc 3 a"), (1, "doc 3 b"), (2, "doc 3 c")]
+    assert db.commits >= 40  # each document's chunks commit on their own
+
+
+def test_embed_documents_keeps_other_documents_when_one_store_fails(monkeypatch):
+    import asyncio
+    import uuid
+
+    import pytest
+
+    a, b = uuid.uuid4(), uuid.uuid4()
+    monkeypatch.setattr(emb, "chunk_text", lambda t: [t])
+    db = _DocsSession([(a, "alpha"), (b, "beta")], fail_store={a})
+    with patch("app.services.embeddings._get_client", return_value=_echo_client()):
+        with pytest.raises(RuntimeError):
+            asyncio.run(emb.embed_documents(db, [a, b]))
+    assert [c.document_id for c in db.added] == [b]

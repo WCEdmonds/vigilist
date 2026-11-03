@@ -198,11 +198,14 @@ def env(monkeypatch):
         monkeypatch.setattr(task_service, "is_configured", lambda: True)
         monkeypatch.setattr(settings, "voyage_api_key", "test-key")
 
-        async def fake_embed(db, doc_id):
-            s.embedded.add(str(doc_id))
-            return 1
+        s.embed_calls = []
 
-        monkeypatch.setattr(embeddings, "chunk_and_embed_document", fake_embed)
+        async def fake_embed(db, doc_ids):
+            s.embed_calls.append([str(d) for d in doc_ids])
+            s.embedded.update(str(d) for d in doc_ids)
+            return len(doc_ids)
+
+        monkeypatch.setattr(embeddings, "embed_documents", fake_embed)
         s.threads = []
         s.titled = []
 
@@ -405,16 +408,9 @@ def test_embed_chunk_embeds_and_skips_already_embedded(env, monkeypatch):
     s = env(status="finalizing")
     s.embedded.add(a)
     cid = s.add_chunk("embed", "pending", doc_ids=[a, b], item_count=2)
-    calls = []
-
-    async def fake_embed(db, doc_id):
-        calls.append(str(doc_id))
-        s.embedded.add(str(doc_id))
-        return 1
-
-    monkeypatch.setattr(embeddings, "chunk_and_embed_document", fake_embed)
     _run(s, cid)
-    assert calls == [b]
+    # One batched call for the documents still missing chunks.
+    assert s.embed_calls == [[b]]
     assert s.chunks[cid].status == "done"
     assert len(s.of_kind("post")) == 1  # finalize ran after the embed chunk
 
@@ -425,13 +421,14 @@ def test_embed_failure_raises_for_retry_then_resumes(env, monkeypatch):
     cid = s.add_chunk("embed", "pending", doc_ids=[a, b], item_count=2)
     fail = {b}
 
-    async def flaky(db, doc_id):
-        if str(doc_id) in fail:
-            raise RuntimeError("voyage down")
-        s.embedded.add(str(doc_id))
-        return 1
+    async def flaky(db, doc_ids):
+        # Documents store one by one; one failing store fails the call.
+        s.embedded.update(str(d) for d in doc_ids if str(d) not in fail)
+        if any(str(d) in fail for d in doc_ids):
+            raise RuntimeError("store failed")
+        return len(doc_ids)
 
-    monkeypatch.setattr(embeddings, "chunk_and_embed_document", flaky)
+    monkeypatch.setattr(embeddings, "embed_documents", flaky)
     with pytest.raises(RuntimeError):
         _run(s, cid)
     # The claim is released so Cloud Tasks' retry can claim it at once.
@@ -604,11 +601,11 @@ def test_fresh_running_chunk_is_not_claimed_and_reports_busy(env, monkeypatch):
     cid = s.add_chunk("embed", "running", doc_ids=[str(uuid.uuid4())], attempts=1)
     calls = []
 
-    async def fake_embed(db, doc_id):
-        calls.append(doc_id)
+    async def fake_embed(db, doc_ids):
+        calls.append(doc_ids)
         return 1
 
-    monkeypatch.setattr(embeddings, "chunk_and_embed_document", fake_embed)
+    monkeypatch.setattr(embeddings, "embed_documents", fake_embed)
     with pytest.raises(ChunkBusy):
         _run(s, cid)
     assert calls == [] and s.chunks[cid].attempts == 1 and s.chunks[cid].status == "running"
@@ -727,3 +724,13 @@ def test_finalize_reports_a_container_whose_survey_failed(env):
     assert ("bad.pst: not loaded; the mailbox could not be read (survey failed: OSError: bad block)"
             in s.job.errors)
     assert any(e.startswith("big.pst: 10 of 10 loaded") for e in s.job.errors)
+
+
+def test_embed_chunk_makes_one_batched_call_for_all_its_documents(env):
+    """I6: N documents -> one embed_documents call (O(Voyage batches)), not N."""
+    s = env(status="finalizing")
+    ids = [str(uuid.uuid4()) for _ in range(fin.EMBED_BATCH_DOCS)]
+    cid = s.add_chunk("embed", "pending", doc_ids=ids, item_count=len(ids))
+    _run(s, cid)
+    assert s.embed_calls == [ids]
+    assert s.chunks[cid].status == "done"
