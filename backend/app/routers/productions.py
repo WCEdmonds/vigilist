@@ -156,17 +156,35 @@ async def delete_production(
     return {"ok": True}
 
 
+async def _heal_batch_applies(production_id: int) -> None:
+    from app.services.pipeline import heal_stalled_batch_applies
+    try:
+        await heal_stalled_batch_applies(production_id)
+    except Exception:
+        logger.exception("Batch apply self-heal failed for production %s", production_id)
+
+
 @router.get("/{production_id}/pipeline", response_model=PipelineStatusOut)
 async def get_pipeline(
     production_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
-    """Ambient AI pipeline status, brief, and case context. Any accessible role."""
+    """Ambient AI pipeline status, brief, and case context. Any accessible role.
+
+    Self-heal: a legacy batch apply whose request died (claim stale) gets its
+    poll re-enqueued in the background, so a deploy that killed the apply
+    cannot strand the stage while anyone is watching it."""
     prod = await db.get(Production, production_id)
     if prod is None:
         raise HTTPException(status_code=404, detail="Production not found")
     await get_user_role_for_production(db, user, production_id)
+    from app.services import pipeline as pipeline_service
+    from app.services import tasks as task_service
+    if (background_tasks is not None and task_service.is_configured()
+            and pipeline_service.needs_batch_heal(prod.ai_pipeline_status)):
+        background_tasks.add_task(_heal_batch_applies, production_id)
     counts = (
         await db.execute(
             select(

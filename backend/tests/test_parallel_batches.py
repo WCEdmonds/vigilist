@@ -535,6 +535,124 @@ def test_legacy_applying_claim_still_respected(env):
     assert _entry(world, "summaries") == entry
 
 
+def test_legacy_fresh_applying_claim_rearms_a_poll_for_when_it_goes_stale(env):
+    """A deploy kills the request applying a legacy batch; Cloud Tasks
+    retries it seconds later while the claim is still fresh. The retry must
+    not steal the claim, and must not end the chain either: it re-arms a
+    poll for when the claim goes stale."""
+    entry = _legacy("msgbatch_old", True, status="applying", applying_at=_now(minutes=-5))
+    world, api, polls, pipelines, _ = env(n_docs=3, status={"entities": entry})
+    api.finish("msgbatch_old")
+    asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert _entry(world, "entities") == entry  # not stolen
+    assert all(d.entities_extracted_at is None for d in world.docs.values())
+    assert pipelines == []
+    assert len(polls) == 1 and polls[0][:2] == (1, "entities")
+    remaining = pipeline.BATCH_APPLY_STALE_MINUTES * 60 - 5 * 60
+    assert remaining <= polls[0][2] <= remaining + 2 * pipeline.BATCH_POLL_SLACK_S
+
+
+def test_stale_legacy_entities_apply_is_reclaimed_skips_applied_and_hands_over(env, monkeypatch):
+    """Production shape at deploy time: entities mid-apply in the legacy
+    single-batch shape (``more``), the applying request killed. Once the
+    claim is stale the next poll re-claims it, applies only the documents
+    not yet applied, and the continuation submits the rest in the parallel
+    shape."""
+    world, api, polls, pipelines, _ = env(n_docs=1_600, status={})
+    docs_sorted = sorted(world.docs.values(), key=lambda d: d.bates_begin)
+    in_batch = docs_sorted[:1000]
+    for d in in_batch[:400]:  # applied before the kill
+        d.entities_extracted_at = datetime(2026, 11, 3)
+    world.prod.ai_pipeline_status = {
+        "clustering": "done", "summaries": "done",
+        "entities": _legacy("msgbatch_old", True, status="applying",
+                            applying_at=_now(minutes=-(pipeline.BATCH_APPLY_STALE_MINUTES + 1)),
+                            submitted_at=_now(hours=-2)),
+    }
+    ok = '{"entities": [], "events": [], "relationships": []}'
+    api.finish("msgbatch_old", results={f"{d.id}_0": ok for d in in_batch})
+    persisted = []
+
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
+        persisted.append(document_id)
+        return {}
+
+    import app.services.entity_extraction as ee
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+
+    asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert sorted(persisted) == sorted(d.id for d in in_batch[400:])  # applied ones skipped
+    assert all(d.entities_extracted_at for d in in_batch)
+    assert world.prod.ai_pipeline_status["entities"] == "pending"
+    assert pipelines == [1]
+
+    asyncio.run(pipeline.run_ambient_pipeline(1, resume=True))
+    e_entry = _entry(world, "entities")
+    assert "batch_id" not in e_entry and e_entry["status"] == "waiting"
+    sent = {cid.rpartition("_")[0] for b in e_entry["batches"] for cid, _ in api.submitted[b["id"]]}
+    assert sent == {str(d.id) for d in docs_sorted[1000:]}  # nothing re-sent
+    assert (1, "entities", pipeline.BATCH_POLL_SECONDS) in polls
+
+
+def _status_with(entry, stage="entities"):
+    return {"clustering": "done", "summaries": "done", stage: entry}
+
+
+def test_status_self_heal_enqueues_one_poll_for_a_stale_legacy_apply(env):
+    stale = _legacy("msgbatch_old", True, status="applying",
+                    applying_at=_now(minutes=-(pipeline.BATCH_APPLY_STALE_MINUTES + 5)))
+    world, api, polls, _, _ = env(n_docs=3, status=_status_with(stale))
+    assert pipeline.needs_batch_heal(world.prod.ai_pipeline_status) is True
+    assert asyncio.run(pipeline.heal_stalled_batch_applies(1)) == ["entities"]
+    assert polls == [(1, "entities", 0)]
+    # Rate limited: the next status read within the window enqueues nothing.
+    assert pipeline.needs_batch_heal(world.prod.ai_pipeline_status) is False
+    assert asyncio.run(pipeline.heal_stalled_batch_applies(1)) == []
+    assert polls == [(1, "entities", 0)]
+
+
+def test_status_self_heal_leaves_fresh_and_parallel_entries_alone(env):
+    fresh = _legacy("msgbatch_old", True, status="applying", applying_at=_now(minutes=-5))
+    world, api, polls, _, _ = env(n_docs=3, status=_status_with(fresh))
+    assert pipeline.needs_batch_heal(world.prod.ai_pipeline_status) is False
+    assert asyncio.run(pipeline.heal_stalled_batch_applies(1)) == []
+    world.prod.ai_pipeline_status = _status_with(
+        {"status": "applying", "batches": [], "submitted_at": _now()})
+    assert pipeline.needs_batch_heal(world.prod.ai_pipeline_status) is False
+    assert asyncio.run(pipeline.heal_stalled_batch_applies(1)) == []
+    assert polls == []
+
+
+def _pipeline_status_via_endpoint(monkeypatch, status, configured=True):
+    from fastapi import BackgroundTasks
+    import app.routers.productions as pr
+    import app.services.tasks as tasks
+    from app.models import Production
+    from tests.fakes import FakeResult, FakeSession, FakeUser
+
+    async def role(db, user, pid):
+        return "reviewer"
+    monkeypatch.setattr(pr, "get_user_role_for_production", role)
+    monkeypatch.setattr(tasks, "is_configured", lambda: configured)
+    prod = Production(id=1, name="ACME", owner_id="o", ai_pipeline_status=status, brief=None,
+                      case_context=None)
+    db = FakeSession(get_objects={("Production", 1): prod},
+                     responders=[("count", FakeResult(rows=[(3, 0)]))])
+    bg = BackgroundTasks()
+    asyncio.run(pr.get_pipeline(1, db, FakeUser(), bg))
+    return bg
+
+
+def test_status_endpoint_schedules_self_heal_only_for_a_stalled_legacy_apply(monkeypatch):
+    stale = _legacy("msgbatch_old", True, status="applying",
+                    applying_at=_now(minutes=-(pipeline.BATCH_APPLY_STALE_MINUTES + 5)))
+    bg = _pipeline_status_via_endpoint(monkeypatch, _status_with(stale))
+    assert len(bg.tasks) == 1
+    fresh = _legacy("msgbatch_old", True, status="applying", applying_at=_now(minutes=-5))
+    assert _pipeline_status_via_endpoint(monkeypatch, _status_with(fresh)).tasks == []
+    assert _pipeline_status_via_endpoint(monkeypatch, _status_with(stale), configured=False).tasks == []
+
+
 # --- 3. no AI hold while a requested analysis is running ------------------------------
 
 def test_analysis_in_progress_detection():

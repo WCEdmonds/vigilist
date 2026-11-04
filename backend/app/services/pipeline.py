@@ -892,7 +892,19 @@ async def poll_batch_stage(production_id: int, stage: str) -> None:
                     production_id, stage)
         return
     state = entry.get("status")
-    if not (state == WAITING or (state == APPLYING and _is_stale_apply(entry))):
+    if state == APPLYING and not _is_stale_apply(entry):
+        # Another request holds the apply claim. If that request was killed
+        # (a deploy), this is Cloud Tasks retrying it seconds later: ending
+        # here would end the legacy chain for good, since nothing else polls
+        # a legacy entry. Re-arm a poll for when the claim goes stale; a
+        # live applier finishes first and that poll then finds nothing to do.
+        age = _age(entry.get("applying_at")) or timedelta(0)
+        delay = max(0, int((timedelta(minutes=BATCH_APPLY_STALE_MINUTES) - age).total_seconds()))
+        logger.info("Batch poll for production %s %s: apply claimed %s ago; re-polling in %ds",
+                    production_id, stage, age, delay + BATCH_POLL_SLACK_S)
+        task_service.enqueue_batch_poll(production_id, stage, delay + BATCH_POLL_SLACK_S)
+        return
+    if state != WAITING and state != APPLYING:
         logger.info("Batch poll for production %s %s: stage is %s, nothing to do",
                     production_id, stage, state)
         return
@@ -940,6 +952,52 @@ async def poll_batch_stage(production_id: int, stage: str) -> None:
             async with async_session() as db:
                 await _log_summary_batch_completed(db, production_id, usable)
     await _continue_pipeline(production_id)
+
+
+# The status endpoint's self-heal re-enqueues a stalled legacy apply's poll
+# at most this often.
+BATCH_HEAL_INTERVAL_S = BATCH_POLL_SECONDS
+
+
+def _stalled_legacy_apply(entry) -> bool:
+    """A legacy single-batch entry whose applying request died (claim past
+    BATCH_APPLY_STALE_MINUTES) and has not been re-polled recently."""
+    if not (isinstance(entry, dict) and not _is_parallel(entry) and entry.get("batch_id")
+            and entry.get("status") == APPLYING and _is_stale_apply(entry)):
+        return False
+    healed = _age(entry.get("heal_poll_at"))
+    return healed is None or healed >= timedelta(seconds=BATCH_HEAL_INTERVAL_S)
+
+
+def needs_batch_heal(status: dict | None) -> bool:
+    """Cheap check for the status endpoint: is any batched stage a stalled
+    legacy apply that heal_stalled_batch_applies would re-poll?"""
+    return any(_stalled_legacy_apply((status or {}).get(s)) for s in BATCHED_STAGES)
+
+
+async def heal_stalled_batch_applies(production_id: int) -> list[str]:
+    """Re-enqueue the poll of every stalled legacy apply (status endpoint
+    self-heal). Normally a killed apply is picked up by the Cloud Tasks retry
+    (which re-arms a poll, see poll_batch_stage); this covers a chain that
+    lost every task anyway. The parallel shape needs none: its poll chain
+    re-polls an applying batch every BATCH_POLL_SECONDS until it is stale.
+
+    Marked with ``heal_poll_at`` (compare-and-set) so concurrent status
+    reads enqueue one poll per BATCH_HEAL_INTERVAL_S. The poll itself then
+    re-claims the stale apply by compare-and-set as usual."""
+    healed = []
+    for stage in BATCHED_STAGES:
+        entry = await _read_stage(production_id, stage)
+        if not _stalled_legacy_apply(entry):
+            continue
+        marked = {**entry, "heal_poll_at": _now_iso()}
+        if not await _cas_stage(production_id, stage, entry, marked):
+            continue
+        logger.warning("Production %s %s: legacy batch %s apply stalled since %s; re-enqueuing its poll",
+                       production_id, stage, entry.get("batch_id"), entry.get("applying_at"))
+        task_service.enqueue_batch_poll(production_id, stage, 0)
+        healed.append(stage)
+    return healed
 
 
 async def _poll_parallel(production_id: int, stage: str, entry: dict) -> None:
