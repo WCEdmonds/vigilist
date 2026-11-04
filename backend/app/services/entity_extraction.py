@@ -589,10 +589,13 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
                                date_precision=precision, document_id=document_id,
                                significance=_clamp_int(ev.get("significance"), 1, 5, 3),
                                date_source_text=(date_source or None) if event_date is not None else None)
-        event.participants = [
-            EventParticipant(entity_id=name_to_entity[p.lower()].id)
-            for p in dict.fromkeys(ev["participants"]) if p.lower() in name_to_entity
-        ]
+        # De-duplicate by RESOLVED entity, not by name: two different strings
+        # (case variants, or an alias / email / near-miss that attached to the
+        # same entity) would otherwise insert the same (event, entity) pair
+        # twice and fail the whole document on uq_event_entity, every time.
+        participant_ids = dict.fromkeys(
+            name_to_entity[p.lower()].id for p in ev["participants"] if p.lower() in name_to_entity)
+        event.participants = [EventParticipant(entity_id=eid) for eid in participant_ids]
         db.add(event)
         stats["events"] += 1
 

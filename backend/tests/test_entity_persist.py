@@ -151,3 +151,49 @@ def test_header_candidates_from_email_metadata():
     names = {c["name"] for c in cands}
     assert "Jorge Rivera" in names and "ana" in names  # bare address falls back to local-part
     assert all(c["type"] == "person" for c in cands)
+
+
+# --- uq_event_entity: participants de-duplicated by RESOLVED entity ---------------
+
+def _unique_participants(event):
+    """What uq_event_entity enforces at commit."""
+    ids = [p.entity_id for p in event.participants]
+    assert len(ids) == len(set(ids)), f"duplicate (event, entity) pair: {ids}"
+    return ids
+
+
+def test_participant_case_variants_of_one_entity_persist_once():
+    db = _session_with_existing([])
+    parsed = _parsed(
+        entities=[{"name": "Acme Corp", "type": "org", "surface_forms": ["Acme Corp"],
+                   "role": None, "emails": []},
+                  {"name": "Jorge Rivera", "type": "person", "surface_forms": ["Jorge Rivera"],
+                   "role": None, "emails": []}],
+        events=[{"description": "Merger call", "type": "communication", "date": "2019-03",
+                 "participants": ["Acme Corp", "Jorge Rivera", "ACME CORP", "acme corp"]}],
+    )
+    asyncio.run(persist_extraction(db, 1, DOC_ID, TEXT, parsed))
+    event = [o for o in db.added if isinstance(o, OntologyEvent)][0]
+    ents = {e.canonical_name: e.id for e in db.added if isinstance(e, Entity)}
+    assert _unique_participants(event) == [ents["Acme Corp"], ents["Jorge Rivera"]]  # first-seen order
+
+
+def test_participant_names_attaching_to_one_entity_persist_once():
+    existing = Entity(id=uuid.uuid4(), production_id=1, entity_type="person",
+                      canonical_name="Jorge Rivera", aliases=["J. Rivera"],
+                      attributes={"emails": ["jrivera@acme.example"]}, mention_count=1)
+    db = _session_with_existing([existing])
+    parsed = _parsed(
+        entities=[{"name": "Jorge Rivera", "type": "person", "surface_forms": ["Jorge Rivera"],
+                   "role": None, "emails": []},
+                  {"name": "J. Rivera", "type": "person", "surface_forms": ["J. Rivera"],
+                   "role": None, "emails": []},
+                  {"name": "jrivera", "type": "person", "surface_forms": ["jrivera"],
+                   "role": None, "emails": ["jrivera@acme.example"]}],
+        events=[{"description": "Signing", "type": "meeting", "date": "2019-04-02",
+                 "participants": ["J. Rivera", "Nobody Known", "Jorge Rivera", "jrivera"]}],
+    )
+    asyncio.run(persist_extraction(db, 1, DOC_ID, TEXT, parsed))
+    assert not [o for o in db.added if isinstance(o, Entity)]  # all three attached
+    event = [o for o in db.added if isinstance(o, OntologyEvent)][0]
+    assert _unique_participants(event) == [existing.id]

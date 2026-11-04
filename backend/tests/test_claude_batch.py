@@ -199,6 +199,8 @@ class World:
         self.prod = SimpleNamespace(id=1, ai_pipeline_status=status, ai_hold=False)
         self.docs = {d.id: d for d in docs}
         self.commits = 0
+        self.executes = []  # SQL of every execute()
+        self.gets = []  # document keys fetched with get()
 
     def session(self):
         world = self
@@ -210,7 +212,25 @@ class World:
             async def get(self, model, key, **kw):
                 if model.__name__ == "Production":
                     return world.prod if key == world.prod.id else None
+                world.gets.append(uuid.UUID(str(key)))
                 return world.docs.get(uuid.UUID(str(key)))
+
+            async def execute(self, stmt, params=None):
+                # Only the apply's pending-id query reaches here: ids of this
+                # production's documents, among one array bind, that the
+                # stage still has to process.
+                sql = str(stmt)
+                world.executes.append(sql)
+                attr = "summary" if "summary IS NULL" in sql else "entities_extracted_at"
+                assert f"{attr} IS NULL" in sql and "ANY" in sql, sql
+                arrays = [v for v in stmt.compile().params.values() if isinstance(v, list)]
+                assert len(arrays) == 1, "ids must be one array bind"
+                wanted = set(arrays[0])
+                rows = [d.id for d in world.docs.values()
+                        if d.id in wanted and d.production_id == world.prod.id
+                        and getattr(d, attr) is None]
+                return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows),
+                                       all=lambda: [(r,) for r in rows])
 
             async def commit(self):
                 world.commits += 1
@@ -584,9 +604,8 @@ def test_multi_slice_doc_with_a_failed_slice_is_not_applied(monkeypatch):
         f"{partial.id}_0": ent("ACME Corp"), f"{partial.id}_1": None,
         f"{complete.id}_1": ent("Widget LLC"), f"{complete.id}_0": ent("ACME Corp"),
     }
-    usable, unprocessed, finished = asyncio.run(
-        pipeline._apply_entity_results(1, results, deadline=float("inf")))
-    assert (usable, unprocessed, finished) == (1, 1, True)
+    out = asyncio.run(pipeline._apply_entity_results(1, results, deadline=float("inf")))
+    assert (out.usable, out.unprocessed, out.finished) == (1, 1, True)
     assert persisted == [(complete.id, ["ACME Corp", "Widget LLC"])]
     assert complete.entities_extracted_at is not None
     assert partial.entities_extracted_at is None
@@ -617,3 +636,154 @@ def test_entity_apply_shares_one_index_and_drops_it_after_a_failed_document(monk
     assert len(seen) == 4 and all(isinstance(i, EntityIndex) for i in seen)
     assert seen[0] is seen[1]
     assert seen[2] is not seen[1] and seen[2] is seen[3]
+
+
+# --- apply walks only still-pending documents; no zero-progress spin -----------------
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+EMPTY_EXTRACTION = '{"entities": [], "events": [], "relationships": []}'
+
+
+def test_entity_apply_queries_pending_once_and_touches_only_pending_docs(monkeypatch):
+    docs = [FakeDoc(i) for i in range(50)]
+    done_at = datetime.now(timezone.utc)
+    pending = {docs[7].id, docs[23].id, docs[41].id}
+    for d in docs:
+        if d.id not in pending:
+            d.entities_extracted_at = done_at
+    world = World(docs)
+    _install(monkeypatch, world)
+    persisted = []
+
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
+        persisted.append(document_id)
+        return {}
+
+    import app.services.entity_extraction as ee
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+    results = {f"{d.id}_0": EMPTY_EXTRACTION for d in docs}
+    out = asyncio.run(pipeline._apply_entity_results(1, results, deadline=float("inf")))
+    assert out.finished and out.usable == 50
+    assert len(world.executes) == 1  # one pending-id query for the whole batch
+    assert set(world.gets) == pending and len(world.gets) == 3
+    assert set(persisted) == pending
+    assert all(d.entities_extracted_at is not None for d in docs)
+
+
+def test_summary_apply_queries_pending_once_and_touches_only_pending_docs(monkeypatch):
+    docs = [FakeDoc(i) for i in range(250)]
+    pending = {docs[3].id, docs[150].id}
+    for d in docs:
+        if d.id not in pending:
+            d.summary = "already"
+    docs[9].summary = ""  # an earlier refusal: not pending either
+    world = World(docs)
+    _install(monkeypatch, world)
+    results = {str(d.id): "New summary" for d in docs}
+    out = asyncio.run(pipeline._apply_summary_results(1, results, deadline=float("inf")))
+    assert out.finished and out.usable == 250
+    assert len(world.executes) == 1
+    assert set(world.gets) == pending and len(world.gets) == 2
+    assert docs[3].summary == docs[150].summary == "New summary"
+    assert docs[0].summary == "already" and docs[9].summary == ""
+
+
+def test_entity_apply_with_failing_docs_finishes_after_applying_the_rest(monkeypatch):
+    docs = [FakeDoc(i) for i in range(6)]
+    world = World(docs, status=_waiting("entities"))
+    _, pipelines = _install(monkeypatch, world)
+    bad = {docs[1].id, docs[4].id}
+
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
+        if document_id in bad:
+            raise RuntimeError("duplicate key value violates unique constraint")
+        return {}
+
+    import app.services.entity_extraction as ee
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+    results = {f"{d.id}_0": EMPTY_EXTRACTION for d in docs}
+    out = asyncio.run(pipeline._apply_entity_results(1, results, deadline=float("inf")))
+    assert out.finished is True and out.applied == 4
+    assert out.last_error and "unique constraint" in out.last_error
+    assert [d.entities_extracted_at is None for d in docs] == [False, True, False, False, True, False]
+
+    # Through the poll: the stage moves on; the failed docs wait for a later run.
+    for d in docs:
+        d.entities_extracted_at = None
+    monkeypatch.setattr(claude_batch, "fetch_if_done", AsyncMock(return_value=results))
+    asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert world.prod.ai_pipeline_status["entities"] == "done"
+    assert pipelines == [1]
+    assert [d.entities_extracted_at is None for d in docs] == [False, True, False, False, True, False]
+
+
+def _always_failing_entities(monkeypatch, clock):
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
+        clock["t"] += 1000  # each failing document burns the budget
+        raise RuntimeError("boom")
+
+    import app.services.entity_extraction as ee
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: clock["t"])
+
+
+def test_zero_progress_legacy_pass_repolls_after_the_normal_delay(monkeypatch, caplog):
+    docs = [FakeDoc(i) for i in range(3)]
+    world = World(docs, status=_waiting("entities"))
+    polls, pipelines = _install(monkeypatch, world)
+    clock = {"t": 0.0}
+    _always_failing_entities(monkeypatch, clock)
+    monkeypatch.setattr(pipeline, "BATCH_APPLY_BUDGET_S", 1500)
+    monkeypatch.setattr(claude_batch, "fetch_if_done",
+                        AsyncMock(return_value={f"{d.id}_0": EMPTY_EXTRACTION for d in docs}))
+    with caplog.at_level("WARNING"):
+        asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert polls == [(1, "entities", pipeline.BATCH_POLL_SECONDS)]  # not 0 s
+    assert world.prod.ai_pipeline_status["entities"]["status"] == "waiting"  # claim released
+    assert pipelines == []
+    msg = " ".join(r.getMessage() for r in caplog.records if r.levelname == "WARNING")
+    assert "no progress" in msg and "3 pending" in msg and "boom" in msg
+
+
+def test_zero_progress_parallel_pass_repolls_after_the_normal_delay(monkeypatch, caplog):
+    docs = [FakeDoc(i) for i in range(3)]
+    entry = {"status": "waiting", "cursor": None, "exhausted": True, "submitted_at": _now_iso(),
+             "batches": [{"id": "b1", "state": "processing", "submitted_at": _now_iso(),
+                          "doc_count": 3}]}
+    world = World(docs, status={"clustering": "done", "entities": entry})
+    polls, pipelines = _install(monkeypatch, world)
+    clock = {"t": 0.0}
+    _always_failing_entities(monkeypatch, clock)
+    monkeypatch.setattr(claude_batch, "fetch_if_done",
+                        AsyncMock(return_value={f"{d.id}_0": EMPTY_EXTRACTION for d in docs}))
+    with caplog.at_level("WARNING"):
+        asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert polls == [(1, "entities", pipeline.BATCH_POLL_SECONDS)]
+    assert world.prod.ai_pipeline_status["entities"]["batches"][0]["state"] == "processing"
+    assert pipelines == []
+    msg = " ".join(r.getMessage() for r in caplog.records if r.levelname == "WARNING")
+    assert "no progress" in msg and "3 pending" in msg
+
+
+def test_progressing_but_unfinished_pass_still_repolls_immediately(monkeypatch):
+    docs = [FakeDoc(i) for i in range(3)]
+    world = World(docs, status=_waiting("entities"))
+    polls, _ = _install(monkeypatch, world)
+    clock = {"t": 0.0}
+
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
+        clock["t"] += 1000  # applies one document, then the budget is gone
+        return {}
+
+    import app.services.entity_extraction as ee
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(pipeline, "BATCH_APPLY_BUDGET_S", 500)
+    monkeypatch.setattr(claude_batch, "fetch_if_done",
+                        AsyncMock(return_value={f"{d.id}_0": EMPTY_EXTRACTION for d in docs}))
+    asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert polls == [(1, "entities", 0)]
+    assert sum(d.entities_extracted_at is not None for d in docs) == 1

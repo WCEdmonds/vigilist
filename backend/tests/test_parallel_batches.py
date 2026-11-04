@@ -315,7 +315,7 @@ def test_stale_batch_claim_is_taken_over(env):
     assert _entry(world, "summaries") == "done"
 
 
-def test_out_of_budget_releases_the_batch_and_repolls_now(env, monkeypatch):
+def test_out_of_budget_releases_the_batch_and_repolls_later_without_progress(env, monkeypatch):
     world, api, polls, _, _ = env(n_docs=600)
     asyncio.run(pipeline._maybe_submit_batch(1, "summaries"))
     polls.clear()
@@ -325,7 +325,8 @@ def test_out_of_budget_releases_the_batch_and_repolls_now(env, monkeypatch):
     asyncio.run(pipeline.poll_batch_stage(1, "summaries"))
     batch = _entry(world, "summaries")["batches"][0]
     assert batch["state"] == "processing" and "applying_at" not in batch
-    assert polls == [(1, "summaries", 0)]
+    # Nothing applied in the pass: re-poll after the normal delay, not at once.
+    assert polls == [(1, "summaries", pipeline.BATCH_POLL_SECONDS)]
 
 
 def test_parallel_entry_is_a_live_wait():

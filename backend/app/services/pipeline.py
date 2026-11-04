@@ -15,6 +15,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import String, func, literal, select, text, tuple_
 
@@ -26,6 +27,7 @@ from app.services.ai import generate_summaries_batch, is_refusal, mark_ai_refuse
 from app.services.audit import log_action, resolve_audit_actor
 from app.services.brief import generate_brief
 from app.services.clustering import cluster_production
+from app.services.sql_arrays import ids_match
 
 logger = logging.getLogger(__name__)
 
@@ -769,30 +771,69 @@ def _as_uuid(value: str):
         return None
 
 
+class ApplyOutcome(NamedTuple):
+    """One apply pass over a batch's results.
+
+    ``usable``/``unprocessed`` count the batch's documents (with every request
+    succeeded or refused / with a failed one). ``finished`` is False only when
+    the pass ran out of time. ``pending`` is how many usable documents were
+    still unapplied when the pass started, ``applied`` how many it applied,
+    ``last_error`` the last per-document failure (if any)."""
+    usable: int
+    unprocessed: int
+    finished: bool
+    applied: int = 0
+    pending: int = 0
+    last_error: str | None = None
+
+
+async def _pending_doc_ids(production_id: int, stage: str, doc_ids) -> list[str]:
+    """The batch's documents (ids as submitted) this stage still has to
+    apply, in sorted order: ONE query with the ids as a single array bind,
+    instead of loading every document of the batch to find it already done.
+    A refused summary is stored as "" (not NULL), so it is not pending."""
+    keys = [k for k in (_as_uuid(d) for d in doc_ids) if k is not None]
+    if not keys:
+        return []
+    col = Document.summary if stage == "summaries" else Document.entities_extracted_at
+    async with async_session() as db:
+        rows = (await db.execute(
+            select(Document.id).where(Document.production_id == production_id,
+                                      ids_match(Document.id, keys),
+                                      col.is_(None))
+        )).scalars().all()
+    return sorted(str(r) for r in rows)
+
+
 async def _apply_summary_results(production_id: int, results: dict,
-                                 deadline: float) -> tuple[int, int, bool]:
-    """Apply summary results. Returns (usable, unprocessed, finished)."""
+                                 deadline: float) -> ApplyOutcome:
+    """Apply summary results to the documents still without a summary."""
     ids = sorted(cid for cid, text in results.items() if text or is_refusal(text))
     unprocessed = len(results) - len(ids)
-    for start in range(0, len(ids), BATCH_APPLY_GROUP):
+    todo = await _pending_doc_ids(production_id, "summaries", ids)
+    applied = 0
+    for start in range(0, len(todo), BATCH_APPLY_GROUP):
         if time.monotonic() > deadline:
-            return len(ids), unprocessed, False
+            return ApplyOutcome(len(ids), unprocessed, False, applied, len(todo))
+        written = 0
         async with async_session() as db:
-            for cid in ids[start:start + BATCH_APPLY_GROUP]:
-                key = _as_uuid(cid)
-                doc = await db.get(Document, key) if key else None
-                # Skip documents summarized since (or by an earlier pass).
+            for cid in todo[start:start + BATCH_APPLY_GROUP]:
+                doc = await db.get(Document, _as_uuid(cid))
+                # Skip documents summarized since the pending query.
                 if doc is None or doc.production_id != production_id or doc.summary is not None:
                     continue
-                _apply_summary(doc, results[cid])
+                written += bool(_apply_summary(doc, results[cid]))
             await db.commit()
-    return len(ids), unprocessed, True
+        applied += written
+    return ApplyOutcome(len(ids), unprocessed, True, applied, len(todo))
 
 
 async def _apply_entity_results(production_id: int, results: dict,
-                                deadline: float) -> tuple[int, int, bool]:
-    """Apply entity results; a document with any failed slice is left
-    unprocessed. Returns (usable documents, unprocessed documents, finished)."""
+                                deadline: float) -> ApplyOutcome:
+    """Apply entity results to the documents not yet extracted; a document
+    with any failed slice is left unprocessed. A document that fails to
+    persist is rolled back and skipped (it stays pending for a later run);
+    the pass still finishes."""
     from app.services.entity_extraction import merge_parsed, parse_extraction_response, slice_text
 
     by_doc: dict[str, dict[int, str | None]] = {}
@@ -804,6 +845,8 @@ async def _apply_entity_results(production_id: int, results: dict,
     usable = sorted(d for d, slices in by_doc.items()
                     if all(t or is_refusal(t) for t in slices.values()))
     unprocessed = len(by_doc) - len(usable)
+    todo = await _pending_doc_ids(production_id, "entities", usable)
+    applied, last_error = 0, None
     # One in-memory entity index for the whole apply instead of loading and
     # scanning every entity per document. Consistent only because entity
     # batches apply one at a time per production (``serial`` in
@@ -812,14 +855,12 @@ async def _apply_entity_results(production_id: int, results: dict,
     # document's rolled-back changes.
     from app.services.entity_index import EntityIndex
     index = None
-    for doc_id in usable:
+    for doc_id in todo:
         if time.monotonic() > deadline:
-            return len(usable), unprocessed, False
-        key = _as_uuid(doc_id)
-        if key is None:
-            continue
+            return ApplyOutcome(len(usable), unprocessed, False, applied, len(todo), last_error)
         async with async_session() as db:
-            doc = await db.get(Document, key)
+            doc = await db.get(Document, _as_uuid(doc_id))
+            # Skip documents extracted since the pending query.
             if doc is None or doc.production_id != production_id or doc.entities_extracted_at is not None:
                 continue
             slices = by_doc[doc_id]
@@ -835,10 +876,26 @@ async def _apply_entity_results(production_id: int, results: dict,
                 if any(is_refusal(t) for t in slices.values()):
                     mark_ai_refused(doc, "entities")
                 await db.commit()
-            except Exception:
+                applied += 1
+            except Exception as e:
                 index = None
+                last_error = f"{type(e).__name__}: {e}"[:500]
                 logger.exception("Applying batched extraction failed for document %s", doc_id)
-    return len(usable), unprocessed, True
+    return ApplyOutcome(len(usable), unprocessed, True, applied, len(todo), last_error)
+
+
+def _no_progress(production_id: int, stage: str, batch_id, out: ApplyOutcome) -> bool:
+    """An out-of-time pass that applied nothing although documents were
+    pending: re-polling at once would spin on the same documents, so the
+    caller re-polls after BATCH_POLL_SECONDS instead (logged here)."""
+    if out.finished or out.applied or not out.pending:
+        return False
+    logger.warning("Batch apply for production %s %s (batch %s) made no progress: "
+                   "%d pending documents, 0 applied before the budget ran out "
+                   "(last error: %s); re-polling in %ds",
+                   production_id, stage, batch_id, out.pending, out.last_error,
+                   BATCH_POLL_SECONDS)
+    return True
 
 
 async def _continue_pipeline(production_id: int) -> None:
@@ -927,14 +984,16 @@ async def poll_batch_stage(production_id: int, stage: str) -> None:
 
     deadline = time.monotonic() + BATCH_APPLY_BUDGET_S
     apply = _apply_summary_results if stage == "summaries" else _apply_entity_results
-    usable, unprocessed, finished = await apply(production_id, results, deadline)
-    if not finished:
-        # Out of time: release the claim and re-poll now; already-applied
-        # documents are skipped.
+    out = await apply(production_id, results, deadline)
+    usable, unprocessed = out.usable, out.unprocessed
+    if not out.finished:
+        # Out of time: release the claim and re-poll now (later, if this pass
+        # applied nothing); already-applied documents are skipped.
         released = {k: v for k, v in claimed.items() if k != "applying_at"}
         released["status"] = WAITING
         await _cas_stage(production_id, stage, claimed, released)
-        task_service.enqueue_batch_poll(production_id, stage, 0)
+        delay = BATCH_POLL_SECONDS if _no_progress(production_id, stage, entry["batch_id"], out) else 0
+        task_service.enqueue_batch_poll(production_id, stage, delay)
         return
 
     if results and usable == 0:
@@ -1028,6 +1087,7 @@ async def _poll_parallel_inner(production_id: int, stage: str, entry: dict, dead
     # at once could duplicate entities or lose mention counts. Entities apply
     # one batch at a time per stage; summaries may run in parallel.
     serial = stage == "entities"
+    progressed = False  # any document applied by this poll (any batch)
     for rec in list(entry["batches"]):
         state = rec.get("state")
         if not (state == B_PROCESSING or (state == B_APPLYING and _is_stale_apply(rec))):
@@ -1058,7 +1118,8 @@ async def _poll_parallel_inner(production_id: int, stage: str, entry: dict, dead
             logger.info("Batch poll for production %s %s: batch %s claimed elsewhere",
                         production_id, stage, rec["id"])
             continue
-        usable, unprocessed, finished = await apply(production_id, results, deadline)
+        out = await apply(production_id, results, deadline)
+        usable, unprocessed, finished = out.usable, out.unprocessed, out.finished
 
         def settle(cur, _id=rec["id"], _stamp=stamp, _u=usable, _n=unprocessed,
                    _fin=finished, _failed=bool(results) and usable == 0):
@@ -1074,6 +1135,10 @@ async def _poll_parallel_inner(production_id: int, stage: str, entry: dict, dead
             return _normalized(cur)
 
         await _update_entry(production_id, stage, settle)
+        if not progressed and _no_progress(production_id, stage, rec["id"], out):
+            await _schedule_poll(production_id, stage, BATCH_POLL_SECONDS)
+            return
+        progressed = progressed or out.applied > 0
         if not finished or time.monotonic() > deadline:
             await _schedule_poll(production_id, stage, 0)
             return
