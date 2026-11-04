@@ -374,19 +374,21 @@ async def _pending_extraction_docs(production_id: int, limit: int):
         ).scalars().all()
 
 
-async def _persist_document_entities(db, doc, parsed: dict) -> None:
+async def _persist_document_entities(db, doc, parsed: dict, index=None) -> None:
     """Persist one document's parsed extraction and mark it done (sync and
-    batch paths). Caller commits."""
+    batch paths). Caller commits. ``index``: an EntityIndex shared across
+    the documents of one apply / sync chunk (see persist_extraction)."""
     from app.services import entity_extraction as ee
 
     headers = ee.header_candidates(doc)
     if headers:
         parsed = ee.merge_parsed([parsed, {"entities": headers, "events": [], "relationships": []}])
-    await ee.persist_extraction(db, doc.production_id, doc.id, doc.text_content or "", parsed)
+    await ee.persist_extraction(db, doc.production_id, doc.id, doc.text_content or "", parsed,
+                                index=index)
     doc.entities_extracted_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def _extract_one_document(db, doc) -> bool:
+async def _extract_one_document(db, doc, index=None) -> bool:
     """Extract + persist one document. True = marked done. False = left
     unmarked for a later pipeline run (LLM failure). Never raises."""
     from app.services.entity_extraction import extract_document_entities
@@ -395,7 +397,7 @@ async def _extract_one_document(db, doc) -> bool:
         if parsed is None:
             return False
         refused = parsed.pop("refused", False)
-        await _persist_document_entities(db, doc, parsed)
+        await _persist_document_entities(db, doc, parsed, index=index)
         if refused:
             mark_ai_refused(doc, "entities")
         return True
@@ -422,15 +424,30 @@ async def _run_entities_sync(production_id: int) -> None:
             return
         any_ok = False
         attempted = 0
+        # One entity index per chunk, shared by its documents. Consistent
+        # because the entities stage runs alone for a production (the stage
+        # start is a compare-and-set; batch applies are serial). Dropped
+        # whenever a document is not committed: it already holds that
+        # document's rolled-back entities/aliases.
+        index = None
         for doc in pending:
             async with async_session() as db:
                 live = await db.get(Document, doc.id)
                 if live is None or live.entities_extracted_at is not None:
                     continue
                 attempted += 1
-                if await _extract_one_document(db, live):
+                if index is None:
+                    from app.services.entity_index import EntityIndex
+                    index = EntityIndex.deferred()  # loads on first persist
+                if await _extract_one_document(db, live, index=index):
+                    try:
+                        await db.commit()
+                    except Exception:
+                        index = None
+                        raise
                     any_ok = True
-                    await db.commit()
+                else:
+                    index = None
         if attempted == 0:
             # Every doc in this batch was already handled elsewhere (deleted,
             # or marked done by a concurrent worker) — nothing failed. The
@@ -787,6 +804,14 @@ async def _apply_entity_results(production_id: int, results: dict,
     usable = sorted(d for d, slices in by_doc.items()
                     if all(t or is_refusal(t) for t in slices.values()))
     unprocessed = len(by_doc) - len(usable)
+    # One in-memory entity index for the whole apply instead of loading and
+    # scanning every entity per document. Consistent only because entity
+    # batches apply one at a time per production (``serial`` in
+    # _poll_parallel_inner; the legacy shape holds one batch). Dropped and
+    # rebuilt after any document that fails, since it already reflects that
+    # document's rolled-back changes.
+    from app.services.entity_index import EntityIndex
+    index = None
     for doc_id in usable:
         if time.monotonic() > deadline:
             return len(usable), unprocessed, False
@@ -801,14 +826,17 @@ async def _apply_entity_results(production_id: int, results: dict,
             if sorted(slices) != list(range(len(slice_text(doc.text_content or "")))):
                 continue  # text changed since submit: re-extract on a later run
             try:
+                if index is None:
+                    index = EntityIndex.deferred()  # loads on first persist
                 # Refused slices are not retried: merge the rest and record it.
                 parsed = merge_parsed([parse_extraction_response(slices[i]) for i in sorted(slices)
                                        if not is_refusal(slices[i])])
-                await _persist_document_entities(db, doc, parsed)
+                await _persist_document_entities(db, doc, parsed, index=index)
                 if any(is_refusal(t) for t in slices.values()):
                     mark_ai_refused(doc, "entities")
                 await db.commit()
             except Exception:
+                index = None
                 logger.exception("Applying batched extraction failed for document %s", doc_id)
     return len(usable), unprocessed, True
 

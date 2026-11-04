@@ -352,7 +352,7 @@ def test_poll_applies_entity_results_through_shared_persistence(monkeypatch):
     _install(monkeypatch, world)
     persisted = []
 
-    async def fake_persist(db, production_id, document_id, text, parsed):
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
         persisted.append((document_id, [e["name"] for e in parsed["entities"]]))
         return {}
 
@@ -570,7 +570,7 @@ def test_multi_slice_doc_with_a_failed_slice_is_not_applied(monkeypatch):
     _install(monkeypatch, world)
     persisted = []
 
-    async def fake_persist(db, production_id, document_id, text, parsed):
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
         persisted.append((document_id, sorted(e["name"] for e in parsed["entities"])))
         return {}
 
@@ -590,3 +590,30 @@ def test_multi_slice_doc_with_a_failed_slice_is_not_applied(monkeypatch):
     assert persisted == [(complete.id, ["ACME Corp", "Widget LLC"])]
     assert complete.entities_extracted_at is not None
     assert partial.entities_extracted_at is None
+
+
+def test_entity_apply_shares_one_index_and_drops_it_after_a_failed_document(monkeypatch):
+    from app.services.entity_index import EntityIndex
+    docs = [FakeDoc(i) for i in range(4)]
+    world = World(docs, status=_waiting("entities"))
+    _install(monkeypatch, world)
+    seen = []
+
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
+        seen.append(index)
+        if document_id == docs[1].id:
+            raise RuntimeError("boom")  # rolled back: the index is now dirty
+        return {}
+
+    import app.services.entity_extraction as ee
+    monkeypatch.setattr(ee, "persist_extraction", fake_persist)
+    ok = '{"entities": [], "events": [], "relationships": []}'
+
+    async def fake_fetch(batch_id):
+        return {f"{d.id}_0": ok for d in docs}
+
+    monkeypatch.setattr(claude_batch, "fetch_if_done", fake_fetch)
+    asyncio.run(pipeline.poll_batch_stage(1, "entities"))
+    assert len(seen) == 4 and all(isinstance(i, EntityIndex) for i in seen)
+    assert seen[0] is seen[1]
+    assert seen[2] is not seen[1] and seen[2] is seen[3]

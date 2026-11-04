@@ -106,7 +106,7 @@ def test_batched_entity_refusal_marks_the_document_extracted(monkeypatch):
     _install(monkeypatch, world)
     persisted = []
 
-    async def fake_persist(db, production_id, document_id, text, parsed):
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
         persisted.append(document_id)
         return {}
 
@@ -132,7 +132,7 @@ def test_sync_entity_refusal_marks_the_document_extracted(monkeypatch):
     parsed = asyncio.run(ee.extract_document_entities("ACME memo about widgets."))
     assert parsed["refused"] is True and parsed["entities"] == []
 
-    async def fake_persist(db, production_id, document_id, text, parsed):
+    async def fake_persist(db, production_id, document_id, text, parsed, index=None):
         return {}
 
     monkeypatch.setattr(ee, "persist_extraction", fake_persist)

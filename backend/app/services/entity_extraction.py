@@ -455,16 +455,72 @@ def header_candidates(doc) -> list[dict]:
     return out
 
 
-async def persist_extraction(db, production_id: int, document_id, text: str, parsed: dict) -> dict:
-    """Write one document's extraction into the ontology. Caller commits."""
+async def persist_extraction(db, production_id: int, document_id, text: str, parsed: dict,
+                             index=None) -> dict:
+    """Write one document's extraction into the ontology. Caller commits.
+
+    ``index`` (an ``EntityIndex``) lets a batch apply share one in-memory
+    index of the production's entities across documents instead of loading
+    and scanning every entity per document. Without it one is built for this
+    call (one load, as before). The index is updated with this document's
+    new entities, aliases and emails; if this document's transaction fails
+    the caller must drop the index (it already reflects the rolled-back
+    changes)."""
     from sqlalchemy import select
     from app.models import (Entity, EntityMention, EntityMergeSuggestion,
                              EntityRelationship, EventParticipant, OntologyEvent)
-    from app.services.entity_resolution import match_entity, normalize_name
+    from app.services.entity_index import EntityIndex
+    from app.services.entity_resolution import normalize_name
 
-    existing = list((await db.execute(
-        select(Entity).where(Entity.production_id == production_id)
-    )).scalars().all())
+    if index is None:
+        index = await EntityIndex.load(db, production_id)
+    elif not index.loaded:
+        await index.rebuild(db, production_id)
+
+    # Decide every candidate first, against the index only (it mirrors each
+    # attach's alias/email additions and each new entity, so later candidates
+    # in this document see them exactly as match_entity saw the mutated list).
+    # Then load the attached rows in this session with one query and apply.
+    for attempt in range(2):
+        plan = []  # (cand, "attach", rec) | (cand, "create", entity, suggestion-or-None)
+        created: dict = {}
+        for cand in parsed["entities"]:
+            decision = index.match(cand)
+            if decision[0] == "attach":
+                rec = decision[1]
+                new_aliases = [f for f in cand["surface_forms"]
+                               if normalize_name(f) != rec.norm
+                               and f not in rec.aliases]
+                if new_aliases:
+                    index.add_aliases(rec, new_aliases)
+                if cand["emails"]:
+                    index.set_emails(rec, list(dict.fromkeys(rec.emails + cand["emails"])))
+                plan.append((cand, "attach", rec))
+            else:
+                entity = Entity(
+                    id=_uuid.uuid4(), production_id=production_id, entity_type=cand["type"],
+                    canonical_name=cand["name"], aliases=list(cand["surface_forms"]),
+                    attributes={k: v for k, v in (("role", cand["role"]), ("emails", cand["emails"])) if v},
+                    mention_count=0,
+                )
+                index.add(entity)
+                created[entity.id] = entity
+                plan.append((cand, "create", entity, decision if decision[0] == "suggest" else None))
+
+        need = {p[2].id for p in plan if p[1] == "attach" and p[2].id not in created}
+        if index.session is db:
+            rows = {i: index.get(i).obj for i in need}
+        elif need:
+            rows = {e.id: e for e in (await db.execute(
+                select(Entity).where(Entity.id.in_(list(need)))
+            )).scalars().all() if e.id in need}
+        else:
+            rows = {}
+        if len(rows) == len(need) or attempt:
+            break
+        # An attached entity is gone (merged/deleted since the index was
+        # built): reload the index from this session and decide again.
+        await index.rebuild(db, production_id)
 
     stats = {"entities": 0, "mentions": 0, "events": 0, "relationships": 0, "suggestions": 0}
     name_to_entity: dict[str, Entity] = {}
@@ -476,10 +532,10 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
     # (OCR-drift) mentions key on (entity.id, None) — at most one per entity.
     seen_mentions: set[tuple] = set()
 
-    for cand in parsed["entities"]:
-        decision = match_entity(cand, existing)
-        if decision[0] == "attach":
-            entity = decision[1]
+    for step in plan:
+        cand = step[0]
+        if step[1] == "attach":
+            entity = created.get(step[2].id) or rows[step[2].id]
             new_aliases = [f for f in cand["surface_forms"]
                            if normalize_name(f) != normalize_name(entity.canonical_name)
                            and f not in (entity.aliases or [])]
@@ -489,17 +545,13 @@ async def persist_extraction(db, production_id: int, document_id, text: str, par
                 attrs = dict(entity.attributes or {})
                 attrs["emails"] = list(dict.fromkeys((attrs.get("emails") or []) + cand["emails"]))
                 entity.attributes = attrs
+            if entity.id not in created:
+                index.refresh(step[2], entity)  # converge on the row's state
         else:
-            entity = Entity(
-                id=_uuid.uuid4(), production_id=production_id, entity_type=cand["type"],
-                canonical_name=cand["name"], aliases=list(cand["surface_forms"]),
-                attributes={k: v for k, v in (("role", cand["role"]), ("emails", cand["emails"])) if v},
-                mention_count=0,
-            )
+            entity, decision = step[2], step[3]
             db.add(entity)
-            existing.append(entity)
             stats["entities"] += 1
-            if decision[0] == "suggest":
+            if decision is not None:
                 _, other, score, rationale = decision
                 db.add(EntityMergeSuggestion(
                     production_id=production_id, entity_a_id=entity.id, entity_b_id=other.id,

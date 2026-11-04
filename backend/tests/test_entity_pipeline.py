@@ -55,7 +55,7 @@ def test_run_entities_marks_docs_and_stops_when_none_left(monkeypatch):
     async def fake_pending(production_id, limit):
         return batches.pop(0)
 
-    async def fake_extract_one(db, doc):
+    async def fake_extract_one(db, doc, index=None):
         doc.entities_extracted_at = datetime(2026, 7, 22)
         return True
 
@@ -74,7 +74,7 @@ def test_run_entities_no_false_failure_when_batch_fully_skipped(monkeypatch):
     async def fake_pending(production_id, limit):
         return batches.pop(0)
 
-    async def fake_extract_one(db, doc):
+    async def fake_extract_one(db, doc, index=None):
         raise AssertionError("must not be called — every doc is skipped at re-fetch")
 
     monkeypatch.setattr(pipeline, "_pending_extraction_docs", fake_pending)
@@ -93,7 +93,7 @@ def test_run_entities_raises_after_fully_failed_batch(monkeypatch):
         calls["n"] += 1
         return [doc]  # same doc forever — must not spin
 
-    async def fake_extract_one(db, d):
+    async def fake_extract_one(db, d, index=None):
         return False  # extraction failed; doc left unmarked
 
     monkeypatch.setattr(pipeline, "_pending_extraction_docs", fake_pending)
@@ -193,3 +193,28 @@ def test_trigger_entity_extraction_enqueues_via_cloud_tasks(monkeypatch):
     assert out == {"status": "enqueued"}
     assert enqueue_calls == [7]
     assert len(audit_calls) == 1
+
+
+def test_sync_chunk_shares_one_entity_index_and_drops_it_after_a_failure(monkeypatch):
+    from app.services.entity_index import EntityIndex
+    docs = [FakeDoc(), FakeDoc(), FakeDoc(), FakeDoc()]
+    batches = [docs, []]
+    seen = []
+
+    async def fake_pending(production_id, limit):
+        return batches.pop(0)
+
+    async def fake_extract_one(db, doc, index=None):
+        seen.append(index)
+        if doc is docs[1]:
+            return False  # failed doc: its index must not be reused
+        doc.entities_extracted_at = datetime(2026, 7, 22)
+        return True
+
+    monkeypatch.setattr(pipeline, "_pending_extraction_docs", fake_pending)
+    monkeypatch.setattr(pipeline, "_extract_one_document", fake_extract_one)
+    monkeypatch.setattr(pipeline, "async_session", lambda: FakeBatchSession(docs))
+    asyncio.run(pipeline._run_entities(1))
+    assert all(isinstance(i, EntityIndex) for i in seen)
+    assert seen[0] is seen[1]  # shared within the chunk
+    assert seen[2] is not seen[1] and seen[2] is seen[3]  # fresh after the failure

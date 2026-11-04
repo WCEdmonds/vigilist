@@ -73,7 +73,7 @@ def env(monkeypatch):
         monkeypatch.setattr(pipeline, "BATCH_MAX_REQUESTS", max_requests)
         monkeypatch.setattr(pipeline, "MAX_INFLIGHT_BATCHES", max_inflight)
 
-        async def fake_persist(db, production_id, document_id, text, parsed):
+        async def fake_persist(db, production_id, document_id, text, parsed, index=None):
             return {}
 
         import app.services.entity_extraction as ee
